@@ -1745,9 +1745,10 @@ function ReconciliationDetail({ r, onBack, onApprove, onRevise, onEdit, role }) 
    MASTER DATA
    ============================================================ */
 
-function MasterMaterial({ materials, onCreate, onToggle }) {
+function MasterMaterial({ materials, onCreate, onToggle, onImport }) {
   const [search, setSearch] = useState("");
   const [showForm, setShowForm] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [form, setForm] = useState({ id: "", name: "", category: "", unit: "Unit", serialized: true, minStock: 1 });
   const [saving, setSaving] = useState(false);
 
@@ -1765,9 +1766,34 @@ function MasterMaterial({ materials, onCreate, onToggle }) {
     }
   };
 
+  const materialColumns = [
+    { key: "name", header: "Material Name" },
+    { key: "category", header: "Category" },
+    { key: "unit", header: "Unit" },
+    { key: "serialized", header: "Serialized (Yes/No)" },
+    { key: "minStock", header: "Min Stock" },
+    { key: "status", header: "Status" },
+  ];
+
+  const validateMaterialRow = (v) => {
+    const errors = [];
+    if (!v.name) errors.push("Material Name kosong");
+    else if (materials.some((m) => m.name.toLowerCase() === v.name.toLowerCase())) errors.push("Material Name sudah ada");
+    if (!v.category) errors.push("Category kosong");
+    return errors;
+  };
+
   return (
     <div className="p-4 sm:p-8 space-y-5">
-      <SectionTitle title="Master Material" subtitle="Kelola data material perusahaan" right={<PrimaryButton onClick={() => setShowForm(!showForm)}><Plus size={16} /> Tambah Material</PrimaryButton>} />
+      <SectionTitle
+        title="Master Material" subtitle="Kelola data material perusahaan"
+        right={
+          <div className="flex gap-2">
+            <GhostButton onClick={() => setShowImport(!showImport)}><Upload size={15} /> Import Excel</GhostButton>
+            <PrimaryButton onClick={() => setShowForm(!showForm)}><Plus size={16} /> Tambah Material</PrimaryButton>
+          </div>
+        }
+      />
 
       {showForm && (
         <Card className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1783,6 +1809,19 @@ function MasterMaterial({ materials, onCreate, onToggle }) {
             <PrimaryButton onClick={addMaterial} disabled={saving}>{saving ? "Menyimpan..." : "Simpan"}</PrimaryButton>
           </div>
         </Card>
+      )}
+
+      {showImport && (
+        <ImportExcelPanel
+          templateFilename="template_master_material.csv"
+          columns={materialColumns}
+          sampleRow={["Contoh Material", "Modem", "Unit", "Yes", "5", "Active"]}
+          validateRow={validateMaterialRow}
+          onImport={async (rows) => {
+            await onImport(rows.map((r) => ({ name: r.name, category: r.category, unit: r.unit || "Unit", serialized: /^y/i.test(r.serialized), minStock: Number(r.minStock) || 0, status: r.status || "Active" })));
+            setShowImport(false);
+          }}
+        />
       )}
 
       <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2.5 w-80">
@@ -1826,13 +1865,126 @@ function MasterMaterial({ materials, onCreate, onToggle }) {
   );
 }
 
+/* Generic Excel/CSV import panel — download template → upload → validated
+   preview → confirm. Shared across every Master Data screen instead of
+   duplicating this flow per-resource; each caller just supplies its own
+   column mapping and validation rule. */
+function ImportExcelPanel({ templateFilename, description, columns, sampleRow, validateRow, onImport }) {
+  const [preview, setPreview] = useState(null);
+  const [importing, setImporting] = useState(false);
+  const fileInputRef = React.useRef(null);
+
+  const downloadTemplate = () => {
+    const csv = Papa.unparse({ fields: columns.map((c) => c.header), data: [sampleRow] });
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = templateFilename; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleFile = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: (res) => {
+        const rows = res.data.map((raw) => {
+          const values = {};
+          columns.forEach((c) => { values[c.key] = (raw[c.header] || "").trim(); });
+          const errors = validateRow(values);
+          return { ...values, errors };
+        });
+        setPreview({ rows });
+      },
+    });
+    e.target.value = "";
+  };
+
+  const confirmImport = async () => {
+    const validRows = preview.rows.filter((r) => r.errors.filter((e) => !e.includes("warning")).length === 0);
+    setImporting(true);
+    try {
+      await onImport(validRows);
+      setPreview(null);
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  return (
+    <Card className="p-5 space-y-3">
+      <div className="text-sm font-medium text-gray-800">Import via Excel/CSV</div>
+      {description && <div className="text-xs text-gray-500">{description}</div>}
+      <div className="flex gap-2 flex-wrap">
+        <GhostButton onClick={downloadTemplate}><Download size={14} /> Download Template</GhostButton>
+        <PrimaryButton onClick={() => fileInputRef.current?.click()}><Upload size={14} /> Upload File</PrimaryButton>
+        <input ref={fileInputRef} type="file" accept=".csv" className="hidden" onChange={handleFile} />
+      </div>
+      <div className="text-xs text-gray-400">Terima file .csv (export dari Excel sebagai CSV). Preview & validasi ditampilkan sebelum konfirmasi.</div>
+
+      {preview && (
+        <div className="space-y-3 pt-2">
+          <div className="text-sm font-medium text-gray-800">Preview Import ({preview.rows.length} baris)</div>
+          <div className="max-h-64 overflow-y-auto overflow-x-auto border border-gray-100 rounded-lg">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-left text-gray-400 bg-gray-50 border-b border-gray-100">
+                  {columns.map((c) => <th key={c.key} className="px-3 py-2 whitespace-nowrap">{c.header}</th>)}
+                  <th className="px-3 py-2">Validasi</th>
+                </tr>
+              </thead>
+              <tbody>
+                {preview.rows.map((r, i) => (
+                  <tr key={i} className="border-b border-gray-50 last:border-0">
+                    {columns.map((c) => <td key={c.key} className="px-3 py-2 whitespace-nowrap">{r[c.key]}</td>)}
+                    <td className="px-3 py-2">
+                      {r.errors.length === 0 ? <span className="text-emerald-600 flex items-center gap-1"><Check size={12} /> OK</span> : <span className="text-red-600">{r.errors.join(", ")}</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="flex justify-end gap-2">
+            <GhostButton onClick={() => setPreview(null)}>Batal</GhostButton>
+            <PrimaryButton onClick={confirmImport} disabled={importing}>
+              {importing ? "Mengimpor..." : `Konfirmasi Import (${preview.rows.filter((r) => r.errors.filter((e) => !e.includes("warning")).length === 0).length} valid)`}
+            </PrimaryButton>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 const SITE_TEMPLATE_HEADERS = ["Site Code", "Terminal ID", "Nama Site", "Customer", "Area", "Homebase", "Status"];
 
-function MasterSite({ sites, homebases, customers, onImport }) {
+function MasterSite({ sites, homebases, customers, onImport, onCreate }) {
   const [showImport, setShowImport] = useState(false);
   const [preview, setPreview] = useState(null); // { rows: [...], errors: [...] }
   const [importing, setImporting] = useState(false);
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [addError, setAddError] = useState("");
+  const emptyForm = { code: "", terminalId: "", name: "", customer: "", area: "", homebase: "", status: "Active" };
+  const [form, setForm] = useState(emptyForm);
   const fileInputRef = React.useRef(null);
+
+  const addSite = async () => {
+    if (!form.code.trim() || !form.name.trim() || !form.homebase) return;
+    setSaving(true); setAddError("");
+    try {
+      await onCreate(form);
+      setForm(emptyForm);
+      setShowAddForm(false);
+    } catch (err) {
+      setAddError(err.message || "Gagal menyimpan");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const downloadTemplate = () => {
     const csv = Papa.unparse({ fields: SITE_TEMPLATE_HEADERS, data: [["ST0099", "TID-099", "Contoh Site", "Paramitra", "Kalimantan", "Long Payau", "Active"]] });
@@ -1870,6 +2022,7 @@ function MasterSite({ sites, homebases, customers, onImport }) {
         setPreview({ rows });
       },
     });
+    e.target.value = "";
   };
 
   const confirmImport = async () => {
@@ -1886,7 +2039,56 @@ function MasterSite({ sites, homebases, customers, onImport }) {
 
   return (
     <div className="p-4 sm:p-8 space-y-5">
-      <SectionTitle title="Master Site" subtitle="Data site terhubung dengan Homebase & Customer" right={<GhostButton onClick={() => { setShowImport(!showImport); setPreview(null); }}><Upload size={15} /> Import Excel</GhostButton>} />
+      <SectionTitle
+        title="Master Site" subtitle="Data site terhubung dengan Homebase & Customer"
+        right={
+          <div className="flex gap-2">
+            <GhostButton onClick={() => { setShowImport(!showImport); setPreview(null); }}><Upload size={15} /> Import Excel</GhostButton>
+            <PrimaryButton onClick={() => { setShowAddForm(!showAddForm); setAddError(""); }}><Plus size={16} /> Tambah</PrimaryButton>
+          </div>
+        }
+      />
+
+      {showAddForm && (
+        <Card className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className="text-xs font-medium text-gray-500">Site Code <span className="text-red-500">*</span></label>
+            <input value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} placeholder="mis. ST0008" className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-gray-500">Terminal ID</label>
+            <input value={form.terminalId} onChange={(e) => setForm({ ...form, terminalId: e.target.value })} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-gray-500">Nama Site <span className="text-red-500">*</span></label>
+            <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-gray-500">Customer</label>
+            <select value={form.customer} onChange={(e) => setForm({ ...form, customer: e.target.value })} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600">
+              <option value="">Pilih...</option>
+              {customers.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-gray-500">Homebase <span className="text-red-500">*</span></label>
+            <select value={form.homebase} onChange={(e) => setForm({ ...form, homebase: e.target.value, area: homebases.find((h) => h.name === e.target.value)?.area || form.area })} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600">
+              <option value="">Pilih...</option>
+              {homebases.map((h) => <option key={h.code} value={h.name}>{h.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-gray-500">Area</label>
+            <input value={form.area} onChange={(e) => setForm({ ...form, area: e.target.value })} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
+          </div>
+          {addError && <div className="sm:col-span-2 bg-red-50 border border-red-100 text-red-700 text-xs rounded-lg px-3 py-2">{addError}</div>}
+          <div className="sm:col-span-2 flex justify-end gap-2">
+            <GhostButton onClick={() => { setShowAddForm(false); setForm(emptyForm); setAddError(""); }}>Batal</GhostButton>
+            <PrimaryButton onClick={addSite} disabled={saving}>{saving ? "Menyimpan..." : "Simpan"}</PrimaryButton>
+          </div>
+        </Card>
+      )}
+
       {showImport && (
         <Card className="p-5 space-y-3">
           <div className="text-sm font-medium text-gray-800">Import Master Site via Excel/CSV</div>
@@ -1967,8 +2169,9 @@ function MasterSite({ sites, homebases, customers, onImport }) {
 /* Generic, schema-driven Master Data CRUD table: used for Homebase, Area,
    Customer, and Users so each master gets a real Add form + Activate/Deactivate
    toggle without duplicating table/form boilerplate per module. */
-function MasterCrudTable({ title, subtitle, fields, items, idField = "id", buildLabel, onCreate, onToggle }) {
+function MasterCrudTable({ title, subtitle, fields, items, idField = "id", buildLabel, onCreate, onToggle, importConfig }) {
   const [showForm, setShowForm] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [search, setSearch] = useState("");
   const emptyForm = Object.fromEntries(fields.map((f) => [f.key, f.default ?? ""]));
   const [form, setForm] = useState(emptyForm);
@@ -1994,7 +2197,15 @@ function MasterCrudTable({ title, subtitle, fields, items, idField = "id", build
 
   return (
     <div className="p-4 sm:p-8 space-y-5">
-      <SectionTitle title={title} subtitle={subtitle} right={<PrimaryButton onClick={() => setShowForm(!showForm)}><Plus size={16} /> Tambah</PrimaryButton>} />
+      <SectionTitle
+        title={title} subtitle={subtitle}
+        right={
+          <div className="flex gap-2">
+            {importConfig && <GhostButton onClick={() => setShowImport(!showImport)}><Upload size={15} /> Import Excel</GhostButton>}
+            <PrimaryButton onClick={() => setShowForm(!showForm)}><Plus size={16} /> Tambah</PrimaryButton>
+          </div>
+        }
+      />
 
       {showForm && (
         <Card className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -2017,6 +2228,19 @@ function MasterCrudTable({ title, subtitle, fields, items, idField = "id", build
             <PrimaryButton onClick={handleAdd} disabled={saving}>{saving ? "Menyimpan..." : "Simpan"}</PrimaryButton>
           </div>
         </Card>
+      )}
+
+      {showImport && importConfig && (
+        <ImportExcelPanel
+          templateFilename={importConfig.templateFilename}
+          columns={importConfig.columns}
+          sampleRow={importConfig.sampleRow}
+          validateRow={importConfig.validateRow}
+          onImport={async (rows) => {
+            await importConfig.onImport(rows);
+            setShowImport(false);
+          }}
+        />
       )}
 
       <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2.5 w-80">
@@ -2164,20 +2388,25 @@ function createApiClient(baseUrl, getToken) {
     getMaterials: () => request("/materials"),
     createMaterial: (payload) => request("/materials", { method: "POST", body: payload }),
     toggleMaterialStatus: (id) => request(`/materials/${id}/toggle-status`, { method: "PATCH" }),
+    importMaterials: (rows) => request("/materials/import", { method: "POST", body: { rows } }),
 
     getAreas: () => request("/areas"),
     createArea: (payload) => request("/areas", { method: "POST", body: payload }),
     toggleAreaStatus: (code) => request(`/areas/${code}/toggle-status`, { method: "PATCH" }),
+    importAreas: (rows) => request("/areas/import", { method: "POST", body: { rows } }),
 
     getHomebases: () => request("/homebases"),
     createHomebase: (payload) => request("/homebases", { method: "POST", body: payload }),
     toggleHomebaseStatus: (code) => request(`/homebases/${code}/toggle-status`, { method: "PATCH" }),
+    importHomebases: (rows) => request("/homebases/import", { method: "POST", body: { rows } }),
 
     getCustomers: () => request("/customers"),
     createCustomer: (payload) => request("/customers", { method: "POST", body: payload }),
     toggleCustomerStatus: (id) => request(`/customers/${id}/toggle-status`, { method: "PATCH" }),
+    importCustomers: (rows) => request("/customers/import", { method: "POST", body: { rows } }),
 
     getSites: () => request("/sites"),
+    createSite: (payload) => request("/sites", { method: "POST", body: payload }),
     importSites: (rows) => request("/sites/import", { method: "POST", body: { rows } }),
 
     getUsers: () => request("/users"),
@@ -2633,7 +2862,17 @@ export default function App() {
     const updated = await api.toggleMaterialStatus(id);
     setMaterials((prev) => prev.map((m) => (m.id === id ? normalizeMaterial(updated) : m)));
   };
+  const importMaterialsToServer = async (rows) => {
+    const result = await api.importMaterials(rows);
+    const list = await api.getMaterials();
+    setMaterials(list.map(normalizeMaterial));
+    return result;
+  };
 
+  const createSiteToServer = async (payload) => {
+    const created = await api.createSite(payload);
+    setSites((prev) => [...prev, normalizeSite(created)]);
+  };
   const importSitesToServer = async (rows) => {
     const result = await api.importSites(rows);
     const sitesList = await api.getSites();
@@ -2649,6 +2888,12 @@ export default function App() {
     const updated = await api.toggleHomebaseStatus(code);
     setHomebases((prev) => prev.map((h) => (h.code === code ? updated : h)));
   };
+  const importHomebasesToServer = async (rows) => {
+    const result = await api.importHomebases(rows);
+    const list = await api.getHomebases();
+    setHomebases(list);
+    return result;
+  };
 
   const createArea = async (payload) => {
     const created = await api.createArea(payload);
@@ -2658,6 +2903,12 @@ export default function App() {
     const updated = await api.toggleAreaStatus(code);
     setAreas((prev) => prev.map((a) => (a.code === code ? updated : a)));
   };
+  const importAreasToServer = async (rows) => {
+    const result = await api.importAreas(rows);
+    const list = await api.getAreas();
+    setAreas(list);
+    return result;
+  };
 
   const createCustomer = async (payload) => {
     const created = await api.createCustomer(payload);
@@ -2666,6 +2917,12 @@ export default function App() {
   const toggleCustomer = async (id) => {
     const updated = await api.toggleCustomerStatus(id);
     setCustomers((prev) => prev.map((c) => (c.id === id ? updated : c)));
+  };
+  const importCustomersToServer = async (rows) => {
+    const result = await api.importCustomers(rows);
+    const list = await api.getCustomers();
+    setCustomers(list);
+    return result;
   };
 
   const createUserAccount = async (payload) => {
@@ -2794,8 +3051,8 @@ export default function App() {
       { label: "Tanggal", render: (r) => r.date, exportValue: (r) => r.date },
     ]}
   />;
-  else if (page === "masterMaterial") content = <MasterMaterial materials={materials} onCreate={createMaterial} onToggle={toggleMaterial} />;
-  else if (page === "masterSite") content = <MasterSite sites={sites} homebases={homebases} customers={customers} onImport={importSitesToServer} />;
+  else if (page === "masterMaterial") content = <MasterMaterial materials={materials} onCreate={createMaterial} onToggle={toggleMaterial} onImport={importMaterialsToServer} />;
+  else if (page === "masterSite") content = <MasterSite sites={sites} homebases={homebases} customers={customers} onImport={importSitesToServer} onCreate={createSiteToServer} />;
   else if (page === "masterHomebase") content = <MasterCrudTable
     title="Master Homebase" subtitle="Data homebase & PIC tim lapangan"
     items={homebases} idField="code"
@@ -2808,6 +3065,27 @@ export default function App() {
       { key: "pic", label: "PIC" },
       { key: "phone", label: "Phone" },
     ]}
+    importConfig={{
+      templateFilename: "template_master_homebase.csv",
+      columns: [
+        { key: "name", header: "Nama Homebase" },
+        { key: "area", header: "Area" },
+        { key: "address", header: "Alamat" },
+        { key: "pic", header: "PIC" },
+        { key: "phone", header: "Phone" },
+        { key: "status", header: "Status" },
+      ],
+      sampleRow: ["Contoh Homebase", "Kalimantan", "Jl. Contoh No. 1", "Nama PIC", "0812-0000-0000", "Active"],
+      validateRow: (v) => {
+        const errors = [];
+        if (!v.name) errors.push("Nama Homebase kosong");
+        else if (homebases.some((h) => h.name.toLowerCase() === v.name.toLowerCase())) errors.push("Nama Homebase sudah ada");
+        if (!v.area) errors.push("Area kosong");
+        else if (!areas.some((a) => a.name === v.area)) errors.push("Area tidak ditemukan di Master Area");
+        return errors;
+      },
+      onImport: importHomebasesToServer,
+    }}
   />;
   else if (page === "masterArea") content = <MasterCrudTable
     title="Master Area" subtitle="Wilayah operasional"
@@ -2815,6 +3093,18 @@ export default function App() {
     buildLabel={(a) => a.name}
     onCreate={createArea} onToggle={toggleArea}
     fields={[{ key: "name", label: "Area Name", required: true }]}
+    importConfig={{
+      templateFilename: "template_master_area.csv",
+      columns: [{ key: "name", header: "Area Name" }, { key: "status", header: "Status" }],
+      sampleRow: ["Contoh Area", "Active"],
+      validateRow: (v) => {
+        const errors = [];
+        if (!v.name) errors.push("Area Name kosong");
+        else if (areas.some((a) => a.name.toLowerCase() === v.name.toLowerCase())) errors.push("Area Name sudah ada");
+        return errors;
+      },
+      onImport: importAreasToServer,
+    }}
   />;
   else if (page === "masterCustomer") content = <MasterCrudTable
     title="Master Customer" subtitle="Data pelanggan"
@@ -2822,6 +3112,18 @@ export default function App() {
     buildLabel={(c) => c.name}
     onCreate={createCustomer} onToggle={toggleCustomer}
     fields={[{ key: "name", label: "Customer Name", required: true }]}
+    importConfig={{
+      templateFilename: "template_master_customer.csv",
+      columns: [{ key: "name", header: "Customer Name" }, { key: "status", header: "Status" }],
+      sampleRow: ["Contoh Customer", "Active"],
+      validateRow: (v) => {
+        const errors = [];
+        if (!v.name) errors.push("Customer Name kosong");
+        else if (customers.some((c) => c.name.toLowerCase() === v.name.toLowerCase())) errors.push("Customer Name sudah ada");
+        return errors;
+      },
+      onImport: importCustomersToServer,
+    }}
   />;
   else if (page === "users") content = <MasterCrudTable
     title="User Management" subtitle="Kelola akses pengguna sistem"
