@@ -1,0 +1,71 @@
+From d7d9065d469db2617a60eb4eaef2843669cf5a29 Mon Sep 17 00:00:00 2001
+From: TEREX Dev <dev@terex.local>
+Date: Sat, 8 Aug 2026 08:36:30 +0000
+Subject: [PATCH] Rename 'Approved' status to 'Waiting Stock Assignment'
+ (amber, not green)
+
+---
+ src/App.jsx | 12 ++++++------
+ 1 file changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/src/App.jsx b/src/App.jsx
+index f1d5c50..6db990c 100644
+--- a/src/App.jsx
++++ b/src/App.jsx
+@@ -208,7 +208,7 @@ const STATUS_STYLES = {
+   "Submitted": "bg-blue-50 text-blue-700",
+   "Waiting Logistics Approval": "bg-amber-50 text-amber-700",
+   "Waiting Logistics Review": "bg-amber-50 text-amber-700",
+-  "Approved": "bg-emerald-50 text-emerald-700",
++  "Waiting Stock Assignment": "bg-amber-50 text-amber-700",
+   "Preparing": "bg-blue-50 text-blue-700",
+   "In Progress": "bg-blue-50 text-blue-700",
+   "Shipped": "bg-indigo-50 text-indigo-700",
+@@ -586,7 +586,7 @@ function TopBar({ user, onLogout, title, subtitle, searchQuery, setSearchQuery,
+ 
+ function Dashboard({ role, setPage, deliveries, returns, reconciliations, materials }) {
+   const pendingApproval = deliveries.filter((d) => d.status === "Waiting Logistics Approval").length;
+-  const inProgress = deliveries.filter((d) => ["In Progress", "Approved", "Preparing", "Shipped"].includes(d.status)).length;
++  const inProgress = deliveries.filter((d) => ["In Progress", "Waiting Stock Assignment", "Preparing", "Shipped"].includes(d.status)).length;
+   const waitingReview = returns.filter((r) => r.status === "Waiting Logistics Review").length;
+   const reconReview = reconciliations.filter((r) => r.status === "Waiting Logistics Review").length;
+   const lowStock = materials.filter((m) => m.ready <= m.minStock).length;
+@@ -726,7 +726,7 @@ function Dashboard({ role, setPage, deliveries, returns, reconciliations, materi
+ function DeliveryList({ deliveries, setSelected, setPage, role }) {
+   const [filter, setFilter] = useState("All");
+   const statuses = ["All", "Waiting Logistics Approval", "In Progress", "Selesai Dikirim", "Rejected"];
+-  const filtered = filter === "All" ? deliveries : deliveries.filter((d) => d.status === filter || (filter === "In Progress" && ["In Progress", "Preparing", "Shipped", "Approved"].includes(d.status)));
++  const filtered = filter === "All" ? deliveries : deliveries.filter((d) => d.status === filter || (filter === "In Progress" && ["In Progress", "Preparing", "Shipped", "Waiting Stock Assignment"].includes(d.status)));
+ 
+   return (
+     <div className="p-4 sm:p-8 space-y-5">
+@@ -970,7 +970,7 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock,
+   // Stage 1 — Manager reviews qty only, no SN involved.
+   const canApprove = role === ROLES.MANAGER && delivery.status === "Waiting Logistics Approval";
+   // Stage 2 — Logistics Staff (or Manager) picks the actual units to fulfill it.
+-  const canAssignStock = (role === ROLES.LOGISTICS || role === ROLES.MANAGER) && delivery.status === "Approved";
++  const canAssignStock = (role === ROLES.LOGISTICS || role === ROLES.MANAGER) && delivery.status === "Waiting Stock Assignment";
+   const canAdvance = (role === ROLES.LOGISTICS || role === ROLES.MANAGER) && ["Preparing", "Shipped"].includes(delivery.status);
+   const nextStatusMap = { Preparing: "Shipped", Shipped: "Delivered" };
+ 
+@@ -3066,7 +3066,7 @@ export default function App() {
+       });
+     }
+     if (isLogisticsView) {
+-      deliveries.filter((d) => d.status === "Approved").forEach((d) => {
++      deliveries.filter((d) => d.status === "Waiting Stock Assignment").forEach((d) => {
+         list.push({ icon: Truck, color: "bg-blue-50 text-blue-700", text: `Delivery Request ${d.id} menunggu penugasan stock`, sub: `${d.homebase} · ${d.requester}`, onSelect: () => gotoDetail("delivery", "delivery", d.id) });
+       });
+       returns.filter((r) => r.status === "Waiting Logistics Review").forEach((r) => {
+@@ -3093,7 +3093,7 @@ export default function App() {
+     }
+ 
+     if (role === ROLES.SPV) {
+-      deliveries.filter((d) => ["Approved", "Preparing", "Shipped"].includes(d.status)).forEach((d) => {
++      deliveries.filter((d) => ["Waiting Stock Assignment", "Preparing", "Shipped"].includes(d.status)).forEach((d) => {
+         list.push({ icon: Truck, color: "bg-blue-50 text-blue-600", text: `Delivery Request ${d.id} status: ${d.status}`, sub: `${d.homebase}`, onSelect: () => gotoDetail("delivery", "delivery", d.id) });
+       });
+       deliveries.filter((d) => d.status === "Rejected").forEach((d) => {
+-- 
+2.43.0
+
