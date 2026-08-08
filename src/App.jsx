@@ -2159,7 +2159,7 @@ function createApiClient(baseUrl, getToken) {
   }
 
   return {
-    login: (email, password) => request("/auth/login", { method: "POST", body: { email, password } }),
+    login: (username, password) => request("/auth/login", { method: "POST", body: { username, password } }),
 
     getMaterials: () => request("/materials"),
     createMaterial: (payload) => request("/materials", { method: "POST", body: payload }),
@@ -2217,23 +2217,23 @@ function createApiClient(baseUrl, getToken) {
    ============================================================ */
 
 function LoginScreen({ apiBase, setApiBase, onLogin }) {
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
   const demoAccounts = [
-    { email: "fariz@terex.local", label: "Manager Logistics" },
-    { email: "sari@terex.local", label: "Logistics Staff" },
-    { email: "andi@terex.local", label: "SPV" },
-    { email: "yohanes@terex.local", label: "Technician" },
+    { username: "fariz", label: "Manager Logistics" },
+    { username: "sari", label: "Logistics Staff" },
+    { username: "andi", label: "SPV" },
+    { username: "yohanes", label: "Technician" },
   ];
 
-  const doLogin = async (loginEmail, loginPassword) => {
+  const doLogin = async (loginUsername, loginPassword) => {
     setLoading(true); setError("");
     try {
       const client = createApiClient(apiBase, () => null);
-      const result = await client.login(loginEmail, loginPassword);
+      const result = await client.login(loginUsername, loginPassword);
       onLogin(result.token, result.user);
     } catch (err) {
       setError(err.message || "Login gagal — periksa kembali API URL dan koneksi ke backend.");
@@ -2268,8 +2268,8 @@ function LoginScreen({ apiBase, setApiBase, onLogin }) {
 
         {error && <div className="bg-red-50 border border-red-100 text-red-700 text-sm rounded-lg px-3 py-2">{error}</div>}
 
-        <form onSubmit={(e) => { e.preventDefault(); doLogin(email, password); }} className="space-y-3">
-          <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" type="email" className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+        <form onSubmit={(e) => { e.preventDefault(); doLogin(username, password); }} className="space-y-3">
+          <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Username" type="text" autoCapitalize="none" autoCorrect="off" className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
           <input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" type="password" className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
           <PrimaryButton type="submit" disabled={loading} className="w-full">{loading ? "Masuk..." : "Masuk"}</PrimaryButton>
         </form>
@@ -2278,7 +2278,7 @@ function LoginScreen({ apiBase, setApiBase, onLogin }) {
           <div className="text-xs text-gray-400 text-center mb-2">atau login cepat sebagai akun demo (password: password123)</div>
           <div className="grid grid-cols-2 gap-2">
             {demoAccounts.map((a) => (
-              <button key={a.email} onClick={() => doLogin(a.email, "password123")} disabled={loading} className="text-xs border border-gray-200 rounded-lg px-2 py-2 hover:bg-gray-50 text-gray-600 disabled:opacity-50">
+              <button key={a.username} onClick={() => doLogin(a.username, "password123")} disabled={loading} className="text-xs border border-gray-200 rounded-lg px-2 py-2 hover:bg-gray-50 text-gray-600 disabled:opacity-50">
                 {a.label}
               </button>
             ))}
@@ -2669,8 +2669,8 @@ export default function App() {
   };
 
   const createUserAccount = async (payload) => {
-    if (!payload.email || !payload.password) {
-      throw new Error("Email dan password wajib diisi untuk membuat user baru");
+    if (!payload.username || !payload.password) {
+      throw new Error("Username dan password wajib diisi untuk membuat user baru");
     }
     const created = await api.createUser(payload);
     setUsers((prev) => [...prev, created]);
@@ -2830,7 +2830,7 @@ export default function App() {
     onCreate={createUserAccount} onToggle={toggleUser}
     fields={[
       { key: "name", label: "Nama", required: true },
-      { key: "email", label: "Email", required: true },
+      { key: "username", label: "Username", required: true },
       { key: "password", label: "Password", required: true },
       { key: "role", label: "Role", type: "select", options: Object.values(ROLES), required: true },
       { key: "assignment", label: "Homebase / Area", placeholder: "mis. Merauke, atau Semua Area" },
