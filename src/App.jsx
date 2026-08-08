@@ -1380,11 +1380,13 @@ function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMateri
   );
 }
 
-function MaterialSerialDetail({ material, api, onBack }) {
+function MaterialSerialDetail({ material, api, onBack, highlightSerial }) {
   const [status, setStatus] = useState("All");
   const [serials, setSerials] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [highlighted, setHighlighted] = useState(highlightSerial || null);
+  const rowRefs = React.useRef({});
 
   React.useEffect(() => {
     let cancelled = false;
@@ -1394,6 +1396,16 @@ function MaterialSerialDetail({ material, api, onBack }) {
       .catch(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [material, status]);
+
+  // Scroll the searched-for SN into view and briefly flash it once the list
+  // has actually loaded, so it's obvious which row is the one being looked for.
+  React.useEffect(() => {
+    if (loading || !highlighted) return;
+    const el = rowRefs.current[highlighted];
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    const timer = setTimeout(() => setHighlighted(null), 2200);
+    return () => clearTimeout(timer);
+  }, [loading, highlighted]);
 
   const filtered = search ? serials.filter((s) => s.sn.toLowerCase().includes(search.toLowerCase())) : serials;
   const statusOptions = ["All", "Ready", "Reserved", "In Transit", "Delivered", "Faulty"];
@@ -1433,7 +1445,11 @@ function MaterialSerialDetail({ material, api, onBack }) {
               <tr><td colSpan={3}><EmptyState text="Tidak ada Serial Number untuk filter ini." /></td></tr>
             ) : (
               filtered.map((s) => (
-                <tr key={s.sn} className="border-b border-gray-50 last:border-0">
+                <tr
+                  key={s.sn}
+                  ref={(el) => { rowRefs.current[s.sn] = el; }}
+                  className={`border-b border-gray-50 last:border-0 transition-colors duration-700 ${highlighted === s.sn ? "bg-emerald-100" : ""}`}
+                >
                   <td className="px-5 py-3 font-medium text-gray-800">{s.sn}</td>
                   <td className="px-5 py-3"><StatusBadge status={s.status} /></td>
                   <td className="px-5 py-3 text-gray-500 text-xs">{s.current_ref || s.received_ref || "-"}</td>
@@ -2976,6 +2992,7 @@ export default function App() {
   const [selectedRecon, setSelectedRecon] = useState(null);
   const [movementFilter, setMovementFilter] = useState("");
   const [serialMaterial, setSerialMaterial] = useState("");
+  const [highlightSerial, setHighlightSerial] = useState("");
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   const [materials, setMaterials] = useState([]);
@@ -3147,7 +3164,7 @@ export default function App() {
             onSelect = () => gotoDetail("returnFaulty", "return", r.current_ref);
           } else {
             sub = `${r.material} · ${r.status} · di Warehouse`;
-            onSelect = () => { setSerialMaterial(r.material); goto("serialDetail"); };
+            onSelect = () => { setSerialMaterial(r.material); setHighlightSerial(r.sn); goto("serialDetail"); };
           }
           return { type: "Serial Number", icon: Package, label: r.sn, sub, onSelect };
         }));
@@ -3505,7 +3522,7 @@ export default function App() {
   }
   else if (page === "stock") content = <WarehouseStock materials={materials} setPage={goto} setMovementFilter={setMovementFilter} setSerialMaterial={setSerialMaterial} onSubmitReceipt={createReceipt} showToast={showToast} />;
   else if (page === "movement") content = <StockMovement movements={movements} filter={movementFilter} setFilter={setMovementFilter} />;
-  else if (page === "serialDetail") content = <MaterialSerialDetail material={serialMaterial} api={api} onBack={() => goto("stock")} />;
+  else if (page === "serialDetail") content = <MaterialSerialDetail material={serialMaterial} api={api} onBack={() => goto("stock")} highlightSerial={highlightSerial} />;
   else if (page === "reports") content = <ReportsPage
     title="Delivery Report" subtitle="Laporan seluruh pengajuan delivery"
     data={deliveries}
