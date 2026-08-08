@@ -2845,6 +2845,7 @@ function createApiClient(baseUrl, getToken) {
       const qs = params.toString();
       return request(`/stock/serials${qs ? `?${qs}` : ""}`);
     },
+    searchSerials: (q) => request(`/stock/serials?q=${encodeURIComponent(q)}`),
     createReceipt: (payload) => request("/stock/receipts", { method: "POST", body: payload }),
     getReceipts: () => request("/stock/receipts"),
 
@@ -3075,7 +3076,7 @@ export default function App() {
     setPage(targetPage);
   };
 
-  const searchResults = useMemo(() => {
+  const localSearchResults = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return [];
     const results = [];
@@ -3123,6 +3124,40 @@ export default function App() {
 
     return results.slice(0, 8);
   }, [searchQuery, deliveries, returns, reconciliations, materials, sites]);
+
+  // Serial Numbers live in the warehouse SN registry, not in any locally
+  // loaded list — so unlike the rest of global search (computed instantly
+  // from state already in memory) this piece asks the server, debounced,
+  // and merges in once it resolves.
+  const [snSearchResults, setSnSearchResults] = useState([]);
+  React.useEffect(() => {
+    const q = searchQuery.trim();
+    if (q.length < 3) { setSnSearchResults([]); return; }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      api.searchSerials(q).then((rows) => {
+        if (cancelled) return;
+        setSnSearchResults(rows.map((r) => {
+          let sub, onSelect;
+          if (r.current_ref?.startsWith("DR-")) {
+            sub = `${r.material} · ${r.status} · ${r.current_ref}`;
+            onSelect = () => gotoDetail("delivery", "delivery", r.current_ref);
+          } else if (r.current_ref?.startsWith("RF-")) {
+            sub = `${r.material} · ${r.status} · ${r.current_ref}`;
+            onSelect = () => gotoDetail("returnFaulty", "return", r.current_ref);
+          } else {
+            sub = `${r.material} · ${r.status} · di Warehouse`;
+            onSelect = () => { setSerialMaterial(r.material); goto("serialDetail"); };
+          }
+          return { type: "Serial Number", icon: Package, label: r.sn, sub, onSelect };
+        }));
+      }).catch(() => { if (!cancelled) setSnSearchResults([]); });
+    }, 300);
+    return () => { cancelled = true; clearTimeout(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchQuery]);
+
+  const searchResults = useMemo(() => [...snSearchResults, ...localSearchResults].slice(0, 8), [snSearchResults, localSearchResults]);
 
   const notifications = useMemo(() => {
     const list = [];
