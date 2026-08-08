@@ -1,0 +1,180 @@
+From d7d6369caf32f315b1a96b1197a15517258e12f9 Mon Sep 17 00:00:00 2001
+From: TEREX Dev <dev@terex.local>
+Date: Sat, 8 Aug 2026 05:20:43 +0000
+Subject: [PATCH] User Management: add Edit for existing users
+
+---
+ src/App.jsx | 95 ++++++++++++++++++++++++++++++++++++-----------------
+ 1 file changed, 65 insertions(+), 30 deletions(-)
+
+diff --git a/src/App.jsx b/src/App.jsx
+index 0ef5e46..22529c0 100644
+--- a/src/App.jsx
++++ b/src/App.jsx
+@@ -2169,23 +2169,36 @@ function MasterSite({ sites, homebases, customers, onImport, onCreate }) {
+ /* Generic, schema-driven Master Data CRUD table: used for Homebase, Area,
+    Customer, and Users so each master gets a real Add form + Activate/Deactivate
+    toggle without duplicating table/form boilerplate per module. */
+-function MasterCrudTable({ title, subtitle, fields, items, idField = "id", buildLabel, onCreate, onToggle, importConfig }) {
++function MasterCrudTable({ title, subtitle, fields, items, idField = "id", buildLabel, onCreate, onToggle, onUpdate, importConfig }) {
+   const [showForm, setShowForm] = useState(false);
+   const [showImport, setShowImport] = useState(false);
+   const [search, setSearch] = useState("");
++  const [editingId, setEditingId] = useState(null); // null = adding new, otherwise editing this id
+   const emptyForm = Object.fromEntries(fields.map((f) => [f.key, f.default ?? ""]));
+   const [form, setForm] = useState(emptyForm);
+   const [saving, setSaving] = useState(false);
+   const [error, setError] = useState("");
+ 
+-  const handleAdd = async () => {
+-    const requiredMissing = fields.some((f) => f.required && !String(form[f.key] ?? "").trim());
++  const closeForm = () => { setShowForm(false); setEditingId(null); setForm(emptyForm); setError(""); };
++
++  const startEdit = (item) => {
++    const next = { ...emptyForm };
++    fields.forEach((f) => { if (f.key in item) next[f.key] = item[f.key]; });
++    setForm(next);
++    setEditingId(item[idField]);
++    setShowForm(true);
++    setError("");
++  };
++
++  const handleSubmit = async () => {
++    // Fields marked createOnlyRequired (e.g. password) aren't mandatory when editing.
++    const requiredMissing = fields.some((f) => f.required && !(editingId && f.createOnlyRequired) && !String(form[f.key] ?? "").trim());
+     if (requiredMissing) return;
+     setSaving(true); setError("");
+     try {
+-      await onCreate(form);
+-      setForm(emptyForm);
+-      setShowForm(false);
++      if (editingId) await onUpdate(editingId, form);
++      else await onCreate(form);
++      closeForm();
+     } catch (err) {
+       setError(err.message || "Gagal menyimpan");
+     } finally {
+@@ -2202,30 +2215,42 @@ function MasterCrudTable({ title, subtitle, fields, items, idField = "id", build
+         right={
+           <div className="flex gap-2">
+             {importConfig && <GhostButton onClick={() => setShowImport(!showImport)}><Upload size={15} /> Import Excel</GhostButton>}
+-            <PrimaryButton onClick={() => setShowForm(!showForm)}><Plus size={16} /> Tambah</PrimaryButton>
++            <PrimaryButton onClick={() => { if (showForm && !editingId) { closeForm(); } else { setForm(emptyForm); setEditingId(null); setShowForm(true); setError(""); } }}><Plus size={16} /> Tambah</PrimaryButton>
+           </div>
+         }
+       />
+ 
+       {showForm && (
+-        <Card className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
+-          {fields.map((f) => (
+-            <div key={f.key} className={f.fullWidth ? "sm:col-span-2" : ""}>
+-              <label className="text-xs font-medium text-gray-500">{f.label}{f.required && <span className="text-red-500"> *</span>}</label>
+-              {f.type === "select" ? (
+-                <select value={form[f.key]} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600">
+-                  <option value="">Pilih...</option>
+-                  {f.options.map((o) => <option key={o} value={o}>{o}</option>)}
+-                </select>
+-              ) : (
+-                <input value={form[f.key]} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} placeholder={f.placeholder || f.label} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
+-              )}
+-            </div>
+-          ))}
+-          {error && <div className="sm:col-span-2 bg-red-50 border border-red-100 text-red-700 text-xs rounded-lg px-3 py-2">{error}</div>}
+-          <div className="sm:col-span-2 flex justify-end gap-2">
+-            <GhostButton onClick={() => { setShowForm(false); setForm(emptyForm); setError(""); }}>Batal</GhostButton>
+-            <PrimaryButton onClick={handleAdd} disabled={saving}>{saving ? "Menyimpan..." : "Simpan"}</PrimaryButton>
++        <Card className="p-5 space-y-4">
++          <div className="text-sm font-semibold text-gray-800">{editingId ? `Edit — ${editingId}` : "Tambah Baru"}</div>
++          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
++            {fields.map((f) => (
++              <div key={f.key} className={f.fullWidth ? "sm:col-span-2" : ""}>
++                <label className="text-xs font-medium text-gray-500">
++                  {f.label}
++                  {f.required && !(editingId && f.createOnlyRequired) && <span className="text-red-500"> *</span>}
++                </label>
++                {f.type === "select" ? (
++                  <select value={form[f.key]} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600">
++                    <option value="">Pilih...</option>
++                    {f.options.map((o) => <option key={o} value={o}>{o}</option>)}
++                  </select>
++                ) : (
++                  <input
++                    type={f.inputType || "text"}
++                    value={form[f.key]}
++                    onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
++                    placeholder={editingId && f.createOnlyRequired ? "Kosongkan jika tidak diubah" : (f.placeholder || f.label)}
++                    className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600"
++                  />
++                )}
++              </div>
++            ))}
++          </div>
++          {error && <div className="bg-red-50 border border-red-100 text-red-700 text-xs rounded-lg px-3 py-2">{error}</div>}
++          <div className="flex justify-end gap-2">
++            <GhostButton onClick={closeForm}>Batal</GhostButton>
++            <PrimaryButton onClick={handleSubmit} disabled={saving}>{saving ? "Menyimpan..." : editingId ? "Simpan Perubahan" : "Simpan"}</PrimaryButton>
+           </div>
+         </Card>
+       )}
+@@ -2254,7 +2279,7 @@ function MasterCrudTable({ title, subtitle, fields, items, idField = "id", build
+           <thead>
+             <tr className="text-left text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
+               <th className="px-5 py-3 font-medium">{idField === "id" ? "ID" : "Code"}</th>
+-              {fields.filter((f) => f.key !== "status").map((f) => <th key={f.key} className="px-5 py-3 font-medium">{f.label}</th>)}
++              {fields.filter((f) => f.key !== "status" && f.key !== "password").map((f) => <th key={f.key} className="px-5 py-3 font-medium">{f.label}</th>)}
+               <th className="px-5 py-3 font-medium">Status</th>
+               <th className="px-5 py-3 font-medium"></th>
+             </tr>
+@@ -2263,9 +2288,14 @@ function MasterCrudTable({ title, subtitle, fields, items, idField = "id", build
+             {filtered.map((it) => (
+               <tr key={it[idField]} className="border-b border-gray-50 last:border-0">
+                 <td className="px-5 py-3 text-gray-400 text-xs">{it[idField]}</td>
+-                {fields.filter((f) => f.key !== "status").map((f) => <td key={f.key} className="px-5 py-3 text-gray-700">{it[f.key]}</td>)}
++                {fields.filter((f) => f.key !== "status" && f.key !== "password").map((f) => <td key={f.key} className="px-5 py-3 text-gray-700">{it[f.key]}</td>)}
+                 <td className="px-5 py-3"><StatusBadge status={it.status} /></td>
+-                <td className="px-5 py-3"><button onClick={() => onToggle(it[idField])} className="text-xs font-medium text-emerald-800">{it.status === "Active" ? "Deactivate" : "Activate"}</button></td>
++                <td className="px-5 py-3">
++                  <div className="flex items-center gap-3">
++                    {onUpdate && <button onClick={() => startEdit(it)} className="text-xs font-medium text-emerald-800">Edit</button>}
++                    <button onClick={() => onToggle(it[idField])} className="text-xs font-medium text-gray-500">{it.status === "Active" ? "Deactivate" : "Activate"}</button>
++                  </div>
++                </td>
+               </tr>
+             ))}
+             {filtered.length === 0 && <tr><td colSpan={fields.length + 2}><EmptyState text="Belum ada data." /></td></tr>}
+@@ -2411,6 +2441,7 @@ function createApiClient(baseUrl, getToken) {
+ 
+     getUsers: () => request("/users"),
+     createUser: (payload) => request("/users", { method: "POST", body: payload }),
++    updateUser: (id, payload) => request(`/users/${id}`, { method: "PATCH", body: payload }),
+     toggleUserStatus: (id) => request(`/users/${id}/toggle-status`, { method: "PATCH" }),
+ 
+     getStock: () => request("/stock"),
+@@ -2936,6 +2967,10 @@ export default function App() {
+     const updated = await api.toggleUserStatus(id);
+     setUsers((prev) => prev.map((u) => (u.id === id ? updated : u)));
+   };
++  const updateUserAccount = async (id, payload) => {
++    const updated = await api.updateUser(id, payload);
++    setUsers((prev) => prev.map((u) => (u.id === id ? updated : u)));
++  };
+ 
+   const titles = {
+     dashboard: ["Dashboard", "Ringkasan operasional logistics"],
+@@ -3129,11 +3164,11 @@ export default function App() {
+     title="User Management" subtitle="Kelola akses pengguna sistem"
+     items={users} idField="id"
+     buildLabel={(u) => `${u.name} ${u.role} ${u.assignment}`}
+-    onCreate={createUserAccount} onToggle={toggleUser}
++    onCreate={createUserAccount} onToggle={toggleUser} onUpdate={updateUserAccount}
+     fields={[
+       { key: "name", label: "Nama", required: true },
+       { key: "username", label: "Username", required: true },
+-      { key: "password", label: "Password", required: true },
++      { key: "password", label: "Password", required: true, createOnlyRequired: true, inputType: "password" },
+       { key: "role", label: "Role", type: "select", options: Object.values(ROLES), required: true },
+       { key: "assignment", label: "Homebase / Area", placeholder: "mis. Merauke, atau Semua Area" },
+     ]}
+-- 
+2.43.0
+
