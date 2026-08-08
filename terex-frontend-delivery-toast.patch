@@ -1,0 +1,24 @@
+From 51de37373157d38d86217fad8122e59326d93023 Mon Sep 17 00:00:00 2001
+From: TEREX Dev <dev@terex.local>
+Date: Sat, 8 Aug 2026 08:02:51 +0000
+Subject: [PATCH] Show success toast after creating a Delivery Request
+
+---
+ src/App.jsx | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/App.jsx b/src/App.jsx
+index b973b5f..a0b930c 100644
+--- a/src/App.jsx
++++ b/src/App.jsx
+@@ -3089,6 +3089,7 @@ export default function App() {
+     try {
+       const created = await api.createDelivery(data);
+       setDeliveries((prev) => [created, ...prev]);
++      showToast(`Delivery Request ${created.id} berhasil dibuat`);
+       goto("delivery");
+     } catch (err) { setApiError(err.message); }
+   };
+-- 
+2.43.0
+

@@ -3089,6 +3089,7 @@ export default function App() {
     try {
       const created = await api.createDelivery(data);
       setDeliveries((prev) => [created, ...prev]);
+      showToast(`Delivery Request ${created.id} berhasil dibuat`);
       goto("delivery");
     } catch (err) { setApiError(err.message); }
   };
