@@ -1137,7 +1137,7 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAdvance, role
    WAREHOUSE STOCK + MOVEMENT
    ============================================================ */
 
-function GoodsReceiptForm({ materials, onSubmit, onCancel }) {
+function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast }) {
   const [material, setMaterial] = useState("");
   const [serials, setSerials] = useState([""]);
   const [qty, setQty] = useState(1);
@@ -1157,8 +1157,13 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel }) {
 
   const submit = async () => {
     setSaving(true); setError("");
+    const submittedMaterial = material;
+    const submittedQty = mat.serialized ? trimmedSerials.length : qty;
     try {
       await onSubmit(mat.serialized ? { material, serials: trimmedSerials, note } : { material, qty, note });
+      showToast(`Berhasil menerima ${submittedQty} unit ${submittedMaterial}`);
+      // Reset fields for the next entry, but keep the form open.
+      setMaterial(""); setSerials([""]); setQty(1); setNote("");
     } catch (err) {
       setError(err.message || "Gagal menyimpan penerimaan barang");
     } finally {
@@ -1219,7 +1224,7 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel }) {
   );
 }
 
-function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMaterial, onSubmitReceipt }) {
+function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMaterial, onSubmitReceipt, showToast }) {
   const [search, setSearch] = useState("");
   const [showReceiptForm, setShowReceiptForm] = useState(false);
   const filtered = materials.filter((m) => m.name.toLowerCase().includes(search.toLowerCase()));
@@ -1235,10 +1240,8 @@ function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMateri
         <GoodsReceiptForm
           materials={materials}
           onCancel={() => setShowReceiptForm(false)}
-          onSubmit={async (payload) => {
-            await onSubmitReceipt(payload);
-            setShowReceiptForm(false);
-          }}
+          onSubmit={onSubmitReceipt}
+          showToast={showToast}
         />
       )}
 
@@ -2017,7 +2020,7 @@ function ReconciliationDetail({ r, onBack, onApprove, onRevise, onEdit, role }) 
    MASTER DATA
    ============================================================ */
 
-function MasterMaterial({ materials, onCreate, onToggle, onImport }) {
+function MasterMaterial({ materials, onCreate, onToggle, onImport, showToast }) {
   const [search, setSearch] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [showImport, setShowImport] = useState(false);
@@ -2029,10 +2032,11 @@ function MasterMaterial({ materials, onCreate, onToggle, onImport }) {
   const addMaterial = async () => {
     if (!form.name || !form.category) return;
     setSaving(true);
+    const submittedName = form.name;
     try {
       await onCreate({ name: form.name, category: form.category, unit: form.unit, serialized: form.serialized, minStock: form.minStock });
+      showToast(`Material "${submittedName}" berhasil ditambahkan`);
       setForm({ id: "", name: "", category: "", unit: "Unit", serialized: true, minStock: 1 });
-      setShowForm(false);
     } finally {
       setSaving(false);
     }
@@ -2077,7 +2081,7 @@ function MasterMaterial({ materials, onCreate, onToggle, onImport }) {
             <input type="checkbox" checked={form.serialized} onChange={(e) => setForm({ ...form, serialized: e.target.checked })} className="accent-emerald-800" /> Serialized (butuh Serial Number)
           </label>
           <div className="sm:col-span-2 flex justify-end gap-2">
-            <GhostButton onClick={() => setShowForm(false)}>Batal</GhostButton>
+            <GhostButton onClick={() => setShowForm(false)}>Tutup</GhostButton>
             <PrimaryButton onClick={addMaterial} disabled={saving}>{saving ? "Menyimpan..." : "Simpan"}</PrimaryButton>
           </div>
         </Card>
@@ -2090,8 +2094,8 @@ function MasterMaterial({ materials, onCreate, onToggle, onImport }) {
           sampleRow={["Contoh Material", "Modem", "Unit", "Yes", "5", "Active"]}
           validateRow={validateMaterialRow}
           onImport={async (rows) => {
-            await onImport(rows.map((r) => ({ name: r.name, category: r.category, unit: r.unit || "Unit", serialized: /^y/i.test(r.serialized), minStock: Number(r.minStock) || 0, status: r.status || "Active" })));
-            setShowImport(false);
+            const result = await onImport(rows.map((r) => ({ name: r.name, category: r.category, unit: r.unit || "Unit", serialized: /^y/i.test(r.serialized), minStock: Number(r.minStock) || 0, status: r.status || "Active" })));
+            showToast(`${result?.imported ?? rows.length} material berhasil diimpor`);
           }}
         />
       )}
@@ -2233,7 +2237,7 @@ function ImportExcelPanel({ templateFilename, description, columns, sampleRow, v
 
 const SITE_TEMPLATE_HEADERS = ["Site Code", "Terminal ID", "Nama Site", "Customer", "Area", "Homebase", "Status"];
 
-function MasterSite({ sites, homebases, customers, onImport, onCreate }) {
+function MasterSite({ sites, homebases, customers, onImport, onCreate, showToast }) {
   const [showImport, setShowImport] = useState(false);
   const [preview, setPreview] = useState(null); // { rows: [...], errors: [...] }
   const [importing, setImporting] = useState(false);
@@ -2247,10 +2251,11 @@ function MasterSite({ sites, homebases, customers, onImport, onCreate }) {
   const addSite = async () => {
     if (!form.code.trim() || !form.name.trim() || !form.homebase) return;
     setSaving(true); setAddError("");
+    const submittedName = form.name;
     try {
       await onCreate(form);
+      showToast(`Site "${submittedName}" berhasil ditambahkan`);
       setForm(emptyForm);
-      setShowAddForm(false);
     } catch (err) {
       setAddError(err.message || "Gagal menyimpan");
     } finally {
@@ -2302,8 +2307,8 @@ function MasterSite({ sites, homebases, customers, onImport, onCreate }) {
     setImporting(true);
     try {
       await onImport(validRows.map((r) => ({ code: r.code, terminalId: r.terminalId, name: r.name, customer: r.customer, area: r.area, homebase: r.homebase, status: r.status || "Active" })));
+      showToast(`${validRows.length} site berhasil diimpor`);
       setPreview(null);
-      setShowImport(false);
     } finally {
       setImporting(false);
     }
@@ -2441,7 +2446,7 @@ function MasterSite({ sites, homebases, customers, onImport, onCreate }) {
 /* Generic, schema-driven Master Data CRUD table: used for Homebase, Area,
    Customer, and Users so each master gets a real Add form + Activate/Deactivate
    toggle without duplicating table/form boilerplate per module. */
-function MasterCrudTable({ title, subtitle, fields, items, idField = "id", buildLabel, onCreate, onToggle, onUpdate, importConfig }) {
+function MasterCrudTable({ title, subtitle, entityLabel, fields, items, idField = "id", buildLabel, onCreate, onToggle, onUpdate, importConfig, showToast }) {
   const [showForm, setShowForm] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [search, setSearch] = useState("");
@@ -2450,6 +2455,7 @@ function MasterCrudTable({ title, subtitle, fields, items, idField = "id", build
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const label = entityLabel || title;
 
   const closeForm = () => { setShowForm(false); setEditingId(null); setForm(emptyForm); setError(""); };
 
@@ -2468,9 +2474,15 @@ function MasterCrudTable({ title, subtitle, fields, items, idField = "id", build
     if (requiredMissing) return;
     setSaving(true); setError("");
     try {
-      if (editingId) await onUpdate(editingId, form);
-      else await onCreate(form);
-      closeForm();
+      if (editingId) {
+        await onUpdate(editingId, form);
+        showToast(`${label} berhasil diperbarui`);
+        closeForm();
+      } else {
+        await onCreate(form);
+        showToast(`${label} berhasil ditambahkan`);
+        setForm(emptyForm); // keep the panel open, ready for the next entry
+      }
     } catch (err) {
       setError(err.message || "Gagal menyimpan");
     } finally {
@@ -2521,7 +2533,7 @@ function MasterCrudTable({ title, subtitle, fields, items, idField = "id", build
           </div>
           {error && <div className="bg-red-50 border border-red-100 text-red-700 text-xs rounded-lg px-3 py-2">{error}</div>}
           <div className="flex justify-end gap-2">
-            <GhostButton onClick={closeForm}>Batal</GhostButton>
+            <GhostButton onClick={closeForm}>{editingId ? "Batal" : "Tutup"}</GhostButton>
             <PrimaryButton onClick={handleSubmit} disabled={saving}>{saving ? "Menyimpan..." : editingId ? "Simpan Perubahan" : "Simpan"}</PrimaryButton>
           </div>
         </Card>
@@ -2534,8 +2546,8 @@ function MasterCrudTable({ title, subtitle, fields, items, idField = "id", build
           sampleRow={importConfig.sampleRow}
           validateRow={importConfig.validateRow}
           onImport={async (rows) => {
-            await importConfig.onImport(rows);
-            setShowImport(false);
+            const result = await importConfig.onImport(rows);
+            showToast(`${result?.imported ?? rows.length} ${label} berhasil diimpor`);
           }}
         />
       )}
@@ -2840,6 +2852,13 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [dataLoading, setDataLoading] = useState(false);
   const [apiError, setApiError] = useState("");
+  const [toast, setToast] = useState(null); // { message }
+  const toastTimerRef = React.useRef(null);
+  const showToast = (message) => {
+    setToast({ message });
+    clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(null), 3000);
+  };
 
   const [page, setPage] = useState("dashboard");
   const [selectedDelivery, setSelectedDelivery] = useState(null);
@@ -3327,7 +3346,7 @@ export default function App() {
       revisionNote={r.revisionNote}
     />;
   }
-  else if (page === "stock") content = <WarehouseStock materials={materials} setPage={goto} setMovementFilter={setMovementFilter} setSerialMaterial={setSerialMaterial} onSubmitReceipt={createReceipt} />;
+  else if (page === "stock") content = <WarehouseStock materials={materials} setPage={goto} setMovementFilter={setMovementFilter} setSerialMaterial={setSerialMaterial} onSubmitReceipt={createReceipt} showToast={showToast} />;
   else if (page === "movement") content = <StockMovement movements={movements} filter={movementFilter} setFilter={setMovementFilter} />;
   else if (page === "serialDetail") content = <MaterialSerialDetail material={serialMaterial} api={api} onBack={() => goto("stock")} />;
   else if (page === "reports") content = <ReportsPage
@@ -3375,10 +3394,11 @@ export default function App() {
       { label: "Tanggal", render: (r) => r.date, exportValue: (r) => r.date },
     ]}
   />;
-  else if (page === "masterMaterial") content = <MasterMaterial materials={materials} onCreate={createMaterial} onToggle={toggleMaterial} onImport={importMaterialsToServer} />;
-  else if (page === "masterSite") content = <MasterSite sites={sites} homebases={homebases} customers={customers} onImport={importSitesToServer} onCreate={createSiteToServer} />;
+  else if (page === "masterMaterial") content = <MasterMaterial materials={materials} onCreate={createMaterial} onToggle={toggleMaterial} onImport={importMaterialsToServer} showToast={showToast} />;
+  else if (page === "masterSite") content = <MasterSite sites={sites} homebases={homebases} customers={customers} onImport={importSitesToServer} onCreate={createSiteToServer} showToast={showToast} />;
   else if (page === "masterHomebase") content = <MasterCrudTable
     title="Master Homebase" subtitle="Data homebase & PIC tim lapangan"
+    entityLabel="Homebase" showToast={showToast}
     items={homebases} idField="code"
     buildLabel={(h) => `${h.name} ${h.area} ${h.pic}`}
     onCreate={createHomebase} onToggle={toggleHomebase}
@@ -3413,6 +3433,7 @@ export default function App() {
   />;
   else if (page === "masterArea") content = <MasterCrudTable
     title="Master Area" subtitle="Wilayah operasional"
+    entityLabel="Area" showToast={showToast}
     items={areas} idField="code"
     buildLabel={(a) => a.name}
     onCreate={createArea} onToggle={toggleArea}
@@ -3432,6 +3453,7 @@ export default function App() {
   />;
   else if (page === "masterCustomer") content = <MasterCrudTable
     title="Master Customer" subtitle="Data pelanggan"
+    entityLabel="Customer" showToast={showToast}
     items={customers} idField="id"
     buildLabel={(c) => c.name}
     onCreate={createCustomer} onToggle={toggleCustomer}
@@ -3451,6 +3473,7 @@ export default function App() {
   />;
   else if (page === "users") content = <MasterCrudTable
     title="User Management" subtitle="Kelola akses pengguna sistem"
+    entityLabel="User" showToast={showToast}
     items={users} idField="id"
     buildLabel={(u) => `${u.name} ${u.role} ${u.assignment}`}
     onCreate={createUserAccount} onToggle={toggleUser} onUpdate={updateUserAccount}
@@ -3495,6 +3518,13 @@ export default function App() {
         )}
         <div className="flex-1 overflow-y-auto">{content}</div>
       </div>
+
+      {toast && (
+        <div className="fixed bottom-5 right-5 z-50 bg-emerald-800 text-white text-sm font-medium rounded-xl shadow-lg px-4 py-3 flex items-center gap-2.5 max-w-sm">
+          <Check size={16} className="shrink-0" />
+          <span>{toast.message}</span>
+        </div>
+      )}
     </div>
   );
 }
