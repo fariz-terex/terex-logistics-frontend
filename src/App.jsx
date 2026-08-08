@@ -284,7 +284,7 @@ function ConfirmDialog({ open, title, message, confirmLabel = "Konfirmasi", onCo
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/30" onClick={onCancel} />
-      <Card className="relative w-full max-w-sm p-6 space-y-4">
+      <Card className="relative w-full max-w-md p-6 space-y-4">
         <div className="text-base font-semibold text-gray-900">{title}</div>
         <div className="text-sm text-gray-600">{message}</div>
         <div className="flex justify-end gap-2 pt-2">
@@ -1164,7 +1164,29 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, 
       <ConfirmDialog
         open={confirmAssign}
         title="Reservasi Stock"
-        message={`Stock akan direservasi sesuai Serial Number yang dipilih untuk ${delivery.id}. Lanjutkan?`}
+        message={
+          <div className="space-y-3">
+            <div>Stock berikut akan direservasi untuk {delivery.id}:</div>
+            {delivery.items.map((item) => {
+              const isSerialized = serializedItems.some((si) => si.material === item.material);
+              const chosen = isSerialized ? Array.from(selectedSerials[item.material] || []) : null;
+              return (
+                <div key={item.material}>
+                  <div className="text-xs font-medium text-gray-800">{item.material} · Qty {item.qty}</div>
+                  {isSerialized ? (
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {chosen.map((sn) => (
+                        <span key={sn} className="text-xs bg-emerald-50 text-emerald-700 rounded-full px-2 py-0.5">{sn}</span>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-gray-400 mt-0.5">Non-serialized — tanpa SN</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        }
         confirmLabel="Ya, Reservasi"
         onConfirm={() => { setConfirmAssign(false); handleAssignStock(); }}
         onCancel={() => setConfirmAssign(false)}
