@@ -312,7 +312,6 @@ const NAV_TREE = [
     children: [
       { key: "stock", label: "Warehouse Stock" },
       { key: "movement", label: "Stock Movement" },
-      { key: "receipts", label: "Terima Barang" },
     ],
   },
   {
@@ -340,7 +339,7 @@ const NAV_TREE = [
 function hasAccess(key, role) {
   const map = {
     delivery: NAV_ACCESS.delivery, returnFaulty: NAV_ACCESS.returnFaulty, reconciliation: NAV_ACCESS.reconciliation,
-    stock: NAV_ACCESS.stock, movement: NAV_ACCESS.movement, receipts: NAV_ACCESS.receipts,
+    stock: NAV_ACCESS.stock, movement: NAV_ACCESS.movement,
     reports: NAV_ACCESS.reports, reportsFaulty: NAV_ACCESS.reports, reportsRecon: NAV_ACCESS.reports,
     masterMaterial: NAV_ACCESS.master, masterSite: NAV_ACCESS.master, masterHomebase: NAV_ACCESS.master,
     masterArea: NAV_ACCESS.master, masterCustomer: NAV_ACCESS.master,
@@ -1138,16 +1137,111 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAdvance, role
    WAREHOUSE STOCK + MOVEMENT
    ============================================================ */
 
-function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMaterial }) {
+function GoodsReceiptForm({ materials, onSubmit, onCancel }) {
+  const [material, setMaterial] = useState("");
+  const [serials, setSerials] = useState([""]);
+  const [qty, setQty] = useState(1);
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const mat = materials.find((m) => m.name === material);
+
+  const addSN = () => setSerials([...serials, ""]);
+  const updateSN = (i, val) => setSerials(serials.map((s, idx) => (idx === i ? val : s)));
+  const removeSN = (i) => setSerials(serials.filter((_, idx) => idx !== i));
+
+  const trimmedSerials = serials.map((s) => s.trim()).filter(Boolean);
+  const hasDuplicates = new Set(trimmedSerials).size !== trimmedSerials.length;
+  const valid = mat && (mat.serialized ? trimmedSerials.length > 0 && !hasDuplicates : qty > 0);
+
+  const submit = async () => {
+    setSaving(true); setError("");
+    try {
+      await onSubmit(mat.serialized ? { material, serials: trimmedSerials, note } : { material, qty, note });
+    } catch (err) {
+      setError(err.message || "Gagal menyimpan penerimaan barang");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card className="p-5 space-y-4">
+      <div className="text-sm font-semibold text-gray-800">Terima Barang</div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <label className="text-xs font-medium text-gray-500">Material <span className="text-red-500">*</span></label>
+          <select value={material} onChange={(e) => { setMaterial(e.target.value); setSerials([""]); }} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600">
+            <option value="">Pilih material...</option>
+            {materials.map((m) => <option key={m.id} value={m.name}>{m.name} {m.serialized ? "(Serialized)" : ""}</option>)}
+          </select>
+        </div>
+
+        {mat && !mat.serialized && (
+          <div>
+            <label className="text-xs font-medium text-gray-500">Qty <span className="text-red-500">*</span></label>
+            <input type="number" min={1} value={qty} onChange={(e) => setQty(Number(e.target.value))} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
+          </div>
+        )}
+
+        <div className={mat && !mat.serialized ? "" : "sm:col-span-2"}>
+          <label className="text-xs font-medium text-gray-500">Catatan <span className="text-gray-400 font-normal">(opsional, mis. nomor PO)</span></label>
+          <input value={note} onChange={(e) => setNote(e.target.value)} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
+        </div>
+      </div>
+
+      {mat && mat.serialized && (
+        <div className="space-y-3 pt-2 border-t border-gray-50">
+          <div className="flex items-center justify-between">
+            <div className="text-sm font-semibold text-gray-800">Serial Number Unit Baru</div>
+            <button onClick={addSN} className="text-xs text-emerald-800 font-medium flex items-center gap-1"><Plus size={14} /> Add SN</button>
+          </div>
+          {serials.map((s, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <span className="text-xs text-gray-400 w-5">{i + 1}.</span>
+              <input value={s} onChange={(e) => updateSN(i, e.target.value)} placeholder="Masukkan Serial Number" className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
+              {serials.length > 1 && <button onClick={() => removeSN(i)} className="text-gray-300 hover:text-red-500"><X size={16} /></button>}
+            </div>
+          ))}
+          {hasDuplicates && <div className="text-xs text-red-600">Ada Serial Number duplikat dalam daftar ini.</div>}
+          <div className="text-xs text-gray-400">Total unit: {trimmedSerials.length}</div>
+        </div>
+      )}
+
+      {error && <div className="bg-red-50 border border-red-100 text-red-700 text-xs rounded-lg px-3 py-2">{error}</div>}
+
+      <div className="flex justify-end gap-2">
+        <GhostButton onClick={onCancel}>Batal</GhostButton>
+        <PrimaryButton disabled={!valid || saving} onClick={submit}>{saving ? "Menyimpan..." : "Simpan Penerimaan"}</PrimaryButton>
+      </div>
+    </Card>
+  );
+}
+
+function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMaterial, onSubmitReceipt }) {
   const [search, setSearch] = useState("");
+  const [showReceiptForm, setShowReceiptForm] = useState(false);
   const filtered = materials.filter((m) => m.name.toLowerCase().includes(search.toLowerCase()));
 
   return (
     <div className="p-4 sm:p-8 space-y-5">
       <SectionTitle
         title="Warehouse Stock" subtitle="Ketersediaan material di gudang pusat"
-        right={<PrimaryButton onClick={() => setPage("receipts")}><Plus size={16} /> Terima Barang</PrimaryButton>}
+        right={<PrimaryButton onClick={() => setShowReceiptForm(!showReceiptForm)}><Plus size={16} /> Terima Barang</PrimaryButton>}
       />
+
+      {showReceiptForm && (
+        <GoodsReceiptForm
+          materials={materials}
+          onCancel={() => setShowReceiptForm(false)}
+          onSubmit={async (payload) => {
+            await onSubmitReceipt(payload);
+            setShowReceiptForm(false);
+          }}
+        />
+      )}
+
       <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2.5 w-80">
         <Search size={16} className="text-gray-400" />
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari material..." className="bg-transparent text-sm outline-none w-full" />
@@ -1306,88 +1400,6 @@ function StockMovement({ movements, filter, setFilter }) {
   );
 }
 
-function GoodsReceiptCreate({ materials, onSubmit, onCancel }) {
-  const [material, setMaterial] = useState("");
-  const [serials, setSerials] = useState([""]);
-  const [qty, setQty] = useState(1);
-  const [note, setNote] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-
-  const mat = materials.find((m) => m.name === material);
-
-  const addSN = () => setSerials([...serials, ""]);
-  const updateSN = (i, val) => setSerials(serials.map((s, idx) => (idx === i ? val : s)));
-  const removeSN = (i) => setSerials(serials.filter((_, idx) => idx !== i));
-
-  const trimmedSerials = serials.map((s) => s.trim()).filter(Boolean);
-  const hasDuplicates = new Set(trimmedSerials).size !== trimmedSerials.length;
-  const valid = mat && (mat.serialized ? trimmedSerials.length > 0 && !hasDuplicates : qty > 0);
-
-  const submit = async () => {
-    setSaving(true); setError("");
-    try {
-      await onSubmit(mat.serialized ? { material, serials: trimmedSerials, note } : { material, qty, note });
-    } catch (err) {
-      setError(err.message || "Gagal menyimpan penerimaan barang");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="p-4 sm:p-8 max-w-2xl mx-auto space-y-6">
-      <SectionTitle title="Terima Barang" subtitle="Catat material baru yang masuk ke warehouse" />
-
-      <Card className="p-6 space-y-4">
-        <div>
-          <label className="text-sm font-medium text-gray-700">Material <span className="text-red-500">*</span></label>
-          <select value={material} onChange={(e) => { setMaterial(e.target.value); setSerials([""]); }} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600">
-            <option value="">Pilih material...</option>
-            {materials.map((m) => <option key={m.id} value={m.name}>{m.name} {m.serialized ? "(Serialized)" : ""}</option>)}
-          </select>
-        </div>
-
-        {mat && !mat.serialized && (
-          <div>
-            <label className="text-sm font-medium text-gray-700">Qty <span className="text-red-500">*</span></label>
-            <input type="number" min={1} value={qty} onChange={(e) => setQty(Number(e.target.value))} className="mt-1.5 w-32 border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
-          </div>
-        )}
-
-        <div>
-          <label className="text-sm font-medium text-gray-700">Catatan <span className="text-gray-400 font-normal">(opsional, mis. nomor PO)</span></label>
-          <input value={note} onChange={(e) => setNote(e.target.value)} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
-        </div>
-      </Card>
-
-      {mat && mat.serialized && (
-        <Card className="p-6 space-y-3">
-          <div className="flex items-center justify-between">
-            <div className="text-sm font-semibold text-gray-800">Serial Number Unit Baru</div>
-            <button onClick={addSN} className="text-xs text-emerald-800 font-medium flex items-center gap-1"><Plus size={14} /> Add SN</button>
-          </div>
-          {serials.map((s, i) => (
-            <div key={i} className="flex items-center gap-2">
-              <span className="text-xs text-gray-400 w-5">{i + 1}.</span>
-              <input value={s} onChange={(e) => updateSN(i, e.target.value)} placeholder="Masukkan Serial Number" className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
-              {serials.length > 1 && <button onClick={() => removeSN(i)} className="text-gray-300 hover:text-red-500"><X size={16} /></button>}
-            </div>
-          ))}
-          {hasDuplicates && <div className="text-xs text-red-600">Ada Serial Number duplikat dalam daftar ini.</div>}
-          <div className="text-xs text-gray-400">Total unit: {trimmedSerials.length}</div>
-        </Card>
-      )}
-
-      {error && <div className="bg-red-50 border border-red-100 text-red-700 text-sm rounded-lg px-3 py-2">{error}</div>}
-
-      <div className="flex justify-between">
-        <GhostButton onClick={onCancel}>Batal</GhostButton>
-        <PrimaryButton disabled={!valid || saving} onClick={submit}>{saving ? "Menyimpan..." : "Simpan Penerimaan"}</PrimaryButton>
-      </div>
-    </div>
-  );
-}
 
 /* ============================================================
    RETURN MATERIAL FAULTY MODULE
@@ -2921,7 +2933,6 @@ export default function App() {
   const createReceipt = async (payload) => {
     await api.createReceipt(payload);
     await refreshStock();
-    goto("stock");
   };
 
   const goto = (p) => { setPage(p); setSelectedDelivery(null); setSelectedReturn(null); setSelectedRecon(null); };
@@ -3254,7 +3265,7 @@ export default function App() {
     returnFaulty: ["Return Material Faulty", ""], returnFaultyCreate: ["Return Material Faulty", ""], returnFaultyEdit: ["Return Material Faulty", "Perbaiki & kirim ulang"],
     reconciliation: ["Reconciliation", ""], reconciliationCreate: ["Reconciliation", ""], reconciliationEdit: ["Reconciliation", "Perbaiki & kirim ulang"],
     stock: ["Warehouse Stock", ""], movement: ["Stock Movement", ""],
-    receipts: ["Terima Barang", "Catat material baru masuk gudang"], serialDetail: ["Warehouse Stock", "Detail Serial Number"],
+    serialDetail: ["Warehouse Stock", "Detail Serial Number"],
     reports: ["Reports", ""], reportsFaulty: ["Reports", ""], reportsRecon: ["Reports", ""],
     masterMaterial: ["Master Data", ""], masterSite: ["Master Data", ""], masterHomebase: ["Master Data", ""], masterArea: ["Master Data", ""], masterCustomer: ["Master Data", ""],
     users: ["User Management", ""], settings: ["Settings", ""],
@@ -3316,9 +3327,8 @@ export default function App() {
       revisionNote={r.revisionNote}
     />;
   }
-  else if (page === "stock") content = <WarehouseStock materials={materials} setPage={goto} setMovementFilter={setMovementFilter} setSerialMaterial={setSerialMaterial} />;
+  else if (page === "stock") content = <WarehouseStock materials={materials} setPage={goto} setMovementFilter={setMovementFilter} setSerialMaterial={setSerialMaterial} onSubmitReceipt={createReceipt} />;
   else if (page === "movement") content = <StockMovement movements={movements} filter={movementFilter} setFilter={setMovementFilter} />;
-  else if (page === "receipts") content = <GoodsReceiptCreate materials={materials} onSubmit={createReceipt} onCancel={() => goto("stock")} />;
   else if (page === "serialDetail") content = <MaterialSerialDetail material={serialMaterial} api={api} onBack={() => goto("stock")} />;
   else if (page === "reports") content = <ReportsPage
     title="Delivery Report" subtitle="Laporan seluruh pengajuan delivery"
