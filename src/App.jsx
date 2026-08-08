@@ -275,6 +275,31 @@ function DangerButton({ children, onClick, className = "" }) {
   );
 }
 
+/* Small confirmation modal for actions that are annoying to undo (stock
+   reservation, shipping/delivery status changes) — a lightweight guard
+   against mis-clicks, styled to match the rest of the app instead of a
+   native browser confirm(). */
+function ConfirmDialog({ open, title, message, confirmLabel = "Konfirmasi", onConfirm, onCancel, danger }) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/30" onClick={onCancel} />
+      <Card className="relative w-full max-w-sm p-6 space-y-4">
+        <div className="text-base font-semibold text-gray-900">{title}</div>
+        <div className="text-sm text-gray-600">{message}</div>
+        <div className="flex justify-end gap-2 pt-2">
+          <GhostButton onClick={onCancel}>Batal</GhostButton>
+          {danger ? (
+            <DangerButton onClick={onConfirm} className="border-red-600 bg-red-600 text-white hover:bg-red-700">{confirmLabel}</DangerButton>
+          ) : (
+            <PrimaryButton onClick={onConfirm}>{confirmLabel}</PrimaryButton>
+          )}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 function SectionTitle({ title, subtitle, right }) {
   return (
     <div className="flex items-center justify-between mb-4">
@@ -1017,6 +1042,9 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, 
   const allSelected = serializedItems.every((i) => (selectedSerials[i.material]?.size || 0) === i.qty);
   const assignDisabled = serializedItems.length > 0 && (!allSelected || loadingSerials);
 
+  const [confirmAssign, setConfirmAssign] = useState(false);
+  const [confirmAdvance, setConfirmAdvance] = useState(false);
+
   const handleAssignStock = async () => {
     setAssigning(true);
     try {
@@ -1120,7 +1148,7 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, 
       {canAssignStock && (
         <Card className="p-5 flex items-center justify-between">
           <div className="text-sm text-gray-600">Sudah disetujui Manager — tentukan unit stock yang akan dikirim.</div>
-          <PrimaryButton onClick={handleAssignStock} disabled={assignDisabled || assigning}>
+          <PrimaryButton onClick={() => setConfirmAssign(true)} disabled={assignDisabled || assigning}>
             <Check size={15} /> {assigning ? "Memproses..." : "Reservasi Stock"}
           </PrimaryButton>
         </Card>
@@ -1129,9 +1157,27 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, 
       {canAdvance && (
         <Card className="p-5 flex items-center justify-between">
           <div className="text-sm text-gray-600">Ubah status pengiriman ke "{nextStatusMap[delivery.status]}".</div>
-          <PrimaryButton onClick={() => onAdvance(delivery.id)}>Set: {nextStatusMap[delivery.status]}</PrimaryButton>
+          <PrimaryButton onClick={() => setConfirmAdvance(true)}>Set: {nextStatusMap[delivery.status]}</PrimaryButton>
         </Card>
       )}
+
+      <ConfirmDialog
+        open={confirmAssign}
+        title="Reservasi Stock"
+        message={`Stock akan direservasi sesuai Serial Number yang dipilih untuk ${delivery.id}. Lanjutkan?`}
+        confirmLabel="Ya, Reservasi"
+        onConfirm={() => { setConfirmAssign(false); handleAssignStock(); }}
+        onCancel={() => setConfirmAssign(false)}
+      />
+
+      <ConfirmDialog
+        open={confirmAdvance}
+        title={`Set status ke "${nextStatusMap[delivery.status]}"`}
+        message={`Ubah status pengiriman ${delivery.id} menjadi "${nextStatusMap[delivery.status]}"? Aksi ini tidak bisa dibatalkan.`}
+        confirmLabel="Ya, Ubah Status"
+        onConfirm={() => { setConfirmAdvance(false); onAdvance(delivery.id); }}
+        onCancel={() => setConfirmAdvance(false)}
+      />
 
       <Card className="p-5">
         <SectionTitle title="Audit Trail" />
