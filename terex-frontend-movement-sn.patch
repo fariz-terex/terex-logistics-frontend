@@ -1,0 +1,80 @@
+From 14842ac1abdc14a3b6b957d020e8412fe6cb1eeb Mon Sep 17 00:00:00 2001
+From: TEREX Dev <dev@terex.local>
+Date: Sat, 8 Aug 2026 07:55:30 +0000
+Subject: [PATCH] Show Serial Numbers on Stock Movement rows
+
+---
+ src/App.jsx | 47 ++++++++++++++++++++++++++++++++++++-----------
+ 1 file changed, 36 insertions(+), 11 deletions(-)
+
+diff --git a/src/App.jsx b/src/App.jsx
+index bff7272..b973b5f 100644
+--- a/src/App.jsx
++++ b/src/App.jsx
+@@ -1367,6 +1367,8 @@ function MaterialSerialDetail({ material, api, onBack }) {
+ 
+ function StockMovement({ movements, filter, setFilter }) {
+   const filtered = filter ? movements.filter((m) => m.material === filter) : movements;
++  const [expandedId, setExpandedId] = useState(null);
++
+   return (
+     <div className="p-4 sm:p-8 space-y-5">
+       <SectionTitle title="Stock Movement" subtitle="Riwayat pergerakan seluruh material gudang" right={filter && <GhostButton onClick={() => setFilter("")}>Hapus filter: {filter} <X size={14} /></GhostButton>} />
+@@ -1381,20 +1383,43 @@ function StockMovement({ movements, filter, setFilter }) {
+               <th className="px-5 py-3 font-medium">Perubahan</th>
+               <th className="px-5 py-3 font-medium">Referensi</th>
+               <th className="px-5 py-3 font-medium">Remaining</th>
++              <th className="px-5 py-3 font-medium"></th>
+             </tr>
+           </thead>
+           <tbody>
+-            {filtered.map((m) => (
+-              <tr key={m.id} className="border-b border-gray-50 last:border-0">
+-                <td className="px-5 py-3 font-medium text-gray-800">{m.id}</td>
+-                <td className="px-5 py-3 text-gray-500">{m.date}</td>
+-                <td className="px-5 py-3 text-gray-700">{m.material}</td>
+-                <td className={`px-5 py-3 font-semibold ${m.qty > 0 ? "text-emerald-700" : "text-red-600"}`}>{m.qty > 0 ? `+${m.qty}` : m.qty}</td>
+-                <td className="px-5 py-3 text-gray-500">{m.ref}</td>
+-                <td className="px-5 py-3 font-medium text-gray-800">{m.remaining}</td>
+-              </tr>
+-            ))}
+-            {filtered.length === 0 && <tr><td colSpan={6}><EmptyState text="Belum ada pergerakan stock." /></td></tr>}
++            {filtered.map((m) => {
++              const hasSerials = m.serials && m.serials.length > 0;
++              const expanded = expandedId === m.id;
++              return (
++                <React.Fragment key={m.id}>
++                  <tr className="border-b border-gray-50 last:border-0">
++                    <td className="px-5 py-3 font-medium text-gray-800">{m.id}</td>
++                    <td className="px-5 py-3 text-gray-500">{m.date}</td>
++                    <td className="px-5 py-3 text-gray-700">{m.material}</td>
++                    <td className={`px-5 py-3 font-semibold ${m.qty > 0 ? "text-emerald-700" : "text-red-600"}`}>{m.qty > 0 ? `+${m.qty}` : m.qty}</td>
++                    <td className="px-5 py-3 text-gray-500">{m.ref}</td>
++                    <td className="px-5 py-3 font-medium text-gray-800">{m.remaining}</td>
++                    <td className="px-5 py-3">
++                      {hasSerials && (
++                        <button onClick={() => setExpandedId(expanded ? null : m.id)} className="text-emerald-800 text-xs font-medium">
++                          {expanded ? "Sembunyikan" : `Lihat SN (${m.serials.length})`}
++                        </button>
++                      )}
++                    </td>
++                  </tr>
++                  {expanded && hasSerials && (
++                    <tr className="bg-gray-50/60 border-b border-gray-50 last:border-0">
++                      <td colSpan={7} className="px-5 py-3">
++                        <div className="flex flex-wrap gap-1.5">
++                          {m.serials.map((sn) => <span key={sn} className="text-xs bg-white border border-gray-200 rounded-full px-2.5 py-1 text-gray-600">{sn}</span>)}
++                        </div>
++                      </td>
++                    </tr>
++                  )}
++                </React.Fragment>
++              );
++            })}
++            {filtered.length === 0 && <tr><td colSpan={7}><EmptyState text="Belum ada pergerakan stock." /></td></tr>}
+           </tbody>
+         </table>
+         </div>
+-- 
+2.43.0
+
