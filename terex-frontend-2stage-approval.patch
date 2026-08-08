@@ -1,0 +1,214 @@
+From 73773723ce50b122adb26315c3c3d439020465b9 Mon Sep 17 00:00:00 2001
+From: TEREX Dev <dev@terex.local>
+Date: Sat, 8 Aug 2026 08:12:56 +0000
+Subject: [PATCH] Split Delivery approval UI into two stages: Manager approves
+ qty, Logistics Staff assigns SN
+
+---
+ src/App.jsx | 100 +++++++++++++++++++++++++++++++++-------------------
+ 1 file changed, 64 insertions(+), 36 deletions(-)
+
+diff --git a/src/App.jsx b/src/App.jsx
+index a0b930c..f1d5c50 100644
+--- a/src/App.jsx
++++ b/src/App.jsx
+@@ -586,7 +586,7 @@ function TopBar({ user, onLogout, title, subtitle, searchQuery, setSearchQuery,
+ 
+ function Dashboard({ role, setPage, deliveries, returns, reconciliations, materials }) {
+   const pendingApproval = deliveries.filter((d) => d.status === "Waiting Logistics Approval").length;
+-  const inProgress = deliveries.filter((d) => ["In Progress", "Preparing", "Shipped"].includes(d.status)).length;
++  const inProgress = deliveries.filter((d) => ["In Progress", "Approved", "Preparing", "Shipped"].includes(d.status)).length;
+   const waitingReview = returns.filter((r) => r.status === "Waiting Logistics Review").length;
+   const reconReview = reconciliations.filter((r) => r.status === "Waiting Logistics Review").length;
+   const lowStock = materials.filter((m) => m.ready <= m.minStock).length;
+@@ -966,19 +966,28 @@ function DeliveryCreate({ onSubmit, onCancel, materials, sites, homebases }) {
+   );
+ }
+ 
+-function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAdvance, role, materials, api }) {
+-  const canApprove = (role === ROLES.LOGISTICS || role === ROLES.MANAGER) && delivery.status === "Waiting Logistics Approval";
+-  const canAdvance = (role === ROLES.LOGISTICS || role === ROLES.MANAGER) && ["Approved", "Preparing", "Shipped"].includes(delivery.status);
+-  const nextStatusMap = { Approved: "Preparing", Preparing: "Shipped", Shipped: "Delivered" };
++function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, onAdvance, role, materials, api }) {
++  // Stage 1 — Manager reviews qty only, no SN involved.
++  const canApprove = role === ROLES.MANAGER && delivery.status === "Waiting Logistics Approval";
++  // Stage 2 — Logistics Staff (or Manager) picks the actual units to fulfill it.
++  const canAssignStock = (role === ROLES.LOGISTICS || role === ROLES.MANAGER) && delivery.status === "Approved";
++  const canAdvance = (role === ROLES.LOGISTICS || role === ROLES.MANAGER) && ["Preparing", "Shipped"].includes(delivery.status);
++  const nextStatusMap = { Preparing: "Shipped", Shipped: "Delivered" };
++
++  const [approving, setApproving] = useState(false);
++  const handleApprove = async () => {
++    setApproving(true);
++    try { await onApprove(delivery.id); } finally { setApproving(false); }
++  };
+ 
+   const serializedItems = delivery.items.filter((i) => materials.find((m) => m.name === i.material)?.serialized);
+   const [availableSerials, setAvailableSerials] = useState({}); // { material: [{sn,status},...] }
+   const [selectedSerials, setSelectedSerials] = useState({}); // { material: Set<sn> }
+   const [loadingSerials, setLoadingSerials] = useState(false);
+-  const [approving, setApproving] = useState(false);
++  const [assigning, setAssigning] = useState(false);
+ 
+   React.useEffect(() => {
+-    if (!canApprove || serializedItems.length === 0) return;
++    if (!canAssignStock || serializedItems.length === 0) return;
+     let cancelled = false;
+     setLoadingSerials(true);
+     Promise.all(serializedItems.map((i) => api.getSerials(i.material, "Ready").then((data) => [i.material, data])))
+@@ -991,7 +1000,7 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAdvance, role
+       .finally(() => { if (!cancelled) setLoadingSerials(false); });
+     return () => { cancelled = true; };
+     // eslint-disable-next-line react-hooks/exhaustive-deps
+-  }, [delivery.id, canApprove]);
++  }, [delivery.id, canAssignStock]);
+ 
+   const toggleSerial = (material, sn, qty) => {
+     setSelectedSerials((prev) => {
+@@ -1006,19 +1015,19 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAdvance, role
+   };
+ 
+   const allSelected = serializedItems.every((i) => (selectedSerials[i.material]?.size || 0) === i.qty);
+-  const approveDisabled = serializedItems.length > 0 && (!allSelected || loadingSerials);
++  const assignDisabled = serializedItems.length > 0 && (!allSelected || loadingSerials);
+ 
+-  const handleApprove = async () => {
+-    setApproving(true);
++  const handleAssignStock = async () => {
++    setAssigning(true);
+     try {
+       let serialSelections;
+       if (serializedItems.length > 0) {
+         serialSelections = {};
+         serializedItems.forEach((i) => { serialSelections[i.material] = Array.from(selectedSerials[i.material] || []); });
+       }
+-      await onApprove(delivery.id, serialSelections);
++      await onAssignStock(delivery.id, serialSelections);
+     } finally {
+-      setApproving(false);
++      setAssigning(false);
+     }
+   };
+ 
+@@ -1059,9 +1068,9 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAdvance, role
+         </div>
+       </Card>
+ 
+-      {canApprove && serializedItems.length > 0 && (
++      {canAssignStock && serializedItems.length > 0 && (
+         <Card className="p-5 space-y-5">
+-          <SectionTitle title="Pilih Serial Number" subtitle="Material serialized wajib dipilih unitnya sebelum bisa di-approve" />
++          <SectionTitle title="Pilih Serial Number" subtitle="Material serialized wajib dipilih unitnya sebelum stock bisa direservasi" />
+           {loadingSerials ? (
+             <div className="text-sm text-gray-400">Memuat Serial Number tersedia...</div>
+           ) : (
+@@ -1096,28 +1105,34 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAdvance, role
+         </Card>
+       )}
+ 
+-      {(canApprove || canAdvance) && (
++      {canApprove && (
+         <Card className="p-5 flex items-center justify-between">
+-          <div className="text-sm text-gray-600">
+-            {canApprove && "Tinjau permintaan ini dan tentukan persetujuan."}
+-            {canAdvance && `Ubah status pengiriman ke "${nextStatusMap[delivery.status]}".`}
+-          </div>
++          <div className="text-sm text-gray-600">Tinjau permintaan ini berdasarkan jumlah yang diajukan dan tentukan persetujuan.</div>
+           <div className="flex gap-2">
+-            {canApprove && (
+-              <>
+-                <DangerButton onClick={() => onReject(delivery.id)}><X size={15} /> Reject</DangerButton>
+-                <PrimaryButton onClick={handleApprove} disabled={approveDisabled || approving}>
+-                  <Check size={15} /> {approving ? "Memproses..." : "Approve"}
+-                </PrimaryButton>
+-              </>
+-            )}
+-            {canAdvance && (
+-              <PrimaryButton onClick={() => onAdvance(delivery.id)}>Set: {nextStatusMap[delivery.status]}</PrimaryButton>
+-            )}
++            <DangerButton onClick={() => onReject(delivery.id)}><X size={15} /> Reject</DangerButton>
++            <PrimaryButton onClick={handleApprove} disabled={approving}>
++              <Check size={15} /> {approving ? "Memproses..." : "Approve"}
++            </PrimaryButton>
+           </div>
+         </Card>
+       )}
+ 
++      {canAssignStock && (
++        <Card className="p-5 flex items-center justify-between">
++          <div className="text-sm text-gray-600">Sudah disetujui Manager — tentukan unit stock yang akan dikirim.</div>
++          <PrimaryButton onClick={handleAssignStock} disabled={assignDisabled || assigning}>
++            <Check size={15} /> {assigning ? "Memproses..." : "Reservasi Stock"}
++          </PrimaryButton>
++        </Card>
++      )}
++
++      {canAdvance && (
++        <Card className="p-5 flex items-center justify-between">
++          <div className="text-sm text-gray-600">Ubah status pengiriman ke "{nextStatusMap[delivery.status]}".</div>
++          <PrimaryButton onClick={() => onAdvance(delivery.id)}>Set: {nextStatusMap[delivery.status]}</PrimaryButton>
++        </Card>
++      )}
++
+       <Card className="p-5">
+         <SectionTitle title="Audit Trail" />
+         <div className="space-y-3">
+@@ -2767,8 +2782,9 @@ function createApiClient(baseUrl, getToken) {
+ 
+     getDeliveries: () => request("/deliveries"),
+     createDelivery: (payload) => request("/deliveries", { method: "POST", body: payload }),
+-    approveDelivery: (id, serialSelections) => request(`/deliveries/${id}/approve`, { method: "POST", body: serialSelections ? { serialSelections } : {} }),
++    approveDelivery: (id) => request(`/deliveries/${id}/approve`, { method: "POST" }),
+     rejectDelivery: (id) => request(`/deliveries/${id}/reject`, { method: "POST" }),
++    assignDeliveryStock: (id, serialSelections) => request(`/deliveries/${id}/assign-stock`, { method: "POST", body: serialSelections ? { serialSelections } : {} }),
+     advanceDelivery: (id) => request(`/deliveries/${id}/advance`, { method: "POST" }),
+ 
+     getReturns: () => request("/returns"),
+@@ -3044,10 +3060,15 @@ export default function App() {
+     const list = [];
+     const isLogisticsView = role === ROLES.LOGISTICS || role === ROLES.MANAGER;
+ 
+-    if (isLogisticsView) {
++    if (role === ROLES.MANAGER) {
+       deliveries.filter((d) => d.status === "Waiting Logistics Approval").forEach((d) => {
+         list.push({ icon: Truck, color: "bg-emerald-50 text-emerald-700", text: `Delivery Request ${d.id} menunggu approval`, sub: `${d.homebase} · ${d.requester}`, onSelect: () => gotoDetail("delivery", "delivery", d.id) });
+       });
++    }
++    if (isLogisticsView) {
++      deliveries.filter((d) => d.status === "Approved").forEach((d) => {
++        list.push({ icon: Truck, color: "bg-blue-50 text-blue-700", text: `Delivery Request ${d.id} menunggu penugasan stock`, sub: `${d.homebase} · ${d.requester}`, onSelect: () => gotoDetail("delivery", "delivery", d.id) });
++      });
+       returns.filter((r) => r.status === "Waiting Logistics Review").forEach((r) => {
+         list.push({ icon: Undo2, color: "bg-red-50 text-red-600", text: `Return Faulty ${r.id} menunggu review`, sub: `${r.homebase} · ${r.technician}`, onSelect: () => gotoDetail("returnFaulty", "return", r.id) });
+       });
+@@ -3094,9 +3115,16 @@ export default function App() {
+     } catch (err) { setApiError(err.message); }
+   };
+ 
+-  const approveDelivery = async (id, serialSelections) => {
++  const approveDelivery = async (id) => {
++    try {
++      const updated = await api.approveDelivery(id);
++      setDeliveries((prev) => prev.map((d) => (d.id === id ? updated : d)));
++    } catch (err) { setApiError(err.message); }
++  };
++
++  const assignDeliveryStock = async (id, serialSelections) => {
+     try {
+-      const updated = await api.approveDelivery(id, serialSelections);
++      const updated = await api.assignDeliveryStock(id, serialSelections);
+       setDeliveries((prev) => prev.map((d) => (d.id === id ? updated : d)));
+       await refreshStock();
+     } catch (err) { setApiError(err.message); }
+@@ -3330,7 +3358,7 @@ export default function App() {
+   else if (page === "delivery") {
+     if (selectedDelivery) {
+       const d = deliveries.find((x) => x.id === selectedDelivery);
+-      content = <DeliveryDetail delivery={d} onBack={() => setSelectedDelivery(null)} onApprove={approveDelivery} onReject={rejectDelivery} onAdvance={advanceDelivery} role={role} materials={materials} api={api} />;
++      content = <DeliveryDetail delivery={d} onBack={() => setSelectedDelivery(null)} onApprove={approveDelivery} onReject={rejectDelivery} onAssignStock={assignDeliveryStock} onAdvance={advanceDelivery} role={role} materials={materials} api={api} />;
+     } else content = <DeliveryList deliveries={deliveries} setSelected={setSelectedDelivery} setPage={goto} role={role} />;
+   } else if (page === "deliveryCreate") content = <DeliveryCreate onSubmit={submitDelivery} onCancel={() => goto("delivery")} materials={materials} sites={sites} homebases={homebases} />;
+   else if (page === "returnFaulty") {
+-- 
+2.43.0
+
