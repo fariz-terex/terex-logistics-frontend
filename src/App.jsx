@@ -471,9 +471,12 @@ function Sidebar({ page, setPage, role, userName, mobileOpen, onClose }) {
    ============================================================ */
 
 function TopBar({ user, onLogout, title, subtitle, searchQuery, setSearchQuery, searchResults, notifications, onNotificationClick, onMenuClick }) {
-  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchDismissed, setSearchDismissed] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
+
+  const updateSearch = (val) => { setSearchQuery(val); setSearchDismissed(false); };
+  const showDesktopDropdown = searchQuery.trim() && !searchDismissed;
 
   const resultsDropdown = (
     <div className="absolute mt-1.5 w-full bg-white border border-gray-200 rounded-xl shadow-lg max-h-96 overflow-y-auto py-1.5 z-30">
@@ -483,8 +486,7 @@ function TopBar({ user, onLogout, title, subtitle, searchQuery, setSearchQuery, 
         searchResults.map((r, i) => (
           <button
             key={i}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => { r.onSelect(); setSearchQuery(""); setSearchOpen(false); setMobileSearchOpen(false); }}
+            onClick={() => { r.onSelect(); setSearchQuery(""); setSearchDismissed(true); setMobileSearchOpen(false); }}
             className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50 text-left"
           >
             <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0"><r.icon size={15} /></div>
@@ -516,17 +518,21 @@ function TopBar({ user, onLogout, title, subtitle, searchQuery, setSearchQuery, 
               <Search size={16} className="text-gray-400 shrink-0" />
               <input
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                onFocus={() => setSearchOpen(true)}
-                onBlur={() => setTimeout(() => setSearchOpen(false), 150)}
+                onChange={(e) => updateSearch(e.target.value)}
+                onFocus={() => setSearchDismissed(false)}
                 placeholder="Cari site, material, SN, atau dokumen..."
                 className="bg-transparent text-sm outline-none w-full placeholder:text-gray-400"
               />
               {searchQuery && (
-                <button onMouseDown={(e) => e.preventDefault()} onClick={() => setSearchQuery("")} className="text-gray-300 hover:text-gray-500 shrink-0"><X size={14} /></button>
+                <button onClick={() => { setSearchQuery(""); setSearchDismissed(false); }} className="text-gray-300 hover:text-gray-500 shrink-0"><X size={14} /></button>
               )}
             </div>
-            {searchOpen && searchQuery.trim() && resultsDropdown}
+            {showDesktopDropdown && (
+              <>
+                <div className="fixed inset-0 z-20" onClick={() => setSearchDismissed(true)} />
+                <div className="relative z-30">{resultsDropdown}</div>
+              </>
+            )}
           </div>
 
           <button onClick={() => setMobileSearchOpen((o) => !o)} className="md:hidden w-9 h-9 rounded-lg border border-gray-200 flex items-center justify-center hover:bg-gray-50">
@@ -1307,7 +1313,7 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast }) {
   );
 }
 
-function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMaterial, onSubmitReceipt, showToast }) {
+function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMaterial, onSubmitReceipt, showToast, clearSerialHighlight }) {
   const [search, setSearch] = useState("");
   const [showReceiptForm, setShowReceiptForm] = useState(false);
   const filtered = materials.filter((m) => m.name.toLowerCase().includes(search.toLowerCase()));
@@ -1365,7 +1371,7 @@ function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMateri
                   <td className="px-5 py-3 font-medium text-gray-800">{total}</td>
                   <td className="px-5 py-3">
                     <div className="flex items-center gap-3">
-                      {m.serialized && <button onClick={() => { setSerialMaterial(m.name); setPage("serialDetail"); }} className="text-emerald-800 text-xs font-medium">Lihat SN</button>}
+                      {m.serialized && <button onClick={() => { setSerialMaterial(m.name); clearSerialHighlight?.(); setPage("serialDetail"); }} className="text-emerald-800 text-xs font-medium">Lihat SN</button>}
                       <button onClick={() => { setMovementFilter(m.name); setPage("movement"); }} className="text-gray-500 text-xs font-medium">Riwayat</button>
                     </div>
                   </td>
@@ -1380,7 +1386,7 @@ function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMateri
   );
 }
 
-function MaterialSerialDetail({ material, api, onBack, highlightSerial }) {
+function MaterialSerialDetail({ material, api, onBack, highlightSerial, highlightToken }) {
   const [status, setStatus] = useState("All");
   const [serials, setSerials] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1396,6 +1402,14 @@ function MaterialSerialDetail({ material, api, onBack, highlightSerial }) {
       .catch(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [material, status]);
+
+  // Re-sync from the prop on every new search selection — not just on first
+  // mount. Without this, clicking a second SN result while already on this
+  // page (same material, component never unmounts) silently did nothing,
+  // since useState's initial value is only read once.
+  React.useEffect(() => {
+    if (highlightSerial) setHighlighted(highlightSerial);
+  }, [highlightSerial, highlightToken]);
 
   // Scroll the searched-for SN into view and briefly flash it once the list
   // has actually loaded, so it's obvious which row is the one being looked for.
@@ -2993,6 +3007,7 @@ export default function App() {
   const [movementFilter, setMovementFilter] = useState("");
   const [serialMaterial, setSerialMaterial] = useState("");
   const [highlightSerial, setHighlightSerial] = useState("");
+  const [highlightToken, setHighlightToken] = useState(0);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   const [materials, setMaterials] = useState([]);
@@ -3164,7 +3179,7 @@ export default function App() {
             onSelect = () => gotoDetail("returnFaulty", "return", r.current_ref);
           } else {
             sub = `${r.material} · ${r.status} · di Warehouse`;
-            onSelect = () => { setSerialMaterial(r.material); setHighlightSerial(r.sn); goto("serialDetail"); };
+            onSelect = () => { setSerialMaterial(r.material); setHighlightSerial(r.sn); setHighlightToken((t) => t + 1); goto("serialDetail"); };
           }
           return { type: "Serial Number", icon: Package, label: r.sn, sub, onSelect };
         }));
@@ -3520,9 +3535,9 @@ export default function App() {
       revisionNote={r.revisionNote}
     />;
   }
-  else if (page === "stock") content = <WarehouseStock materials={materials} setPage={goto} setMovementFilter={setMovementFilter} setSerialMaterial={setSerialMaterial} onSubmitReceipt={createReceipt} showToast={showToast} />;
+  else if (page === "stock") content = <WarehouseStock materials={materials} setPage={goto} setMovementFilter={setMovementFilter} setSerialMaterial={setSerialMaterial} onSubmitReceipt={createReceipt} showToast={showToast} clearSerialHighlight={() => setHighlightSerial("")} />;
   else if (page === "movement") content = <StockMovement movements={movements} filter={movementFilter} setFilter={setMovementFilter} />;
-  else if (page === "serialDetail") content = <MaterialSerialDetail material={serialMaterial} api={api} onBack={() => goto("stock")} highlightSerial={highlightSerial} />;
+  else if (page === "serialDetail") content = <MaterialSerialDetail material={serialMaterial} api={api} onBack={() => goto("stock")} highlightSerial={highlightSerial} highlightToken={highlightToken} />;
   else if (page === "reports") content = <ReportsPage
     title="Delivery Report" subtitle="Laporan seluruh pengajuan delivery"
     data={deliveries}
