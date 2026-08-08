@@ -185,6 +185,7 @@ const NAV_ACCESS = {
   reconciliation: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.TECH],
   stock: [ROLES.MANAGER, ROLES.LOGISTICS],
   movement: [ROLES.MANAGER, ROLES.LOGISTICS],
+  receipts: [ROLES.MANAGER, ROLES.LOGISTICS],
   reports: [ROLES.MANAGER, ROLES.LOGISTICS],
   master: [ROLES.MANAGER],
   users: [ROLES.MANAGER],
@@ -221,6 +222,10 @@ const STATUS_STYLES = {
   "Cancelled": "bg-gray-100 text-gray-500",
   "Revision Required": "bg-red-50 text-red-700",
   "Ready to Ship": "bg-emerald-50 text-emerald-700",
+  "Ready": "bg-emerald-50 text-emerald-700",
+  "Reserved": "bg-blue-50 text-blue-700",
+  "In Transit": "bg-indigo-50 text-indigo-700",
+  "Faulty": "bg-red-50 text-red-700",
 };
 
 function StatusBadge({ status }) {
@@ -307,6 +312,7 @@ const NAV_TREE = [
     children: [
       { key: "stock", label: "Warehouse Stock" },
       { key: "movement", label: "Stock Movement" },
+      { key: "receipts", label: "Terima Barang" },
     ],
   },
   {
@@ -334,7 +340,7 @@ const NAV_TREE = [
 function hasAccess(key, role) {
   const map = {
     delivery: NAV_ACCESS.delivery, returnFaulty: NAV_ACCESS.returnFaulty, reconciliation: NAV_ACCESS.reconciliation,
-    stock: NAV_ACCESS.stock, movement: NAV_ACCESS.movement,
+    stock: NAV_ACCESS.stock, movement: NAV_ACCESS.movement, receipts: NAV_ACCESS.receipts,
     reports: NAV_ACCESS.reports, reportsFaulty: NAV_ACCESS.reports, reportsRecon: NAV_ACCESS.reports,
     masterMaterial: NAV_ACCESS.master, masterSite: NAV_ACCESS.master, masterHomebase: NAV_ACCESS.master,
     masterArea: NAV_ACCESS.master, masterCustomer: NAV_ACCESS.master,
@@ -961,10 +967,61 @@ function DeliveryCreate({ onSubmit, onCancel, materials, sites, homebases }) {
   );
 }
 
-function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAdvance, role }) {
+function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAdvance, role, materials, api }) {
   const canApprove = (role === ROLES.LOGISTICS || role === ROLES.MANAGER) && delivery.status === "Waiting Logistics Approval";
   const canAdvance = (role === ROLES.LOGISTICS || role === ROLES.MANAGER) && ["Approved", "Preparing", "Shipped"].includes(delivery.status);
   const nextStatusMap = { Approved: "Preparing", Preparing: "Shipped", Shipped: "Delivered" };
+
+  const serializedItems = delivery.items.filter((i) => materials.find((m) => m.name === i.material)?.serialized);
+  const [availableSerials, setAvailableSerials] = useState({}); // { material: [{sn,status},...] }
+  const [selectedSerials, setSelectedSerials] = useState({}); // { material: Set<sn> }
+  const [loadingSerials, setLoadingSerials] = useState(false);
+  const [approving, setApproving] = useState(false);
+
+  React.useEffect(() => {
+    if (!canApprove || serializedItems.length === 0) return;
+    let cancelled = false;
+    setLoadingSerials(true);
+    Promise.all(serializedItems.map((i) => api.getSerials(i.material, "Ready").then((data) => [i.material, data])))
+      .then((results) => {
+        if (cancelled) return;
+        const map = {};
+        results.forEach(([mat, data]) => { map[mat] = data; });
+        setAvailableSerials(map);
+      })
+      .finally(() => { if (!cancelled) setLoadingSerials(false); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [delivery.id, canApprove]);
+
+  const toggleSerial = (material, sn, qty) => {
+    setSelectedSerials((prev) => {
+      const current = new Set(prev[material] || []);
+      if (current.has(sn)) current.delete(sn);
+      else {
+        if (current.size >= qty) return prev;
+        current.add(sn);
+      }
+      return { ...prev, [material]: current };
+    });
+  };
+
+  const allSelected = serializedItems.every((i) => (selectedSerials[i.material]?.size || 0) === i.qty);
+  const approveDisabled = serializedItems.length > 0 && (!allSelected || loadingSerials);
+
+  const handleApprove = async () => {
+    setApproving(true);
+    try {
+      let serialSelections;
+      if (serializedItems.length > 0) {
+        serialSelections = {};
+        serializedItems.forEach((i) => { serialSelections[i.material] = Array.from(selectedSerials[i.material] || []); });
+      }
+      await onApprove(delivery.id, serialSelections);
+    } finally {
+      setApproving(false);
+    }
+  };
 
   return (
     <div className="p-4 sm:p-8 max-w-4xl mx-auto space-y-5">
@@ -988,13 +1045,57 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAdvance, role
         <SectionTitle title="Material Diajukan" />
         <div className="divide-y divide-gray-50">
           {delivery.items.map((i, idx) => (
-            <div key={idx} className="flex justify-between py-2.5 text-sm">
-              <span className="text-gray-700">{i.material}</span>
-              <span className="font-medium text-gray-800">Qty {i.qty}</span>
+            <div key={idx} className="py-2.5 text-sm">
+              <div className="flex justify-between">
+                <span className="text-gray-700">{i.material}</span>
+                <span className="font-medium text-gray-800">Qty {i.qty}</span>
+              </div>
+              {i.serials?.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mt-1.5">
+                  {i.serials.map((sn) => <span key={sn} className="text-xs bg-gray-50 rounded-full px-2 py-0.5 text-gray-500">{sn}</span>)}
+                </div>
+              )}
             </div>
           ))}
         </div>
       </Card>
+
+      {canApprove && serializedItems.length > 0 && (
+        <Card className="p-5 space-y-5">
+          <SectionTitle title="Pilih Serial Number" subtitle="Material serialized wajib dipilih unitnya sebelum bisa di-approve" />
+          {loadingSerials ? (
+            <div className="text-sm text-gray-400">Memuat Serial Number tersedia...</div>
+          ) : (
+            serializedItems.map((item) => {
+              const selected = selectedSerials[item.material]?.size || 0;
+              const options = availableSerials[item.material] || [];
+              return (
+                <div key={item.material}>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-sm font-medium text-gray-800">{item.material}</div>
+                    <span className={`text-xs font-semibold ${selected === item.qty ? "text-emerald-700" : "text-amber-600"}`}>{selected} / {item.qty} dipilih</span>
+                  </div>
+                  {options.length === 0 ? (
+                    <div className="text-xs text-red-600">Tidak ada Serial Number Ready untuk material ini.</div>
+                  ) : (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-48 overflow-y-auto pr-1">
+                      {options.map((opt) => {
+                        const checked = selectedSerials[item.material]?.has(opt.sn) || false;
+                        return (
+                          <label key={opt.sn} className={`flex items-center gap-2 text-xs border rounded-lg px-2.5 py-2 cursor-pointer ${checked ? "border-emerald-300 bg-emerald-50/50" : "border-gray-200"}`}>
+                            <input type="checkbox" checked={checked} onChange={() => toggleSerial(item.material, opt.sn, item.qty)} className="accent-emerald-800" />
+                            {opt.sn}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </Card>
+      )}
 
       {(canApprove || canAdvance) && (
         <Card className="p-5 flex items-center justify-between">
@@ -1006,7 +1107,9 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAdvance, role
             {canApprove && (
               <>
                 <DangerButton onClick={() => onReject(delivery.id)}><X size={15} /> Reject</DangerButton>
-                <PrimaryButton onClick={() => onApprove(delivery.id)}><Check size={15} /> Approve</PrimaryButton>
+                <PrimaryButton onClick={handleApprove} disabled={approveDisabled || approving}>
+                  <Check size={15} /> {approving ? "Memproses..." : "Approve"}
+                </PrimaryButton>
               </>
             )}
             {canAdvance && (
@@ -1035,13 +1138,16 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAdvance, role
    WAREHOUSE STOCK + MOVEMENT
    ============================================================ */
 
-function WarehouseStock({ materials, setPage, setMovementFilter }) {
+function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMaterial }) {
   const [search, setSearch] = useState("");
   const filtered = materials.filter((m) => m.name.toLowerCase().includes(search.toLowerCase()));
 
   return (
     <div className="p-4 sm:p-8 space-y-5">
-      <SectionTitle title="Warehouse Stock" subtitle="Ketersediaan material di gudang pusat" />
+      <SectionTitle
+        title="Warehouse Stock" subtitle="Ketersediaan material di gudang pusat"
+        right={<PrimaryButton onClick={() => setPage("receipts")}><Plus size={16} /> Terima Barang</PrimaryButton>}
+      />
       <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2.5 w-80">
         <Search size={16} className="text-gray-400" />
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari material..." className="bg-transparent text-sm outline-none w-full" />
@@ -1078,11 +1184,82 @@ function WarehouseStock({ materials, setPage, setMovementFilter }) {
                   <td className="px-5 py-3 text-indigo-600">{m.transit}</td>
                   <td className="px-5 py-3 font-medium text-gray-800">{total}</td>
                   <td className="px-5 py-3">
-                    <button onClick={() => { setMovementFilter(m.name); setPage("movement"); }} className="text-emerald-800 text-xs font-medium">Riwayat</button>
+                    <div className="flex items-center gap-3">
+                      {m.serialized && <button onClick={() => { setSerialMaterial(m.name); setPage("serialDetail"); }} className="text-emerald-800 text-xs font-medium">Lihat SN</button>}
+                      <button onClick={() => { setMovementFilter(m.name); setPage("movement"); }} className="text-gray-500 text-xs font-medium">Riwayat</button>
+                    </div>
                   </td>
                 </tr>
               );
             })}
+          </tbody>
+        </table>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function MaterialSerialDetail({ material, api, onBack }) {
+  const [status, setStatus] = useState("All");
+  const [serials, setSerials] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+
+  React.useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    api.getSerials(material, status === "All" ? undefined : status)
+      .then((data) => { if (!cancelled) { setSerials(data); setLoading(false); } })
+      .catch(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [material, status]);
+
+  const filtered = search ? serials.filter((s) => s.sn.toLowerCase().includes(search.toLowerCase())) : serials;
+  const statusOptions = ["All", "Ready", "Reserved", "In Transit", "Delivered", "Faulty"];
+
+  return (
+    <div className="p-4 sm:p-8 space-y-5">
+      <button onClick={onBack} className="text-sm text-gray-500 flex items-center gap-1 hover:text-gray-800"><ChevronLeft size={16} /> Kembali ke Warehouse Stock</button>
+      <SectionTitle title={`Serial Number — ${material}`} subtitle="Daftar unit per Serial Number dan status terkininya" />
+
+      <div className="flex flex-wrap gap-2">
+        {statusOptions.map((s) => (
+          <button key={s} onClick={() => setStatus(s)} className={`px-3 py-1.5 rounded-lg text-xs font-medium border ${status === s ? "bg-emerald-800 text-white border-emerald-800" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}>
+            {s}
+          </button>
+        ))}
+      </div>
+
+      <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2.5 w-80">
+        <Search size={16} className="text-gray-400" />
+        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari Serial Number..." className="bg-transparent text-sm outline-none w-full" />
+      </div>
+
+      <Card className="overflow-hidden">
+        <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
+              <th className="px-5 py-3 font-medium">Serial Number</th>
+              <th className="px-5 py-3 font-medium">Status</th>
+              <th className="px-5 py-3 font-medium">Referensi</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr><td colSpan={3}><div className="py-10 text-center text-sm text-gray-400">Memuat...</div></td></tr>
+            ) : filtered.length === 0 ? (
+              <tr><td colSpan={3}><EmptyState text="Tidak ada Serial Number untuk filter ini." /></td></tr>
+            ) : (
+              filtered.map((s) => (
+                <tr key={s.sn} className="border-b border-gray-50 last:border-0">
+                  <td className="px-5 py-3 font-medium text-gray-800">{s.sn}</td>
+                  <td className="px-5 py-3"><StatusBadge status={s.status} /></td>
+                  <td className="px-5 py-3 text-gray-500 text-xs">{s.current_ref || s.received_ref || "-"}</td>
+                </tr>
+              ))
+            )}
           </tbody>
         </table>
         </div>
@@ -1125,6 +1302,89 @@ function StockMovement({ movements, filter, setFilter }) {
         </table>
         </div>
       </Card>
+    </div>
+  );
+}
+
+function GoodsReceiptCreate({ materials, onSubmit, onCancel }) {
+  const [material, setMaterial] = useState("");
+  const [serials, setSerials] = useState([""]);
+  const [qty, setQty] = useState(1);
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const mat = materials.find((m) => m.name === material);
+
+  const addSN = () => setSerials([...serials, ""]);
+  const updateSN = (i, val) => setSerials(serials.map((s, idx) => (idx === i ? val : s)));
+  const removeSN = (i) => setSerials(serials.filter((_, idx) => idx !== i));
+
+  const trimmedSerials = serials.map((s) => s.trim()).filter(Boolean);
+  const hasDuplicates = new Set(trimmedSerials).size !== trimmedSerials.length;
+  const valid = mat && (mat.serialized ? trimmedSerials.length > 0 && !hasDuplicates : qty > 0);
+
+  const submit = async () => {
+    setSaving(true); setError("");
+    try {
+      await onSubmit(mat.serialized ? { material, serials: trimmedSerials, note } : { material, qty, note });
+    } catch (err) {
+      setError(err.message || "Gagal menyimpan penerimaan barang");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="p-4 sm:p-8 max-w-2xl mx-auto space-y-6">
+      <SectionTitle title="Terima Barang" subtitle="Catat material baru yang masuk ke warehouse" />
+
+      <Card className="p-6 space-y-4">
+        <div>
+          <label className="text-sm font-medium text-gray-700">Material <span className="text-red-500">*</span></label>
+          <select value={material} onChange={(e) => { setMaterial(e.target.value); setSerials([""]); }} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600">
+            <option value="">Pilih material...</option>
+            {materials.map((m) => <option key={m.id} value={m.name}>{m.name} {m.serialized ? "(Serialized)" : ""}</option>)}
+          </select>
+        </div>
+
+        {mat && !mat.serialized && (
+          <div>
+            <label className="text-sm font-medium text-gray-700">Qty <span className="text-red-500">*</span></label>
+            <input type="number" min={1} value={qty} onChange={(e) => setQty(Number(e.target.value))} className="mt-1.5 w-32 border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+          </div>
+        )}
+
+        <div>
+          <label className="text-sm font-medium text-gray-700">Catatan <span className="text-gray-400 font-normal">(opsional, mis. nomor PO)</span></label>
+          <input value={note} onChange={(e) => setNote(e.target.value)} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+        </div>
+      </Card>
+
+      {mat && mat.serialized && (
+        <Card className="p-6 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="text-sm font-semibold text-gray-800">Serial Number Unit Baru</div>
+            <button onClick={addSN} className="text-xs text-emerald-800 font-medium flex items-center gap-1"><Plus size={14} /> Add SN</button>
+          </div>
+          {serials.map((s, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <span className="text-xs text-gray-400 w-5">{i + 1}.</span>
+              <input value={s} onChange={(e) => updateSN(i, e.target.value)} placeholder="Masukkan Serial Number" className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
+              {serials.length > 1 && <button onClick={() => removeSN(i)} className="text-gray-300 hover:text-red-500"><X size={16} /></button>}
+            </div>
+          ))}
+          {hasDuplicates && <div className="text-xs text-red-600">Ada Serial Number duplikat dalam daftar ini.</div>}
+          <div className="text-xs text-gray-400">Total unit: {trimmedSerials.length}</div>
+        </Card>
+      )}
+
+      {error && <div className="bg-red-50 border border-red-100 text-red-700 text-sm rounded-lg px-3 py-2">{error}</div>}
+
+      <div className="flex justify-between">
+        <GhostButton onClick={onCancel}>Batal</GhostButton>
+        <PrimaryButton disabled={!valid || saving} onClick={submit}>{saving ? "Menyimpan..." : "Simpan Penerimaan"}</PrimaryButton>
+      </div>
     </div>
   );
 }
@@ -2446,10 +2706,19 @@ function createApiClient(baseUrl, getToken) {
 
     getStock: () => request("/stock"),
     getMovements: (material) => request(`/stock/movements${material ? `?material=${encodeURIComponent(material)}` : ""}`),
+    getSerials: (material, status) => {
+      const params = new URLSearchParams();
+      if (material) params.set("material", material);
+      if (status) params.set("status", status);
+      const qs = params.toString();
+      return request(`/stock/serials${qs ? `?${qs}` : ""}`);
+    },
+    createReceipt: (payload) => request("/stock/receipts", { method: "POST", body: payload }),
+    getReceipts: () => request("/stock/receipts"),
 
     getDeliveries: () => request("/deliveries"),
     createDelivery: (payload) => request("/deliveries", { method: "POST", body: payload }),
-    approveDelivery: (id) => request(`/deliveries/${id}/approve`, { method: "POST" }),
+    approveDelivery: (id, serialSelections) => request(`/deliveries/${id}/approve`, { method: "POST", body: serialSelections ? { serialSelections } : {} }),
     rejectDelivery: (id) => request(`/deliveries/${id}/reject`, { method: "POST" }),
     advanceDelivery: (id) => request(`/deliveries/${id}/advance`, { method: "POST" }),
 
@@ -2565,6 +2834,7 @@ export default function App() {
   const [selectedReturn, setSelectedReturn] = useState(null);
   const [selectedRecon, setSelectedRecon] = useState(null);
   const [movementFilter, setMovementFilter] = useState("");
+  const [serialMaterial, setSerialMaterial] = useState("");
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   const [materials, setMaterials] = useState([]);
@@ -2646,6 +2916,12 @@ export default function App() {
     } catch (err) {
       setApiError(err.message);
     }
+  };
+
+  const createReceipt = async (payload) => {
+    await api.createReceipt(payload);
+    await refreshStock();
+    goto("stock");
   };
 
   const goto = (p) => { setPage(p); setSelectedDelivery(null); setSelectedReturn(null); setSelectedRecon(null); };
@@ -2762,9 +3038,9 @@ export default function App() {
     } catch (err) { setApiError(err.message); }
   };
 
-  const approveDelivery = async (id) => {
+  const approveDelivery = async (id, serialSelections) => {
     try {
-      const updated = await api.approveDelivery(id);
+      const updated = await api.approveDelivery(id, serialSelections);
       setDeliveries((prev) => prev.map((d) => (d.id === id ? updated : d)));
       await refreshStock();
     } catch (err) { setApiError(err.message); }
@@ -2978,6 +3254,7 @@ export default function App() {
     returnFaulty: ["Return Material Faulty", ""], returnFaultyCreate: ["Return Material Faulty", ""], returnFaultyEdit: ["Return Material Faulty", "Perbaiki & kirim ulang"],
     reconciliation: ["Reconciliation", ""], reconciliationCreate: ["Reconciliation", ""], reconciliationEdit: ["Reconciliation", "Perbaiki & kirim ulang"],
     stock: ["Warehouse Stock", ""], movement: ["Stock Movement", ""],
+    receipts: ["Terima Barang", "Catat material baru masuk gudang"], serialDetail: ["Warehouse Stock", "Detail Serial Number"],
     reports: ["Reports", ""], reportsFaulty: ["Reports", ""], reportsRecon: ["Reports", ""],
     masterMaterial: ["Master Data", ""], masterSite: ["Master Data", ""], masterHomebase: ["Master Data", ""], masterArea: ["Master Data", ""], masterCustomer: ["Master Data", ""],
     users: ["User Management", ""], settings: ["Settings", ""],
@@ -2997,7 +3274,7 @@ export default function App() {
   else if (page === "delivery") {
     if (selectedDelivery) {
       const d = deliveries.find((x) => x.id === selectedDelivery);
-      content = <DeliveryDetail delivery={d} onBack={() => setSelectedDelivery(null)} onApprove={approveDelivery} onReject={rejectDelivery} onAdvance={advanceDelivery} role={role} />;
+      content = <DeliveryDetail delivery={d} onBack={() => setSelectedDelivery(null)} onApprove={approveDelivery} onReject={rejectDelivery} onAdvance={advanceDelivery} role={role} materials={materials} api={api} />;
     } else content = <DeliveryList deliveries={deliveries} setSelected={setSelectedDelivery} setPage={goto} role={role} />;
   } else if (page === "deliveryCreate") content = <DeliveryCreate onSubmit={submitDelivery} onCancel={() => goto("delivery")} materials={materials} sites={sites} homebases={homebases} />;
   else if (page === "returnFaulty") {
@@ -3039,8 +3316,10 @@ export default function App() {
       revisionNote={r.revisionNote}
     />;
   }
-  else if (page === "stock") content = <WarehouseStock materials={materials} setPage={goto} setMovementFilter={setMovementFilter} />;
+  else if (page === "stock") content = <WarehouseStock materials={materials} setPage={goto} setMovementFilter={setMovementFilter} setSerialMaterial={setSerialMaterial} />;
   else if (page === "movement") content = <StockMovement movements={movements} filter={movementFilter} setFilter={setMovementFilter} />;
+  else if (page === "receipts") content = <GoodsReceiptCreate materials={materials} onSubmit={createReceipt} onCancel={() => goto("stock")} />;
+  else if (page === "serialDetail") content = <MaterialSerialDetail material={serialMaterial} api={api} onBack={() => goto("stock")} />;
   else if (page === "reports") content = <ReportsPage
     title="Delivery Report" subtitle="Laporan seluruh pengajuan delivery"
     data={deliveries}
