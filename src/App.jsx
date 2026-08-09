@@ -615,13 +615,19 @@ function TopBar({ user, onLogout, title, subtitle, searchQuery, setSearchQuery, 
    DASHBOARD
    ============================================================ */
 
-function Dashboard({ role, setPage, deliveries, returns, reconciliations, materials }) {
+function Dashboard({ role, userName, setPage, deliveries, returns, reconciliations, materials }) {
   const pendingApproval = deliveries.filter((d) => d.status === "Waiting Logistics Approval").length;
   const inProgress = deliveries.filter((d) => ["In Progress", "Waiting Stock Assignment", "Preparing", "Shipped"].includes(d.status)).length;
   const waitingReview = returns.filter((r) => r.status === "Waiting Logistics Review").length;
   const reconReview = reconciliations.filter((r) => r.status === "Waiting Logistics Review").length;
   const lowStock = materials.filter((m) => m.ready <= m.minStock).length;
   const totalMaterial = materials.reduce((s, m) => s + m.ready + m.faulty + m.reserved + m.transit, 0);
+
+  const now = new Date();
+  const hour = now.getHours();
+  const greeting = hour < 11 ? "Good morning" : hour < 15 ? "Good afternoon" : hour < 19 ? "Good evening" : "Good night";
+  const firstName = (userName || "").trim().split(" ")[0] || "there";
+  const formattedDate = now.toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
 
   const actions = [
     { icon: Undo2, color: "bg-red-50 text-red-600", title: "Return Faulty menunggu review", sub: "Diajukan oleh tim lapangan", count: waitingReview, cta: "Review", page: "returnFaulty" },
@@ -633,8 +639,8 @@ function Dashboard({ role, setPage, deliveries, returns, reconciliations, materi
   return (
     <div className="p-4 sm:p-8 space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Good afternoon, Fariz 👋</h1>
-        <p className="text-gray-500 mt-1">Kamis, 07 Agustus 2026 · {role}</p>
+        <h1 className="text-2xl font-bold text-gray-900">{greeting}, {firstName} 👋</h1>
+        <p className="text-gray-500 mt-1">{formattedDate} · {role}</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -3489,7 +3495,7 @@ export default function App() {
     content = (
       <div className="p-8 flex items-center justify-center h-full text-gray-400 text-sm">Memuat data dari server...</div>
     );
-  } else if (page === "dashboard") content = <Dashboard role={role} setPage={goto} deliveries={deliveries} returns={returns} reconciliations={reconciliations} materials={materials} />;
+  } else if (page === "dashboard") content = <Dashboard role={role} userName={currentUser?.name} setPage={goto} deliveries={deliveries} returns={returns} reconciliations={reconciliations} materials={materials} />;
   else if (page === "delivery") {
     if (selectedDelivery) {
       const d = deliveries.find((x) => x.id === selectedDelivery);
