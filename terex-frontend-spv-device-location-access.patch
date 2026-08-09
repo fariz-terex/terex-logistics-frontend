@@ -1,0 +1,33 @@
+From dd7fe11a0fcb138882dcf3db9589b98a7909bed0 Mon Sep 17 00:00:00 2001
+From: TEREX Dev <dev@terex.local>
+Date: Sun, 9 Aug 2026 12:26:22 +0000
+Subject: [PATCH] Grant SPV access to the Device Location report
+
+---
+ src/App.jsx | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/App.jsx b/src/App.jsx
+index e9b3bf5..b00b1ca 100644
+--- a/src/App.jsx
++++ b/src/App.jsx
+@@ -187,6 +187,7 @@ const NAV_ACCESS = {
+   movement: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV],
+   receipts: [ROLES.MANAGER, ROLES.LOGISTICS],
+   reports: [ROLES.MANAGER, ROLES.LOGISTICS],
++  reportsDeviceLocation: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV],
+   master: [ROLES.MANAGER],
+   users: [ROLES.MANAGER],
+   settings: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV, ROLES.TECH],
+@@ -366,7 +367,7 @@ function hasAccess(key, role) {
+   const map = {
+     delivery: NAV_ACCESS.delivery, returnFaulty: NAV_ACCESS.returnFaulty, reconciliation: NAV_ACCESS.reconciliation,
+     stock: NAV_ACCESS.stock, movement: NAV_ACCESS.movement,
+-    reports: NAV_ACCESS.reports, reportsFaulty: NAV_ACCESS.reports, reportsRecon: NAV_ACCESS.reports, reportsDeviceLocation: NAV_ACCESS.reports,
++    reports: NAV_ACCESS.reports, reportsFaulty: NAV_ACCESS.reports, reportsRecon: NAV_ACCESS.reports, reportsDeviceLocation: NAV_ACCESS.reportsDeviceLocation,
+     masterMaterial: NAV_ACCESS.master, masterSite: NAV_ACCESS.master, masterHomebase: NAV_ACCESS.master,
+     masterArea: NAV_ACCESS.master, masterCustomer: NAV_ACCESS.master,
+     users: NAV_ACCESS.users, dashboard: NAV_ACCESS.dashboard, settings: NAV_ACCESS.settings,
+-- 
+2.43.0
+

@@ -187,6 +187,7 @@ const NAV_ACCESS = {
   movement: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV],
   receipts: [ROLES.MANAGER, ROLES.LOGISTICS],
   reports: [ROLES.MANAGER, ROLES.LOGISTICS],
+  reportsDeviceLocation: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV],
   master: [ROLES.MANAGER],
   users: [ROLES.MANAGER],
   settings: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV, ROLES.TECH],
@@ -366,7 +367,7 @@ function hasAccess(key, role) {
   const map = {
     delivery: NAV_ACCESS.delivery, returnFaulty: NAV_ACCESS.returnFaulty, reconciliation: NAV_ACCESS.reconciliation,
     stock: NAV_ACCESS.stock, movement: NAV_ACCESS.movement,
-    reports: NAV_ACCESS.reports, reportsFaulty: NAV_ACCESS.reports, reportsRecon: NAV_ACCESS.reports, reportsDeviceLocation: NAV_ACCESS.reports,
+    reports: NAV_ACCESS.reports, reportsFaulty: NAV_ACCESS.reports, reportsRecon: NAV_ACCESS.reports, reportsDeviceLocation: NAV_ACCESS.reportsDeviceLocation,
     masterMaterial: NAV_ACCESS.master, masterSite: NAV_ACCESS.master, masterHomebase: NAV_ACCESS.master,
     masterArea: NAV_ACCESS.master, masterCustomer: NAV_ACCESS.master,
     users: NAV_ACCESS.users, dashboard: NAV_ACCESS.dashboard, settings: NAV_ACCESS.settings,
