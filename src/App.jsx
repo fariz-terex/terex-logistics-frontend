@@ -345,6 +345,7 @@ const NAV_TREE = [
       { key: "reports", label: "Delivery Report" },
       { key: "reportsFaulty", label: "Faulty Return Report" },
       { key: "reportsRecon", label: "Reconciliation Report" },
+      { key: "reportsDeviceLocation", label: "Lokasi Perangkat" },
     ],
   },
   {
@@ -365,7 +366,7 @@ function hasAccess(key, role) {
   const map = {
     delivery: NAV_ACCESS.delivery, returnFaulty: NAV_ACCESS.returnFaulty, reconciliation: NAV_ACCESS.reconciliation,
     stock: NAV_ACCESS.stock, movement: NAV_ACCESS.movement,
-    reports: NAV_ACCESS.reports, reportsFaulty: NAV_ACCESS.reports, reportsRecon: NAV_ACCESS.reports,
+    reports: NAV_ACCESS.reports, reportsFaulty: NAV_ACCESS.reports, reportsRecon: NAV_ACCESS.reports, reportsDeviceLocation: NAV_ACCESS.reports,
     masterMaterial: NAV_ACCESS.master, masterSite: NAV_ACCESS.master, masterHomebase: NAV_ACCESS.master,
     masterArea: NAV_ACCESS.master, masterCustomer: NAV_ACCESS.master,
     users: NAV_ACCESS.users, dashboard: NAV_ACCESS.dashboard, settings: NAV_ACCESS.settings,
@@ -1392,7 +1393,20 @@ function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMateri
   );
 }
 
-function MaterialSerialDetail({ material, api, onBack, highlightSerial, highlightToken }) {
+/* Turns a raw reference id (e.g. "DR-260808-005") into a human-readable
+   location when it points at a delivery already loaded client-side — "Long
+   Payau · Long Pada (DR-260808-005)" is a lot more useful at a glance than
+   the bare code, especially for "where is this unit right now" questions. */
+function describeRef(ref, deliveries) {
+  if (!ref) return "-";
+  if (ref.startsWith("DR-") && deliveries) {
+    const d = deliveries.find((x) => x.id === ref);
+    if (d) return `${d.homebase}${d.site ? ` · ${d.site}` : ""} (${ref})`;
+  }
+  return ref;
+}
+
+function MaterialSerialDetail({ material, api, onBack, highlightSerial, highlightToken, deliveries }) {
   const [status, setStatus] = useState("All");
   const [serials, setSerials] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1472,7 +1486,7 @@ function MaterialSerialDetail({ material, api, onBack, highlightSerial, highligh
                 >
                   <td className="px-5 py-3 font-medium text-gray-800">{s.sn}</td>
                   <td className="px-5 py-3"><StatusBadge status={s.status} /></td>
-                  <td className="px-5 py-3 text-gray-500 text-xs">{s.current_ref || s.received_ref || "-"}</td>
+                  <td className="px-5 py-3 text-gray-500 text-xs">{s.current_ref ? describeRef(s.current_ref, deliveries) : (s.received_ref || "-")}</td>
                 </tr>
               ))
             )}
@@ -1484,7 +1498,7 @@ function MaterialSerialDetail({ material, api, onBack, highlightSerial, highligh
   );
 }
 
-function StockMovement({ movements, filter, setFilter }) {
+function StockMovement({ movements, filter, setFilter, deliveries }) {
   const filtered = filter ? movements.filter((m) => m.material === filter) : movements;
   const [expandedId, setExpandedId] = useState(null);
 
@@ -1516,7 +1530,7 @@ function StockMovement({ movements, filter, setFilter }) {
                     <td className="px-5 py-3 text-gray-500">{m.date}</td>
                     <td className="px-5 py-3 text-gray-700">{m.material}</td>
                     <td className={`px-5 py-3 font-semibold ${m.qty > 0 ? "text-emerald-700" : "text-red-600"}`}>{m.qty > 0 ? `+${m.qty}` : m.qty}</td>
-                    <td className="px-5 py-3 text-gray-500">{m.ref}</td>
+                    <td className="px-5 py-3 text-gray-500 text-xs">{m.type === "Delivery" ? describeRef(m.ref, deliveries) : m.ref}</td>
                     <td className="px-5 py-3 font-medium text-gray-800">{m.remaining}</td>
                     <td className="px-5 py-3">
                       {hasSerials && (
@@ -2742,7 +2756,7 @@ function MasterCrudTable({ title, subtitle, entityLabel, fields, items, idField 
 /* Generic, data-driven Reports page: filters operate on the raw data array
    (not pre-rendered rows) so date range, status, and search all actually work
    against real fields instead of decorating a static table. */
-function ReportsPage({ title, subtitle, data, columns, statusOf, dateOf, searchOf }) {
+function ReportsPage({ title, subtitle, data, columns, statusOf, dateOf, searchOf, statusLabel = "Status" }) {
   const [search, setSearch] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -2783,7 +2797,7 @@ function ReportsPage({ title, subtitle, data, columns, statusOf, dateOf, searchO
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari ID, nama, material..." className="bg-transparent text-sm outline-none w-full" />
         </div>
         <select value={status} onChange={(e) => setStatus(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-600 outline-none">
-          {statusOptions.map((s) => <option key={s} value={s}>{s === "All" ? "Semua Status" : s}</option>)}
+          {statusOptions.map((s) => <option key={s} value={s}>{s === "All" ? `Semua ${statusLabel}` : s}</option>)}
         </select>
         <div className="flex items-center gap-2">
           <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-500 outline-none" />
@@ -3178,7 +3192,9 @@ export default function App() {
         setSnSearchResults(rows.map((r) => {
           let sub, onSelect;
           if (r.current_ref?.startsWith("DR-")) {
-            sub = `${r.material} · ${r.status} · ${r.current_ref}`;
+            const d = deliveries.find((x) => x.id === r.current_ref);
+            const location = d ? `${d.homebase}${d.site ? ` · ${d.site}` : ""}` : r.current_ref;
+            sub = `${r.material} · ${r.status} · ${location}`;
             onSelect = () => gotoDetail("delivery", "delivery", r.current_ref);
           } else if (r.current_ref?.startsWith("RF-")) {
             sub = `${r.material} · ${r.status} · ${r.current_ref}`;
@@ -3196,6 +3212,27 @@ export default function App() {
   }, [searchQuery]);
 
   const searchResults = useMemo(() => [...snSearchResults, ...localSearchResults].slice(0, 8), [snSearchResults, localSearchResults]);
+
+  // Where is each delivered unit right now? Flatten every Delivered
+  // delivery's items into one row per Serial Number (or per material line
+  // for non-serialized items), carrying the destination Homebase/Site along
+  // — this is exactly the data already tracked via delivery.items[].serials,
+  // just reshaped for a location-first view instead of a request-first one.
+  const deviceLocations = useMemo(() => {
+    const rows = [];
+    deliveries.filter((d) => d.status === "Delivered").forEach((d) => {
+      d.items.forEach((item) => {
+        if (item.serials && item.serials.length > 0) {
+          item.serials.forEach((sn) => {
+            rows.push({ sn, material: item.material, qty: 1, homebase: d.homebase, site: d.site, requester: d.requester, deliveryId: d.id, date: d.date });
+          });
+        } else {
+          rows.push({ sn: "-", material: item.material, qty: item.qty, homebase: d.homebase, site: d.site, requester: d.requester, deliveryId: d.id, date: d.date });
+        }
+      });
+    });
+    return rows;
+  }, [deliveries]);
 
   const notifications = useMemo(() => {
     const list = [];
@@ -3542,8 +3579,8 @@ export default function App() {
     />;
   }
   else if (page === "stock") content = <WarehouseStock materials={materials} setPage={goto} setMovementFilter={setMovementFilter} setSerialMaterial={setSerialMaterial} onSubmitReceipt={createReceipt} showToast={showToast} clearSerialHighlight={() => setHighlightSerial("")} />;
-  else if (page === "movement") content = <StockMovement movements={movements} filter={movementFilter} setFilter={setMovementFilter} />;
-  else if (page === "serialDetail") content = <MaterialSerialDetail material={serialMaterial} api={api} onBack={() => goto("stock")} highlightSerial={highlightSerial} highlightToken={highlightToken} />;
+  else if (page === "movement") content = <StockMovement movements={movements} filter={movementFilter} setFilter={setMovementFilter} deliveries={deliveries} />;
+  else if (page === "serialDetail") content = <MaterialSerialDetail material={serialMaterial} api={api} onBack={() => goto("stock")} highlightSerial={highlightSerial} highlightToken={highlightToken} deliveries={deliveries} />;
   else if (page === "reports") content = <ReportsPage
     title="Delivery Report" subtitle="Laporan seluruh pengajuan delivery"
     data={deliveries}
@@ -3587,6 +3624,24 @@ export default function App() {
       { label: "Discrepancy", render: (r) => { const t = r.items.reduce((s, i) => s + (i.systemQty - i.actualQty), 0); return t !== 0 ? `-${t}` : "0"; }, exportValue: (r) => { const t = r.items.reduce((s, i) => s + (i.systemQty - i.actualQty), 0); return t !== 0 ? `-${t}` : "0"; } },
       { label: "Status", render: (r) => <StatusBadge status={r.status} />, exportValue: (r) => r.status },
       { label: "Tanggal", render: (r) => r.date, exportValue: (r) => r.date },
+    ]}
+  />;
+  else if (page === "reportsDeviceLocation") content = <ReportsPage
+    title="Lokasi Perangkat" subtitle="Posisi perangkat yang sudah Delivered, berdasarkan Homebase/Site tujuan pengiriman"
+    data={deviceLocations}
+    statusOf={(r) => r.homebase}
+    statusLabel="Homebase"
+    dateOf={(r) => r.date}
+    searchOf={(r) => `${r.sn} ${r.material} ${r.homebase} ${r.site} ${r.requester} ${r.deliveryId}`}
+    columns={[
+      { label: "Serial Number", render: (r) => r.sn, exportValue: (r) => r.sn },
+      { label: "Material", render: (r) => r.material, exportValue: (r) => r.material },
+      { label: "Qty", render: (r) => r.qty, exportValue: (r) => r.qty },
+      { label: "Homebase", render: (r) => r.homebase, exportValue: (r) => r.homebase },
+      { label: "Site", render: (r) => r.site || "-", exportValue: (r) => r.site || "-" },
+      { label: "Diminta oleh", render: (r) => r.requester, exportValue: (r) => r.requester },
+      { label: "No. Delivery", render: (r) => r.deliveryId, exportValue: (r) => r.deliveryId },
+      { label: "Tgl Dikirim", render: (r) => r.date, exportValue: (r) => r.date },
     ]}
   />;
   else if (page === "masterMaterial") content = <MasterMaterial materials={materials} onCreate={createMaterial} onToggle={toggleMaterial} onImport={importMaterialsToServer} showToast={showToast} />;
