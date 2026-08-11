@@ -1336,55 +1336,71 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, 
         </Card>
       )}
 
-      {(delivery.docOverall || delivery.docAfterPacking || delivery.resiNumber || delivery.resiPhoto || delivery.deliveredPhoto || delivery.receivedBy || (delivery.serialPhotos && Object.keys(delivery.serialPhotos).length > 0)) && (
+      {["Shipped", "Delivered"].includes(delivery.status) && (
         <Card className="p-5 space-y-4">
           <SectionTitle title="Dokumentasi & Resi" />
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            {delivery.docOverall && (
-              <div>
-                <PhotoThumb src={delivery.docOverall} alt="Foto keseluruhan" className="w-full h-24 object-cover rounded-lg border border-gray-100" onOpen={setLightboxSrc} />
-                <div className="text-xs text-gray-400 mt-1">Foto keseluruhan</div>
+
+          <div>
+            <div className="text-xs font-medium text-gray-500 mb-2">Dokumentasi Pengiriman</div>
+            {(delivery.docOverall || delivery.docAfterPacking) ? (
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                {delivery.docOverall && (
+                  <div>
+                    <PhotoThumb src={delivery.docOverall} alt="Foto keseluruhan" className="w-full h-24 object-cover rounded-lg border border-gray-100" onOpen={setLightboxSrc} />
+                    <div className="text-xs text-gray-400 mt-1">Foto keseluruhan</div>
+                  </div>
+                )}
+                {delivery.docAfterPacking && (
+                  <div>
+                    <PhotoThumb src={delivery.docAfterPacking} alt="Foto setelah packing" className="w-full h-24 object-cover rounded-lg border border-gray-100" onOpen={setLightboxSrc} />
+                    <div className="text-xs text-gray-400 mt-1">Setelah packing</div>
+                  </div>
+                )}
               </div>
+            ) : (
+              <div className="text-xs text-gray-400 italic bg-gray-50 rounded-lg px-3 py-2">Tidak tersedia — dikirim sebelum fitur dokumentasi pengiriman aktif</div>
             )}
-            {delivery.docAfterPacking && (
-              <div>
-                <PhotoThumb src={delivery.docAfterPacking} alt="Foto setelah packing" className="w-full h-24 object-cover rounded-lg border border-gray-100" onOpen={setLightboxSrc} />
-                <div className="text-xs text-gray-400 mt-1">Setelah packing</div>
+          </div>
+
+          {delivery.items.some((i) => i.serials?.length > 0) && (
+            <div>
+              <div className="text-xs font-medium text-gray-500 mb-2">Foto per Serial Number</div>
+              {delivery.serialPhotos && Object.keys(delivery.serialPhotos).length > 0 ? (
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  {delivery.items.filter((i) => i.serials?.length > 0).flatMap((item) =>
+                    item.serials.filter((sn) => delivery.serialPhotos[sn]).map((sn) => (
+                      <div key={sn}>
+                        <PhotoThumb src={delivery.serialPhotos[sn]} alt={sn} className="w-full h-24 object-cover rounded-lg border border-gray-100" onOpen={setLightboxSrc} />
+                        <div className="text-xs text-gray-400 mt-1 truncate">{sn}</div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              ) : (
+                <div className="text-xs text-gray-400 italic bg-gray-50 rounded-lg px-3 py-2">Tidak tersedia — dikirim sebelum fitur dokumentasi pengiriman aktif</div>
+              )}
+            </div>
+          )}
+
+          <div className="pt-2 border-t border-gray-50">
+            <div className="text-sm text-gray-600">Resi: <span className="font-medium text-gray-800">{delivery.resiNumber || "Belum tersedia (optional)"}</span></div>
+            {delivery.resiPhoto && (
+              <div className="w-32 mt-2">
+                <PhotoThumb src={delivery.resiPhoto} alt="Foto resi" className="w-full h-24 object-cover rounded-lg border border-gray-100" onOpen={setLightboxSrc} />
+                <div className="text-xs text-gray-400 mt-1">Foto resi</div>
               </div>
             )}
           </div>
 
-          {delivery.serialPhotos && Object.keys(delivery.serialPhotos).length > 0 && (
-            <div>
-              <div className="text-xs font-medium text-gray-500 mb-2">Foto per Serial Number</div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                {delivery.items.filter((i) => i.serials?.length > 0).flatMap((item) =>
-                  item.serials.filter((sn) => delivery.serialPhotos[sn]).map((sn) => (
-                    <div key={sn}>
-                      <PhotoThumb src={delivery.serialPhotos[sn]} alt={sn} className="w-full h-24 object-cover rounded-lg border border-gray-100" onOpen={setLightboxSrc} />
-                      <div className="text-xs text-gray-400 mt-1 truncate">{sn}</div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          )}
-
-          <div className="text-sm text-gray-600">Resi: <span className="font-medium text-gray-800">{delivery.resiNumber || "Belum tersedia (optional)"}</span></div>
-          {delivery.resiPhoto && (
-            <div className="w-32">
-              <PhotoThumb src={delivery.resiPhoto} alt="Foto resi" className="w-full h-24 object-cover rounded-lg border border-gray-100" onOpen={setLightboxSrc} />
-              <div className="text-xs text-gray-400 mt-1">Foto resi</div>
-            </div>
-          )}
-
-          {(delivery.deliveredPhoto || delivery.receivedBy) && (
+          {delivery.status === "Delivered" && (
             <div className="pt-2 border-t border-gray-50 space-y-2">
               <div className="text-xs font-medium text-gray-500">Bukti Penerimaan</div>
-              {delivery.deliveredPhoto && (
+              {delivery.deliveredPhoto ? (
                 <div className="w-32">
                   <PhotoThumb src={delivery.deliveredPhoto} alt="Bukti diterima" className="w-full h-24 object-cover rounded-lg border border-gray-100" onOpen={setLightboxSrc} />
                 </div>
+              ) : (
+                <div className="text-xs text-gray-400 italic bg-gray-50 rounded-lg px-3 py-2">Tidak tersedia — diterima sebelum fitur bukti penerimaan aktif</div>
               )}
               {delivery.receivedBy && <div className="text-sm text-gray-600">Diterima oleh: <span className="font-medium text-gray-800">{delivery.receivedBy}</span></div>}
             </div>
