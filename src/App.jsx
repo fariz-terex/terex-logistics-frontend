@@ -2001,28 +2001,42 @@ function findSNConflict(sn, { returns = [], reconciliations = [], excludeId = nu
 
 function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconciliations, initialData, excludeId, revisionNote }) {
   const isEdit = !!initialData;
-  const [material, setMaterial] = useState(initialData?.material || "");
-  const [qty, setQty] = useState(initialData?.qty || 1);
-  const [serials, setSerials] = useState(initialData?.serials?.length ? initialData.serials.map((s) => ({ ...s })) : [{ sn: "", photo: "" }]);
+  const [items, setItems] = useState(
+    initialData?.items?.length
+      ? initialData.items.map((it) => ({ material: it.material, serials: it.serials.map((s) => ({ ...s })) }))
+      : [{ material: "", serials: [{ sn: "", photo: "" }] }]
+  );
   const [docs, setDocs] = useState(initialData?.docs ? { ...initialData.docs } : { beforePacking: "", afterPacking: "", weighing: "" });
 
-  const mat = materials.find((m) => m.name === material);
-  const addSN = () => setSerials([...serials, { sn: "", photo: "" }]);
-  const updateSN = (i, field, val) => setSerials(serials.map((s, idx) => (idx === i ? { ...s, [field]: val } : s)));
-  const removeSN = (i) => setSerials(serials.filter((_, idx) => idx !== i));
+  const addItem = () => setItems([...items, { material: "", serials: [{ sn: "", photo: "" }] }]);
+  const removeItem = (itemIdx) => setItems(items.filter((_, i) => i !== itemIdx));
+  const updateItem = (itemIdx, field, val) => setItems(items.map((it, i) => (i === itemIdx ? { ...it, [field]: val } : it)));
+  const addSN = (itemIdx) => setItems(items.map((it, i) => (i === itemIdx ? { ...it, serials: [...it.serials, { sn: "", photo: "" }] } : it)));
+  const updateSN = (itemIdx, snIdx, field, val) => setItems(items.map((it, i) => (i === itemIdx ? { ...it, serials: it.serials.map((s, j) => (j === snIdx ? { ...s, [field]: val } : s)) } : it)));
+  const removeSN = (itemIdx, snIdx) => setItems(items.map((it, i) => (i === itemIdx ? { ...it, serials: it.serials.filter((_, j) => j !== snIdx) } : it)));
 
-  const docsCompleted = Object.values(docs).filter(Boolean).length + serials.filter((s) => s.photo).length;
-  const docsTotal = 3 + serials.length;
-  const allSNFilled = serials.length > 0 && serials.every((s) => s.sn.trim() && s.photo);
-  const hasDuplicateSN = new Set(serials.map((s) => s.sn.trim()).filter(Boolean)).size !== serials.map((s) => s.sn.trim()).filter(Boolean).length;
-  const conflicts = serials.map((s) => ({ sn: s.sn, conflict: findSNConflict(s.sn, { returns, reconciliations, excludeId }) })).filter((c) => c.conflict);
-  const valid = material && qty > 0 && allSNFilled && !hasDuplicateSN && conflicts.length === 0 && docs.beforePacking && docs.afterPacking && docs.weighing;
+  const allSerials = items.flatMap((it) => it.serials);
+  const docsCompleted = Object.values(docs).filter(Boolean).length + allSerials.filter((s) => s.photo).length;
+  const docsTotal = 3 + allSerials.length;
+  const allSNFilled = items.every((it) => it.material && it.serials.length > 0 && it.serials.every((s) => s.sn.trim() && s.photo));
+  const allSNTrimmed = allSerials.map((s) => s.sn.trim()).filter(Boolean);
+  const hasDuplicateSN = new Set(allSNTrimmed).size !== allSNTrimmed.length;
+  const conflicts = allSerials.map((s) => ({ sn: s.sn, conflict: findSNConflict(s.sn, { returns, reconciliations, excludeId }) })).filter((c) => c.conflict);
+  const valid = items.length > 0 && items.every((it) => it.material) && allSNFilled && !hasDuplicateSN && conflicts.length === 0 && docs.beforePacking && docs.afterPacking && docs.weighing;
+
+  // qty is always derived from how many SN rows are filled in — a material
+  // can't be submitted with a qty that doesn't match its Serial Numbers,
+  // so there's no separate qty field to keep in sync by hand.
+  const buildSubmission = () => ({
+    items: items.map((it) => ({ material: it.material, qty: it.serials.length, serials: it.serials })),
+    docs,
+  });
 
   return (
     <div className="p-4 sm:p-8 max-w-2xl mx-auto space-y-6">
       <SectionTitle
         title={isEdit ? `Perbaiki Return Material Faulty — ${excludeId}` : "Buat Return Material Faulty"}
-        subtitle={isEdit ? "Perbarui data sesuai catatan revisi, lalu kirim ulang ke Logistics" : "Input Serial Number secara manual untuk setiap unit"}
+        subtitle={isEdit ? "Perbarui data sesuai catatan revisi, lalu kirim ulang ke Logistics" : "Input Serial Number secara manual untuk setiap unit — bisa lebih dari satu material"}
       />
 
       {isEdit && revisionNote && (
@@ -2032,41 +2046,58 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
         </Card>
       )}
 
-      <Card className="p-6 space-y-4">
-        <div>
-          <label className="text-sm font-medium text-gray-700">Material <span className="text-red-500">*</span></label>
-          <select value={material} onChange={(e) => setMaterial(e.target.value)} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600">
-            <option value="">Pilih material...</option>
-            {materials.map((m) => <option key={m.id} value={m.name}>{m.name}</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="text-sm font-medium text-gray-700">Qty <span className="text-red-500">*</span></label>
-          <input type="number" min={1} value={qty} onChange={(e) => setQty(Number(e.target.value))} className="mt-1.5 w-32 border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
-        </div>
-      </Card>
+      <div className="flex items-center justify-between">
+        <div className="text-sm font-semibold text-gray-800">Material yang Dikembalikan</div>
+        <button onClick={addItem} className="text-xs text-emerald-800 font-medium flex items-center gap-1"><Plus size={14} /> Tambah Material</button>
+      </div>
 
-      <Card className="p-6 space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="text-sm font-semibold text-gray-800">Serial Number (Input Manual)</div>
-          <button onClick={addSN} className="text-xs text-emerald-800 font-medium flex items-center gap-1"><Plus size={14} /> Add SN</button>
-        </div>
-        {serials.map((s, i) => {
-          const conflict = findSNConflict(s.sn, { returns, reconciliations, excludeId });
-          return (
-            <div key={i} className="space-y-1">
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-gray-400 w-5">{i + 1}.</span>
-                <input value={s.sn} onChange={(e) => updateSN(i, "sn", e.target.value)} placeholder="Masukkan Serial Number" className={`flex-1 border rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600 ${conflict ? "border-red-300" : "border-gray-200"}`} />
-                <PhotoUpload compact value={s.photo} onChange={(val) => updateSN(i, "photo", val)} />
-                {serials.length > 1 && <button onClick={() => removeSN(i)} className="text-gray-300 hover:text-red-500"><X size={16} /></button>}
+      {items.map((item, itemIdx) => (
+        <Card key={itemIdx} className="p-6 space-y-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="text-sm font-medium text-gray-700">Material <span className="text-red-500">*</span></label>
+                <select value={item.material} onChange={(e) => updateItem(itemIdx, "material", e.target.value)} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600">
+                  <option value="">Pilih material...</option>
+                  {materials.map((m) => <option key={m.id} value={m.name}>{m.name}</option>)}
+                </select>
               </div>
-              {conflict && <div className="text-xs text-red-600 pl-7">Serial Number ini sedang digunakan pada {conflict}.</div>}
+              <div>
+                <label className="text-sm font-medium text-gray-700">Qty</label>
+                <div className="mt-1.5 w-full border border-gray-100 bg-gray-50 rounded-lg px-3 py-2.5 text-sm text-gray-600">
+                  {item.serials.length} <span className="text-xs text-gray-400">(mengikuti jumlah SN di bawah)</span>
+                </div>
+              </div>
             </div>
-          );
-        })}
-        {hasDuplicateSN && <div className="text-xs text-red-600">Terdapat Serial Number duplikat dalam transaksi ini.</div>}
-      </Card>
+            {items.length > 1 && (
+              <button onClick={() => removeItem(itemIdx)} className="text-gray-300 hover:text-red-500 mt-6" title="Hapus material ini"><X size={18} /></button>
+            )}
+          </div>
+
+          <div className="space-y-3 pt-3 border-t border-gray-50">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-semibold text-gray-800">Serial Number (Input Manual)</div>
+              <button onClick={() => addSN(itemIdx)} className="text-xs text-emerald-800 font-medium flex items-center gap-1"><Plus size={14} /> Add SN</button>
+            </div>
+            {item.serials.map((s, snIdx) => {
+              const conflict = findSNConflict(s.sn, { returns, reconciliations, excludeId });
+              return (
+                <div key={snIdx} className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-400 w-5">{snIdx + 1}.</span>
+                    <input value={s.sn} onChange={(e) => updateSN(itemIdx, snIdx, "sn", e.target.value)} placeholder="Masukkan Serial Number" className={`flex-1 border rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600 ${conflict ? "border-red-300" : "border-gray-200"}`} />
+                    <PhotoUpload compact value={s.photo} onChange={(val) => updateSN(itemIdx, snIdx, "photo", val)} />
+                    {item.serials.length > 1 && <button onClick={() => removeSN(itemIdx, snIdx)} className="text-gray-300 hover:text-red-500"><X size={16} /></button>}
+                  </div>
+                  {conflict && <div className="text-xs text-red-600 pl-7">Serial Number ini sedang digunakan pada {conflict}.</div>}
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      ))}
+
+      {hasDuplicateSN && <div className="text-xs text-red-600 -mt-2">Terdapat Serial Number duplikat dalam transaksi ini.</div>}
 
       <Card className="p-6 space-y-3">
         <div className="flex items-center justify-between mb-1">
@@ -2084,7 +2115,7 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
 
       <div className="flex justify-between">
         <GhostButton onClick={onCancel}>Batal</GhostButton>
-        <PrimaryButton disabled={!valid} onClick={() => onSubmit({ material, qty, serials, docs })}>
+        <PrimaryButton disabled={!valid} onClick={() => onSubmit(buildSubmission())}>
           <Check size={16} /> {isEdit ? "Kirim Ulang ke Logistics" : "Submit Return"}
         </PrimaryButton>
       </div>
@@ -3887,7 +3918,7 @@ export default function App() {
       materials={materials}
       returns={returns}
       reconciliations={reconciliations}
-      initialData={{ material: r.items[0].material, qty: r.items[0].qty, serials: r.items[0].serials, docs: r.docs }}
+      initialData={{ items: r.items, docs: r.docs }}
       excludeId={r.id}
       revisionNote={r.revisionNote}
     />;
