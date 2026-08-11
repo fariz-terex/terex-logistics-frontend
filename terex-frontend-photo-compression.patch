@@ -1,0 +1,103 @@
+From 593c35d794b7ec5b7d797f76ceeb15f39d3df9a3 Mon Sep 17 00:00:00 2001
+From: TEREX Dev <dev@terex.local>
+Date: Tue, 11 Aug 2026 05:06:46 +0000
+Subject: [PATCH] Compress photos client-side before upload to prevent
+ oversized-payload errors
+
+---
+ src/App.jsx | 57 +++++++++++++++++++++++++++++++++++++++++++++--------
+ 1 file changed, 49 insertions(+), 8 deletions(-)
+
+diff --git a/src/App.jsx b/src/App.jsx
+index 9feaf10..241e84a 100644
+--- a/src/App.jsx
++++ b/src/App.jsx
+@@ -1773,22 +1773,63 @@ function DocCheck({ label, checked, onToggle }) {
+ 
+ /* Real photo upload with thumbnail preview - stores a data URL so the checklist
+    reflects an actual captured/selected image rather than a plain boolean flag. */
++// Phone camera photos routinely come in at several MB each — several of
++// those stacked in one request (SN photos + overall + packing) is exactly
++// what tipped the earlier "Internal server error" over the body size limit.
++// Resizing to a sane max dimension and re-encoding as JPEG keeps photos
++// perfectly legible for documentation purposes while cutting them down to
++// a few hundred KB, so this is applied before the data URL ever leaves the
++// browser — not just a server-side limit increase.
++function compressImage(file, maxDimension = 1600, quality = 0.75) {
++  return new Promise((resolve, reject) => {
++    const img = new Image();
++    const objectUrl = URL.createObjectURL(file);
++    img.onload = () => {
++      URL.revokeObjectURL(objectUrl);
++      let { width, height } = img;
++      if (width > maxDimension || height > maxDimension) {
++        if (width >= height) { height = Math.round((height / width) * maxDimension); width = maxDimension; }
++        else { width = Math.round((width / height) * maxDimension); height = maxDimension; }
++      }
++      const canvas = document.createElement("canvas");
++      canvas.width = width; canvas.height = height;
++      const ctx = canvas.getContext("2d");
++      ctx.drawImage(img, 0, 0, width, height);
++      resolve(canvas.toDataURL("image/jpeg", quality));
++    };
++    img.onerror = () => { URL.revokeObjectURL(objectUrl); reject(new Error("Gagal memproses gambar")); };
++    img.src = objectUrl;
++  });
++}
++
+ function PhotoUpload({ label, value, onChange, compact }) {
+   const inputRef = React.useRef(null);
+-  const handleFile = (e) => {
++  const [compressing, setCompressing] = useState(false);
++  const handleFile = async (e) => {
+     const file = e.target.files?.[0];
+     if (!file) return;
+-    const reader = new FileReader();
+-    reader.onload = () => onChange(reader.result);
+-    reader.readAsDataURL(file);
++    setCompressing(true);
++    try {
++      const compressed = await compressImage(file);
++      onChange(compressed);
++    } catch {
++      // Fallback: if compression fails for any reason, still let the photo
++      // through uncompressed rather than blocking the user entirely.
++      const reader = new FileReader();
++      reader.onload = () => onChange(reader.result);
++      reader.readAsDataURL(file);
++    } finally {
++      setCompressing(false);
++      e.target.value = "";
++    }
+   };
+   if (compact) {
+     return (
+       <>
+         <input ref={inputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFile} />
+-        <button onClick={() => inputRef.current?.click()} className={`px-3 py-2 rounded-lg text-xs font-medium border flex items-center gap-1.5 shrink-0 ${value ? "border-emerald-300 bg-emerald-50 text-emerald-700" : "border-gray-200 text-gray-400"}`}>
++        <button onClick={() => inputRef.current?.click()} disabled={compressing} className={`px-3 py-2 rounded-lg text-xs font-medium border flex items-center gap-1.5 shrink-0 ${value ? "border-emerald-300 bg-emerald-50 text-emerald-700" : "border-gray-200 text-gray-400"}`}>
+           {value ? <img src={value} alt="" className="w-4 h-4 rounded object-cover" /> : <Camera size={13} />}
+-          {value ? "Foto ✓" : "Upload Foto"}
++          {compressing ? "Memproses..." : value ? "Foto ✓" : "Upload Foto"}
+         </button>
+       </>
+     );
+@@ -1796,13 +1837,13 @@ function PhotoUpload({ label, value, onChange, compact }) {
+   return (
+     <div>
+       <input ref={inputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFile} />
+-      <button onClick={() => inputRef.current?.click()} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl border text-sm text-left transition-colors ${value ? "border-emerald-200 bg-emerald-50/50" : "border-gray-200"}`}>
++      <button onClick={() => inputRef.current?.click()} disabled={compressing} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl border text-sm text-left transition-colors ${value ? "border-emerald-200 bg-emerald-50/50" : "border-gray-200"}`}>
+         {value ? (
+           <img src={value} alt="" className="w-9 h-9 rounded-lg object-cover shrink-0" />
+         ) : (
+           <div className="w-9 h-9 rounded-lg bg-gray-100 flex items-center justify-center shrink-0"><Camera size={16} className="text-gray-400" /></div>
+         )}
+-        <span className={value ? "text-gray-800 font-medium" : "text-gray-500"}>{label}</span>
++        <span className={value ? "text-gray-800 font-medium" : "text-gray-500"}>{compressing ? "Memproses foto..." : label}</span>
+         <span className="ml-auto text-xs text-gray-400">{value ? "Ganti foto" : "Ambil / pilih foto"}</span>
+       </button>
+     </div>
+-- 
+2.43.0
+
