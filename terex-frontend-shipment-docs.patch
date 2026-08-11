@@ -1,0 +1,233 @@
+From 7740e73e2389006339197cef42b611afb29071e0 Mon Sep 17 00:00:00 2001
+From: TEREX Dev <dev@terex.local>
+Date: Tue, 11 Aug 2026 04:21:38 +0000
+Subject: [PATCH] Delivery: require shipment documentation before Shipped, add
+ optional resi upload
+
+---
+ src/App.jsx | 152 +++++++++++++++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 144 insertions(+), 8 deletions(-)
+
+diff --git a/src/App.jsx b/src/App.jsx
+index 9941482..9feaf10 100644
+--- a/src/App.jsx
++++ b/src/App.jsx
+@@ -1005,13 +1005,15 @@ function DeliveryCreate({ onSubmit, onCancel, materials, sites, homebases }) {
+   );
+ }
+ 
+-function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, onAdvance, role, materials, api }) {
++function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, onShip, onAddResi, onAdvance, role, materials, api }) {
+   // Stage 1 — Manager reviews qty only, no SN involved.
+   const canApprove = role === ROLES.MANAGER && delivery.status === "Waiting Logistics Approval";
+   // Stage 2 — Logistics Staff (or Manager) picks the actual units to fulfill it.
+   const canAssignStock = (role === ROLES.LOGISTICS || role === ROLES.MANAGER) && delivery.status === "Waiting Stock Assignment";
+-  const canAdvance = (role === ROLES.LOGISTICS || role === ROLES.MANAGER) && ["Preparing", "Shipped"].includes(delivery.status);
+-  const nextStatusMap = { Preparing: "Shipped", Shipped: "Delivered" };
++  // Stage 3 — before Shipped, Logistics Staff documents the shipment.
++  const canShip = (role === ROLES.LOGISTICS || role === ROLES.MANAGER) && delivery.status === "Preparing";
++  const canAddResi = (role === ROLES.LOGISTICS || role === ROLES.MANAGER) && !delivery.resiNumber && ["Shipped", "Delivered"].includes(delivery.status);
++  const canAdvance = (role === ROLES.LOGISTICS || role === ROLES.MANAGER) && delivery.status === "Shipped";
+ 
+   const [approving, setApproving] = useState(false);
+   const handleApprove = async () => {
+@@ -1073,6 +1075,34 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock,
+     }
+   };
+ 
++  // ---- Stage 3: shipment documentation ----
++  const allShipmentSerials = delivery.items.flatMap((i) => i.serials || []);
++  const [docOverall, setDocOverall] = useState("");
++  const [docAfterPacking, setDocAfterPacking] = useState("");
++  const [serialPhotos, setSerialPhotos] = useState({}); // { sn: dataUrl }
++  const [shipping, setShipping] = useState(false);
++  const [confirmShip, setConfirmShip] = useState(false);
++  const [shipError, setShipError] = useState("");
++
++  const docsCompleted = (docOverall ? 1 : 0) + (docAfterPacking ? 1 : 0) + allShipmentSerials.filter((sn) => serialPhotos[sn]).length;
++  const docsTotal = 2 + allShipmentSerials.length;
++  const shipValid = docOverall && docAfterPacking && allShipmentSerials.every((sn) => serialPhotos[sn]);
++
++  const handleShip = async () => {
++    setShipping(true); setShipError("");
++    try {
++      await onShip(delivery.id, { docOverall, docAfterPacking, serialPhotos });
++    } catch (err) {
++      setShipError(err.message || "Gagal menandai Shipped");
++    } finally {
++      setShipping(false);
++    }
++  };
++
++  // ---- Resi (optional, can be added after shipping) ----
++  const [resiInput, setResiInput] = useState("");
++  const [showResiInput, setShowResiInput] = useState(false);
++
+   return (
+     <div className="p-4 sm:p-8 max-w-4xl mx-auto space-y-5">
+       <button onClick={onBack} className="text-sm text-gray-500 flex items-center gap-1 hover:text-gray-800"><ChevronLeft size={16} /> Kembali ke daftar</button>
+@@ -1147,6 +1177,40 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock,
+         </Card>
+       )}
+ 
++      {canShip && (
++        <Card className="p-5 space-y-4">
++          <div className="flex items-center justify-between">
++            <SectionTitle title="Dokumentasi Pengiriman" subtitle="Wajib lengkap sebelum status bisa diubah ke Shipped" />
++            <div className="text-xs text-gray-500 shrink-0">{docsCompleted} / {docsTotal} lengkap</div>
++          </div>
++          <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden -mt-2">
++            <div className="h-full bg-emerald-700 transition-all" style={{ width: `${(docsCompleted / docsTotal) * 100}%` }} />
++          </div>
++
++          <PhotoUpload label="Foto Seluruh Material" value={docOverall} onChange={setDocOverall} />
++          <PhotoUpload label="Foto Setelah Packing" value={docAfterPacking} onChange={setDocAfterPacking} />
++
++          {allShipmentSerials.length > 0 && (
++            <div className="space-y-2 pt-2 border-t border-gray-50">
++              <div className="text-sm font-semibold text-gray-800">Foto per Serial Number</div>
++              {delivery.items.filter((i) => i.serials?.length > 0).map((item) => (
++                <div key={item.material} className="space-y-1.5">
++                  <div className="text-xs text-gray-500">{item.material}</div>
++                  {item.serials.map((sn) => (
++                    <div key={sn} className="flex items-center gap-2">
++                      <span className="text-xs text-gray-600 flex-1">{sn}</span>
++                      <PhotoUpload compact value={serialPhotos[sn]} onChange={(v) => setSerialPhotos((prev) => ({ ...prev, [sn]: v }))} />
++                    </div>
++                  ))}
++                </div>
++              ))}
++            </div>
++          )}
++
++          {shipError && <div className="bg-red-50 border border-red-100 text-red-700 text-xs rounded-lg px-3 py-2">{shipError}</div>}
++        </Card>
++      )}
++
+       {canApprove && (
+         <Card className="p-5 flex items-center justify-between">
+           <div className="text-sm text-gray-600">Tinjau permintaan ini berdasarkan jumlah yang diajukan dan tentukan persetujuan.</div>
+@@ -1168,10 +1232,56 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock,
+         </Card>
+       )}
+ 
++      {canShip && (
++        <Card className="p-5 flex items-center justify-between">
++          <div className="text-sm text-gray-600">Lengkapi dokumentasi di atas, lalu tandai barang sudah dikirim.</div>
++          <PrimaryButton onClick={() => setConfirmShip(true)} disabled={!shipValid || shipping}>
++            <Check size={15} /> {shipping ? "Memproses..." : "Tandai Sudah Dikirim"}
++          </PrimaryButton>
++        </Card>
++      )}
++
++      {canAddResi && (
++        <Card className="p-5">
++          {showResiInput ? (
++            <div className="flex items-center gap-2">
++              <input value={resiInput} onChange={(e) => setResiInput(e.target.value)} placeholder="Nomor resi..." className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
++              <PrimaryButton onClick={() => { if (resiInput.trim()) { onAddResi(delivery.id, resiInput); setShowResiInput(false); } }}>Simpan</PrimaryButton>
++            </div>
++          ) : (
++            <div className="flex items-center justify-between">
++              <div className="text-sm text-gray-600">Resi sudah terbit dari ekspedisi? Tambahkan nomornya di sini (opsional).</div>
++              <GhostButton onClick={() => setShowResiInput(true)}>+ Tambah Resi</GhostButton>
++            </div>
++          )}
++        </Card>
++      )}
++
+       {canAdvance && (
+         <Card className="p-5 flex items-center justify-between">
+-          <div className="text-sm text-gray-600">Ubah status pengiriman ke "{nextStatusMap[delivery.status]}".</div>
+-          <PrimaryButton onClick={() => setConfirmAdvance(true)}>Set: {nextStatusMap[delivery.status]}</PrimaryButton>
++          <div className="text-sm text-gray-600">Ubah status pengiriman ke "Delivered".</div>
++          <PrimaryButton onClick={() => setConfirmAdvance(true)}>Set: Delivered</PrimaryButton>
++        </Card>
++      )}
++
++      {(delivery.docOverall || delivery.docAfterPacking || delivery.resiNumber) && (
++        <Card className="p-5 space-y-3">
++          <SectionTitle title="Dokumentasi & Resi" />
++          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
++            {delivery.docOverall && (
++              <div>
++                <img src={delivery.docOverall} alt="Foto keseluruhan" className="w-full h-24 object-cover rounded-lg border border-gray-100" />
++                <div className="text-xs text-gray-400 mt-1">Foto keseluruhan</div>
++              </div>
++            )}
++            {delivery.docAfterPacking && (
++              <div>
++                <img src={delivery.docAfterPacking} alt="Foto setelah packing" className="w-full h-24 object-cover rounded-lg border border-gray-100" />
++                <div className="text-xs text-gray-400 mt-1">Setelah packing</div>
++              </div>
++            )}
++          </div>
++          <div className="text-sm text-gray-600">Resi: <span className="font-medium text-gray-800">{delivery.resiNumber || "Belum tersedia (optional)"}</span></div>
+         </Card>
+       )}
+ 
+@@ -1206,10 +1316,19 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock,
+         onCancel={() => setConfirmAssign(false)}
+       />
+ 
++      <ConfirmDialog
++        open={confirmShip}
++        title="Tandai Sudah Dikirim"
++        message={`Dokumentasi pengiriman untuk ${delivery.id} sudah lengkap (${docsCompleted}/${docsTotal}). Tandai status jadi "Shipped"?`}
++        confirmLabel="Ya, Sudah Dikirim"
++        onConfirm={() => { setConfirmShip(false); handleShip(); }}
++        onCancel={() => setConfirmShip(false)}
++      />
++
+       <ConfirmDialog
+         open={confirmAdvance}
+-        title={`Set status ke "${nextStatusMap[delivery.status]}"`}
+-        message={`Ubah status pengiriman ${delivery.id} menjadi "${nextStatusMap[delivery.status]}"? Aksi ini tidak bisa dibatalkan.`}
++        title={'Set status ke "Delivered"'}
++        message={`Ubah status pengiriman ${delivery.id} menjadi "Delivered"? Aksi ini tidak bisa dibatalkan.`}
+         confirmLabel="Ya, Ubah Status"
+         onConfirm={() => { setConfirmAdvance(false); onAdvance(delivery.id); }}
+         onCancel={() => setConfirmAdvance(false)}
+@@ -2933,6 +3052,8 @@ function createApiClient(baseUrl, getToken) {
+     approveDelivery: (id) => request(`/deliveries/${id}/approve`, { method: "POST" }),
+     rejectDelivery: (id) => request(`/deliveries/${id}/reject`, { method: "POST" }),
+     assignDeliveryStock: (id, serialSelections) => request(`/deliveries/${id}/assign-stock`, { method: "POST", body: serialSelections ? { serialSelections } : {} }),
++    shipDelivery: (id, payload) => request(`/deliveries/${id}/ship`, { method: "POST", body: payload }),
++    addDeliveryResi: (id, resiNumber) => request(`/deliveries/${id}/resi`, { method: "POST", body: { resiNumber } }),
+     advanceDelivery: (id) => request(`/deliveries/${id}/advance`, { method: "POST" }),
+ 
+     getReturns: () => request("/returns"),
+@@ -3337,6 +3458,21 @@ export default function App() {
+     } catch (err) { setApiError(err.message); }
+   };
+ 
++  const shipDelivery = async (id, payload) => {
++    try {
++      const updated = await api.shipDelivery(id, payload);
++      setDeliveries((prev) => prev.map((d) => (d.id === id ? updated : d)));
++      await refreshStock();
++    } catch (err) { setApiError(err.message); throw err; }
++  };
++
++  const addDeliveryResi = async (id, resiNumber) => {
++    try {
++      const updated = await api.addDeliveryResi(id, resiNumber);
++      setDeliveries((prev) => prev.map((d) => (d.id === id ? updated : d)));
++    } catch (err) { setApiError(err.message); }
++  };
++
+   const rejectDelivery = async (id) => {
+     try {
+       const updated = await api.rejectDelivery(id);
+@@ -3565,7 +3701,7 @@ export default function App() {
+   else if (page === "delivery") {
+     if (selectedDelivery) {
+       const d = deliveries.find((x) => x.id === selectedDelivery);
+-      content = <DeliveryDetail delivery={d} onBack={() => setSelectedDelivery(null)} onApprove={approveDelivery} onReject={rejectDelivery} onAssignStock={assignDeliveryStock} onAdvance={advanceDelivery} role={role} materials={materials} api={api} />;
++      content = <DeliveryDetail delivery={d} onBack={() => setSelectedDelivery(null)} onApprove={approveDelivery} onReject={rejectDelivery} onAssignStock={assignDeliveryStock} onShip={shipDelivery} onAddResi={addDeliveryResi} onAdvance={advanceDelivery} role={role} materials={materials} api={api} />;
+     } else content = <DeliveryList deliveries={deliveries} setSelected={setSelectedDelivery} setPage={goto} role={role} />;
+   } else if (page === "deliveryCreate") content = <DeliveryCreate onSubmit={submitDelivery} onCancel={() => goto("delivery")} materials={materials} sites={sites} homebases={homebases} />;
+   else if (page === "returnFaulty") {
+-- 
+2.43.0
+
