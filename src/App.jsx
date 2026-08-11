@@ -1127,6 +1127,24 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, 
     }
   };
 
+  // ---- Stage 4: proof of receipt before Shipped -> Delivered ----
+  const [deliveredPhoto, setDeliveredPhoto] = useState("");
+  const [receivedBy, setReceivedBy] = useState("");
+  const [advancing, setAdvancing] = useState(false);
+  const [advanceError, setAdvanceError] = useState("");
+  const deliveredValid = !!deliveredPhoto;
+
+  const handleAdvance = async () => {
+    setAdvancing(true); setAdvanceError("");
+    try {
+      await onAdvance(delivery.id, { deliveredPhoto, receivedBy: receivedBy.trim() || undefined });
+    } catch (err) {
+      setAdvanceError(err.message || "Gagal menandai Delivered");
+    } finally {
+      setAdvancing(false);
+    }
+  };
+
   // ---- Resi (optional, can be added after shipping) ----
   const [resiInput, setResiInput] = useState("");
   const [resiPhotoInput, setResiPhotoInput] = useState("");
@@ -1301,13 +1319,24 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, 
       )}
 
       {canAdvance && (
-        <Card className="p-5 flex items-center justify-between">
-          <div className="text-sm text-gray-600">Ubah status pengiriman ke "Delivered".</div>
-          <PrimaryButton onClick={() => setConfirmAdvance(true)}>Set: Delivered</PrimaryButton>
+        <Card className="p-5 space-y-4">
+          <SectionTitle title="Bukti Penerimaan Barang" subtitle="Wajib lengkap sebelum status bisa diubah ke Delivered" />
+          <PhotoUpload label="Foto Bukti Diterima Tim" value={deliveredPhoto} onChange={setDeliveredPhoto} />
+          <div>
+            <label className="text-xs font-medium text-gray-500">Diterima oleh <span className="text-gray-400 font-normal">(opsional)</span></label>
+            <input value={receivedBy} onChange={(e) => setReceivedBy(e.target.value)} placeholder="Nama penerima di lapangan" className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
+          </div>
+          {advanceError && <div className="bg-red-50 border border-red-100 text-red-700 text-xs rounded-lg px-3 py-2">{advanceError}</div>}
+          <div className="flex items-center justify-between pt-2 border-t border-gray-50">
+            <div className="text-sm text-gray-600">Ubah status pengiriman ke "Delivered".</div>
+            <PrimaryButton onClick={() => setConfirmAdvance(true)} disabled={!deliveredValid || advancing}>
+              {advancing ? "Memproses..." : "Set: Delivered"}
+            </PrimaryButton>
+          </div>
         </Card>
       )}
 
-      {(delivery.docOverall || delivery.docAfterPacking || delivery.resiNumber || delivery.resiPhoto || (delivery.serialPhotos && Object.keys(delivery.serialPhotos).length > 0)) && (
+      {(delivery.docOverall || delivery.docAfterPacking || delivery.resiNumber || delivery.resiPhoto || delivery.deliveredPhoto || delivery.receivedBy || (delivery.serialPhotos && Object.keys(delivery.serialPhotos).length > 0)) && (
         <Card className="p-5 space-y-4">
           <SectionTitle title="Dokumentasi & Resi" />
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
@@ -1346,6 +1375,18 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, 
             <div className="w-32">
               <PhotoThumb src={delivery.resiPhoto} alt="Foto resi" className="w-full h-24 object-cover rounded-lg border border-gray-100" onOpen={setLightboxSrc} />
               <div className="text-xs text-gray-400 mt-1">Foto resi</div>
+            </div>
+          )}
+
+          {(delivery.deliveredPhoto || delivery.receivedBy) && (
+            <div className="pt-2 border-t border-gray-50 space-y-2">
+              <div className="text-xs font-medium text-gray-500">Bukti Penerimaan</div>
+              {delivery.deliveredPhoto && (
+                <div className="w-32">
+                  <PhotoThumb src={delivery.deliveredPhoto} alt="Bukti diterima" className="w-full h-24 object-cover rounded-lg border border-gray-100" onOpen={setLightboxSrc} />
+                </div>
+              )}
+              {delivery.receivedBy && <div className="text-sm text-gray-600">Diterima oleh: <span className="font-medium text-gray-800">{delivery.receivedBy}</span></div>}
             </div>
           )}
         </Card>
@@ -1398,7 +1439,7 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, 
         title={'Set status ke "Delivered"'}
         message={`Ubah status pengiriman ${delivery.id} menjadi "Delivered"? Aksi ini tidak bisa dibatalkan.`}
         confirmLabel="Ya, Ubah Status"
-        onConfirm={() => { setConfirmAdvance(false); onAdvance(delivery.id); }}
+        onConfirm={() => { setConfirmAdvance(false); handleAdvance(); }}
         onCancel={() => setConfirmAdvance(false)}
       />
 
@@ -3163,7 +3204,7 @@ function createApiClient(baseUrl, getToken) {
     assignDeliveryStock: (id, serialSelections) => request(`/deliveries/${id}/assign-stock`, { method: "POST", body: serialSelections ? { serialSelections } : {} }),
     shipDelivery: (id, payload) => request(`/deliveries/${id}/ship`, { method: "POST", body: payload }),
     addDeliveryResi: (id, payload) => request(`/deliveries/${id}/resi`, { method: "POST", body: payload }),
-    advanceDelivery: (id) => request(`/deliveries/${id}/advance`, { method: "POST" }),
+    advanceDelivery: (id, payload) => request(`/deliveries/${id}/advance`, { method: "POST", body: payload }),
 
     getReturns: () => request("/returns"),
     createReturn: (payload) => request("/returns", { method: "POST", body: payload }),
@@ -3589,12 +3630,12 @@ export default function App() {
     } catch (err) { setApiError(err.message); }
   };
 
-  const advanceDelivery = async (id) => {
+  const advanceDelivery = async (id, payload) => {
     try {
-      const updated = await api.advanceDelivery(id);
+      const updated = await api.advanceDelivery(id, payload);
       setDeliveries((prev) => prev.map((d) => (d.id === id ? updated : d)));
       await refreshStock();
-    } catch (err) { setApiError(err.message); }
+    } catch (err) { setApiError(err.message); throw err; }
   };
 
   /* ---- Return Faulty actions ---- */
