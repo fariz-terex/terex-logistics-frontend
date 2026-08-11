@@ -1,0 +1,102 @@
+From 02b04eec62567eaedefbe7da1d020f4bd5613163 Mon Sep 17 00:00:00 2001
+From: TEREX Dev <dev@terex.local>
+Date: Tue, 11 Aug 2026 03:08:34 +0000
+Subject: [PATCH] Terima Barang: allow pasting many Serial Numbers at once for
+ bulk stock entry
+
+---
+ src/App.jsx | 48 ++++++++++++++++++++++++++++++++++++++----------
+ 1 file changed, 38 insertions(+), 10 deletions(-)
+
+diff --git a/src/App.jsx b/src/App.jsx
+index b00b1ca..9941482 100644
+--- a/src/App.jsx
++++ b/src/App.jsx
+@@ -1241,6 +1241,8 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast }) {
+   const [note, setNote] = useState("");
+   const [saving, setSaving] = useState(false);
+   const [error, setError] = useState("");
++  const [bulkMode, setBulkMode] = useState(false);
++  const [bulkText, setBulkText] = useState("");
+ 
+   const mat = materials.find((m) => m.name === material);
+ 
+@@ -1248,7 +1250,11 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast }) {
+   const updateSN = (i, val) => setSerials(serials.map((s, idx) => (idx === i ? val : s)));
+   const removeSN = (i) => setSerials(serials.filter((_, idx) => idx !== i));
+ 
+-  const trimmedSerials = serials.map((s) => s.trim()).filter(Boolean);
++  // Splits on newline, comma, semicolon, or tab — covers pasting straight
++  // out of Excel (one SN per row) or a comma-separated list either way.
++  const bulkSerials = bulkText.split(/[\n,;\t]+/).map((s) => s.trim()).filter(Boolean);
++
++  const trimmedSerials = bulkMode ? bulkSerials : serials.map((s) => s.trim()).filter(Boolean);
+   const hasDuplicates = new Set(trimmedSerials).size !== trimmedSerials.length;
+   const valid = mat && (mat.serialized ? trimmedSerials.length > 0 && !hasDuplicates : qty > 0);
+ 
+@@ -1260,7 +1266,7 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast }) {
+       await onSubmit(mat.serialized ? { material, serials: trimmedSerials, note } : { material, qty, note });
+       showToast(`Berhasil menerima ${submittedQty} unit ${submittedMaterial}`);
+       // Reset fields for the next entry, but keep the form open.
+-      setMaterial(""); setSerials([""]); setQty(1); setNote("");
++      setMaterial(""); setSerials([""]); setQty(1); setNote(""); setBulkText("");
+     } catch (err) {
+       setError(err.message || "Gagal menyimpan penerimaan barang");
+     } finally {
+@@ -1274,7 +1280,7 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast }) {
+       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+         <div>
+           <label className="text-xs font-medium text-gray-500">Material <span className="text-red-500">*</span></label>
+-          <select value={material} onChange={(e) => { setMaterial(e.target.value); setSerials([""]); }} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600">
++          <select value={material} onChange={(e) => { setMaterial(e.target.value); setSerials([""]); setBulkText(""); }} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600">
+             <option value="">Pilih material...</option>
+             {materials.map((m) => <option key={m.id} value={m.name}>{m.name} {m.serialized ? "(Serialized)" : ""}</option>)}
+           </select>
+@@ -1297,15 +1303,37 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast }) {
+         <div className="space-y-3 pt-2 border-t border-gray-50">
+           <div className="flex items-center justify-between">
+             <div className="text-sm font-semibold text-gray-800">Serial Number Unit Baru</div>
+-            <button onClick={addSN} className="text-xs text-emerald-800 font-medium flex items-center gap-1"><Plus size={14} /> Add SN</button>
++            <div className="flex items-center gap-3">
++              {!bulkMode && <button onClick={addSN} className="text-xs text-emerald-800 font-medium flex items-center gap-1"><Plus size={14} /> Add SN</button>}
++              <button
++                onClick={() => { setBulkMode(!bulkMode); setSerials([""]); setBulkText(""); }}
++                className="text-xs text-gray-500 font-medium underline decoration-dotted"
++              >
++                {bulkMode ? "Input satu-satu" : "Tempel banyak SN sekaligus"}
++              </button>
++            </div>
+           </div>
+-          {serials.map((s, i) => (
+-            <div key={i} className="flex items-center gap-2">
+-              <span className="text-xs text-gray-400 w-5">{i + 1}.</span>
+-              <input value={s} onChange={(e) => updateSN(i, e.target.value)} placeholder="Masukkan Serial Number" className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
+-              {serials.length > 1 && <button onClick={() => removeSN(i)} className="text-gray-300 hover:text-red-500"><X size={16} /></button>}
++
++          {bulkMode ? (
++            <div className="space-y-1.5">
++              <textarea
++                value={bulkText}
++                onChange={(e) => setBulkText(e.target.value)}
++                placeholder={"Tempel daftar Serial Number di sini, satu per baris.\nContoh:\nSN00123456\nSN00123457\nSN00123458"}
++                rows={8}
++                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600 font-mono"
++              />
++              <div className="text-xs text-gray-400">Bisa langsung copy-paste dari Excel/spreadsheet (satu SN per baris, atau dipisah koma) — {trimmedSerials.length} SN terdeteksi.</div>
+             </div>
+-          ))}
++          ) : (
++            serials.map((s, i) => (
++              <div key={i} className="flex items-center gap-2">
++                <span className="text-xs text-gray-400 w-5">{i + 1}.</span>
++                <input value={s} onChange={(e) => updateSN(i, e.target.value)} placeholder="Masukkan Serial Number" className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
++                {serials.length > 1 && <button onClick={() => removeSN(i)} className="text-gray-300 hover:text-red-500"><X size={16} /></button>}
++              </div>
++            ))
++          )}
+           {hasDuplicates && <div className="text-xs text-red-600">Ada Serial Number duplikat dalam daftar ini.</div>}
+           <div className="text-xs text-gray-400">Total unit: {trimmedSerials.length}</div>
+         </div>
+-- 
+2.43.0
+
