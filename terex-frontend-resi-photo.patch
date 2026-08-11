@@ -1,0 +1,97 @@
+From d17719b4fe71e161fa1fc7915755ee566d4db0c6 Mon Sep 17 00:00:00 2001
+From: TEREX Dev <dev@terex.local>
+Date: Tue, 11 Aug 2026 05:37:25 +0000
+Subject: [PATCH] Add resi photo upload UI, display alongside resi number
+
+---
+ src/App.jsx | 35 +++++++++++++++++++++++++++--------
+ 1 file changed, 27 insertions(+), 8 deletions(-)
+
+diff --git a/src/App.jsx b/src/App.jsx
+index 2e0b3a4..ec819c3 100644
+--- a/src/App.jsx
++++ b/src/App.jsx
+@@ -1129,6 +1129,7 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock,
+ 
+   // ---- Resi (optional, can be added after shipping) ----
+   const [resiInput, setResiInput] = useState("");
++  const [resiPhotoInput, setResiPhotoInput] = useState("");
+   const [showResiInput, setShowResiInput] = useState(false);
+ 
+   const [lightboxSrc, setLightboxSrc] = useState(null);
+@@ -1274,13 +1275,25 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock,
+       {canAddResi && (
+         <Card className="p-5">
+           {showResiInput ? (
+-            <div className="flex items-center gap-2">
+-              <input value={resiInput} onChange={(e) => setResiInput(e.target.value)} placeholder="Nomor resi..." className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
+-              <PrimaryButton onClick={() => { if (resiInput.trim()) { onAddResi(delivery.id, resiInput); setShowResiInput(false); } }}>Simpan</PrimaryButton>
++            <div className="space-y-3">
++              <input value={resiInput} onChange={(e) => setResiInput(e.target.value)} placeholder="Nomor resi (opsional jika ada foto)..." className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
++              <PhotoUpload label="Foto Resi" value={resiPhotoInput} onChange={setResiPhotoInput} />
++              <div className="flex justify-end gap-2">
++                <GhostButton onClick={() => { setShowResiInput(false); setResiInput(""); setResiPhotoInput(""); }}>Batal</GhostButton>
++                <PrimaryButton
++                  disabled={!resiInput.trim() && !resiPhotoInput}
++                  onClick={() => {
++                    onAddResi(delivery.id, { resiNumber: resiInput.trim() || undefined, resiPhoto: resiPhotoInput || undefined });
++                    setShowResiInput(false); setResiInput(""); setResiPhotoInput("");
++                  }}
++                >
++                  Simpan
++                </PrimaryButton>
++              </div>
+             </div>
+           ) : (
+             <div className="flex items-center justify-between">
+-              <div className="text-sm text-gray-600">Resi sudah terbit dari ekspedisi? Tambahkan nomornya di sini (opsional).</div>
++              <div className="text-sm text-gray-600">Resi sudah terbit dari ekspedisi? Tambahkan nomor dan/atau foto resi di sini (opsional).</div>
+               <GhostButton onClick={() => setShowResiInput(true)}>+ Tambah Resi</GhostButton>
+             </div>
+           )}
+@@ -1294,7 +1307,7 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock,
+         </Card>
+       )}
+ 
+-      {(delivery.docOverall || delivery.docAfterPacking || delivery.resiNumber || (delivery.serialPhotos && Object.keys(delivery.serialPhotos).length > 0)) && (
++      {(delivery.docOverall || delivery.docAfterPacking || delivery.resiNumber || delivery.resiPhoto || (delivery.serialPhotos && Object.keys(delivery.serialPhotos).length > 0)) && (
+         <Card className="p-5 space-y-4">
+           <SectionTitle title="Dokumentasi & Resi" />
+           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+@@ -1329,6 +1342,12 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock,
+           )}
+ 
+           <div className="text-sm text-gray-600">Resi: <span className="font-medium text-gray-800">{delivery.resiNumber || "Belum tersedia (optional)"}</span></div>
++          {delivery.resiPhoto && (
++            <div className="w-32">
++              <PhotoThumb src={delivery.resiPhoto} alt="Foto resi" className="w-full h-24 object-cover rounded-lg border border-gray-100" onOpen={setLightboxSrc} />
++              <div className="text-xs text-gray-400 mt-1">Foto resi</div>
++            </div>
++          )}
+         </Card>
+       )}
+ 
+@@ -3143,7 +3162,7 @@ function createApiClient(baseUrl, getToken) {
+     rejectDelivery: (id) => request(`/deliveries/${id}/reject`, { method: "POST" }),
+     assignDeliveryStock: (id, serialSelections) => request(`/deliveries/${id}/assign-stock`, { method: "POST", body: serialSelections ? { serialSelections } : {} }),
+     shipDelivery: (id, payload) => request(`/deliveries/${id}/ship`, { method: "POST", body: payload }),
+-    addDeliveryResi: (id, resiNumber) => request(`/deliveries/${id}/resi`, { method: "POST", body: { resiNumber } }),
++    addDeliveryResi: (id, payload) => request(`/deliveries/${id}/resi`, { method: "POST", body: payload }),
+     advanceDelivery: (id) => request(`/deliveries/${id}/advance`, { method: "POST" }),
+ 
+     getReturns: () => request("/returns"),
+@@ -3556,9 +3575,9 @@ export default function App() {
+     } catch (err) { setApiError(err.message); throw err; }
+   };
+ 
+-  const addDeliveryResi = async (id, resiNumber) => {
++  const addDeliveryResi = async (id, payload) => {
+     try {
+-      const updated = await api.addDeliveryResi(id, resiNumber);
++      const updated = await api.addDeliveryResi(id, payload);
+       setDeliveries((prev) => prev.map((d) => (d.id === id ? updated : d)));
+     } catch (err) { setApiError(err.message); }
+   };
+-- 
+2.43.0
+
