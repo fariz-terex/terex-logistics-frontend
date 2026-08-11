@@ -301,6 +301,34 @@ function ConfirmDialog({ open, title, message, confirmLabel = "Konfirmasi", onCo
   );
 }
 
+/* Full-size photo viewer — any thumbnail in the app can open into this by
+   setting a shared "lightboxSrc" state and rendering this once per page. */
+function ImageLightbox({ src, onClose }) {
+  if (!src) return null;
+  return (
+    <div className="fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-4" onClick={onClose}>
+      <button onClick={onClose} className="absolute top-4 right-4 text-white bg-white/10 rounded-full p-2 hover:bg-white/20">
+        <X size={20} />
+      </button>
+      <img src={src} alt="" className="max-w-full max-h-full rounded-lg object-contain" onClick={(e) => e.stopPropagation()} />
+    </div>
+  );
+}
+
+/* Thumbnail that opens the shared lightbox on click — small helper to avoid
+   repeating the cursor/hover/onClick wiring at every photo display site. */
+function PhotoThumb({ src, alt, className, onOpen }) {
+  if (!src) return null;
+  return (
+    <img
+      src={src}
+      alt={alt || ""}
+      className={`cursor-pointer hover:opacity-80 transition-opacity ${className || ""}`}
+      onClick={() => onOpen(src)}
+    />
+  );
+}
+
 function SectionTitle({ title, subtitle, right }) {
   return (
     <div className="flex items-center justify-between mb-4">
@@ -1103,6 +1131,8 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, 
   const [resiInput, setResiInput] = useState("");
   const [showResiInput, setShowResiInput] = useState(false);
 
+  const [lightboxSrc, setLightboxSrc] = useState(null);
+
   return (
     <div className="p-4 sm:p-8 max-w-4xl mx-auto space-y-5">
       <button onClick={onBack} className="text-sm text-gray-500 flex items-center gap-1 hover:text-gray-800"><ChevronLeft size={16} /> Kembali ke daftar</button>
@@ -1264,26 +1294,45 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, 
         </Card>
       )}
 
-      {(delivery.docOverall || delivery.docAfterPacking || delivery.resiNumber) && (
-        <Card className="p-5 space-y-3">
+      {(delivery.docOverall || delivery.docAfterPacking || delivery.resiNumber || (delivery.serialPhotos && Object.keys(delivery.serialPhotos).length > 0)) && (
+        <Card className="p-5 space-y-4">
           <SectionTitle title="Dokumentasi & Resi" />
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
             {delivery.docOverall && (
               <div>
-                <img src={delivery.docOverall} alt="Foto keseluruhan" className="w-full h-24 object-cover rounded-lg border border-gray-100" />
+                <PhotoThumb src={delivery.docOverall} alt="Foto keseluruhan" className="w-full h-24 object-cover rounded-lg border border-gray-100" onOpen={setLightboxSrc} />
                 <div className="text-xs text-gray-400 mt-1">Foto keseluruhan</div>
               </div>
             )}
             {delivery.docAfterPacking && (
               <div>
-                <img src={delivery.docAfterPacking} alt="Foto setelah packing" className="w-full h-24 object-cover rounded-lg border border-gray-100" />
+                <PhotoThumb src={delivery.docAfterPacking} alt="Foto setelah packing" className="w-full h-24 object-cover rounded-lg border border-gray-100" onOpen={setLightboxSrc} />
                 <div className="text-xs text-gray-400 mt-1">Setelah packing</div>
               </div>
             )}
           </div>
+
+          {delivery.serialPhotos && Object.keys(delivery.serialPhotos).length > 0 && (
+            <div>
+              <div className="text-xs font-medium text-gray-500 mb-2">Foto per Serial Number</div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                {delivery.items.filter((i) => i.serials?.length > 0).flatMap((item) =>
+                  item.serials.filter((sn) => delivery.serialPhotos[sn]).map((sn) => (
+                    <div key={sn}>
+                      <PhotoThumb src={delivery.serialPhotos[sn]} alt={sn} className="w-full h-24 object-cover rounded-lg border border-gray-100" onOpen={setLightboxSrc} />
+                      <div className="text-xs text-gray-400 mt-1 truncate">{sn}</div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+
           <div className="text-sm text-gray-600">Resi: <span className="font-medium text-gray-800">{delivery.resiNumber || "Belum tersedia (optional)"}</span></div>
         </Card>
       )}
+
+      <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
 
       <ConfirmDialog
         open={confirmAssign}
