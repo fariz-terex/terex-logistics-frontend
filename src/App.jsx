@@ -1040,7 +1040,8 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, 
   const canAssignStock = (role === ROLES.LOGISTICS || role === ROLES.MANAGER) && delivery.status === "Waiting Stock Assignment";
   // Stage 3 — before Shipped, Logistics Staff documents the shipment.
   const canShip = (role === ROLES.LOGISTICS || role === ROLES.MANAGER) && delivery.status === "Preparing";
-  const canAddResi = (role === ROLES.LOGISTICS || role === ROLES.MANAGER) && !delivery.resiNumber && ["Shipped", "Delivered"].includes(delivery.status);
+  const canEditResi = (role === ROLES.LOGISTICS || role === ROLES.MANAGER) && ["Shipped", "Delivered"].includes(delivery.status);
+  const hasResi = !!(delivery.resiNumber || delivery.resiPhoto);
   const canAdvance = (role === ROLES.LOGISTICS || role === ROLES.MANAGER) && delivery.status === "Shipped";
 
   const [approving, setApproving] = useState(false);
@@ -1290,33 +1291,6 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, 
         </Card>
       )}
 
-      {canAddResi && (
-        <Card className="p-5">
-          {showResiInput ? (
-            <div className="space-y-3">
-              <input value={resiInput} onChange={(e) => setResiInput(e.target.value)} placeholder="Nomor resi (opsional jika ada foto)..." className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
-              <PhotoUpload label="Foto Resi" value={resiPhotoInput} onChange={setResiPhotoInput} />
-              <div className="flex justify-end gap-2">
-                <GhostButton onClick={() => { setShowResiInput(false); setResiInput(""); setResiPhotoInput(""); }}>Batal</GhostButton>
-                <PrimaryButton
-                  disabled={!resiInput.trim() && !resiPhotoInput}
-                  onClick={() => {
-                    onAddResi(delivery.id, { resiNumber: resiInput.trim() || undefined, resiPhoto: resiPhotoInput || undefined });
-                    setShowResiInput(false); setResiInput(""); setResiPhotoInput("");
-                  }}
-                >
-                  Simpan
-                </PrimaryButton>
-              </div>
-            </div>
-          ) : (
-            <div className="flex items-center justify-between">
-              <div className="text-sm text-gray-600">Resi sudah terbit dari ekspedisi? Tambahkan nomor dan/atau foto resi di sini (opsional).</div>
-              <GhostButton onClick={() => setShowResiInput(true)}>+ Tambah Resi</GhostButton>
-            </div>
-          )}
-        </Card>
-      )}
 
       {canAdvance && (
         <Card className="p-5 space-y-4">
@@ -1382,12 +1356,41 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, 
             </div>
           )}
 
-          <div className="pt-2 border-t border-gray-50">
-            <div className="text-sm text-gray-600">Resi: <span className="font-medium text-gray-800">{delivery.resiNumber || "Belum tersedia (optional)"}</span></div>
-            {delivery.resiPhoto && (
-              <div className="w-32 mt-2">
+          <div className="pt-2 border-t border-gray-50 space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="text-sm text-gray-600">
+                Resi: <span className="font-medium text-gray-800">{delivery.resiNumber || (delivery.resiPhoto ? "(nomor belum diisi)" : "Belum tersedia (optional)")}</span>
+              </div>
+              {canEditResi && !showResiInput && (
+                <GhostButton onClick={() => { setResiInput(delivery.resiNumber || ""); setResiPhotoInput(delivery.resiPhoto || ""); setShowResiInput(true); }}>
+                  {hasResi ? "Edit Resi" : "+ Tambah Resi"}
+                </GhostButton>
+              )}
+            </div>
+
+            {delivery.resiPhoto && !showResiInput && (
+              <div className="w-32">
                 <PhotoThumb src={delivery.resiPhoto} alt="Foto resi" className="w-full h-24 object-cover rounded-lg border border-gray-100" onOpen={setLightboxSrc} />
                 <div className="text-xs text-gray-400 mt-1">Foto resi</div>
+              </div>
+            )}
+
+            {showResiInput && (
+              <div className="space-y-3 pt-1">
+                <input value={resiInput} onChange={(e) => setResiInput(e.target.value)} placeholder="Nomor resi (opsional jika ada foto)..." className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
+                <PhotoUpload label="Foto Resi" value={resiPhotoInput} onChange={setResiPhotoInput} />
+                <div className="flex justify-end gap-2">
+                  <GhostButton onClick={() => { setShowResiInput(false); setResiInput(""); setResiPhotoInput(""); }}>Batal</GhostButton>
+                  <PrimaryButton
+                    disabled={!resiInput.trim() && !resiPhotoInput}
+                    onClick={() => {
+                      onAddResi(delivery.id, { resiNumber: resiInput.trim() || undefined, resiPhoto: resiPhotoInput || undefined });
+                      setShowResiInput(false); setResiInput(""); setResiPhotoInput("");
+                    }}
+                  >
+                    Simpan
+                  </PrimaryButton>
+                </div>
               </div>
             )}
           </div>
