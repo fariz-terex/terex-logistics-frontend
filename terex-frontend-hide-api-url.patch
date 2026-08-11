@@ -1,0 +1,39 @@
+From d7dd087bc339b460ceed6ac3ab0bb17b4ebcbad0 Mon Sep 17 00:00:00 2001
+From: TEREX Dev <dev@terex.local>
+Date: Tue, 11 Aug 2026 08:48:29 +0000
+Subject: [PATCH] Remove Backend API URL field from login screen (dev-only, no
+ longer needed)
+
+---
+ src/App.jsx | 14 --------------
+ 1 file changed, 14 deletions(-)
+
+diff --git a/src/App.jsx b/src/App.jsx
+index 5fc9432..276a003 100644
+--- a/src/App.jsx
++++ b/src/App.jsx
+@@ -3316,21 +3316,7 @@ function LoginScreen({ apiBase, setApiBase, onLogin }) {
+           <div className="text-sm text-gray-500 mt-1">Masuk untuk melanjutkan</div>
+         </div>
+ 
+-        <div>
+-          <label className="text-xs font-medium text-gray-500">Backend API URL</label>
+-          <input
+-            value={apiBase}
+-            onChange={(e) => setApiBase(e.target.value)}
+-            className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600"
+-            placeholder="https://your-backend.example.com/api"
+-          />
+-          <div className="text-xs text-gray-400 mt-1">
+-            Ganti ke URL publik backend setelah di-deploy. <span className="font-medium">localhost</span> hanya berfungsi jika halaman ini dibuka di komputer yang sama dengan server backend-nya.
+-          </div>
+-        </div>
+-
+         {error && <div className="bg-red-50 border border-red-100 text-red-700 text-sm rounded-lg px-3 py-2">{error}</div>}
+-
+         <form onSubmit={(e) => { e.preventDefault(); doLogin(username, password); }} className="space-y-3">
+           <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Username" type="text" autoCapitalize="none" autoCorrect="off" className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+           <input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" type="password" className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+-- 
+2.43.0
+
