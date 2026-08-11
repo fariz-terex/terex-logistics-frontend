@@ -867,11 +867,11 @@ function DeliveryCreate({ onSubmit, onCancel, materials, sites, homebases }) {
 
   const hb = homebases.find((h) => h.name === homebase);
   const siteOptions = sites.filter((s) =>
-    s.homebase === homebase &&
+    s.homebase === homebase && s.status === "Active" &&
     (s.name.toLowerCase().includes(siteSearch.toLowerCase()) || s.code.toLowerCase().includes(siteSearch.toLowerCase()) || s.terminalId.toLowerCase().includes(siteSearch.toLowerCase()))
   );
 
-  const filteredMaterials = materials.filter((m) => m.name.toLowerCase().includes(matSearch.toLowerCase()));
+  const filteredMaterials = materials.filter((m) => m.status === "Active" && m.name.toLowerCase().includes(matSearch.toLowerCase()));
 
   const updateQty = (matId, delta) => {
     setCart((c) => {
@@ -909,7 +909,7 @@ function DeliveryCreate({ onSubmit, onCancel, materials, sites, homebases }) {
             <label className="text-sm font-medium text-gray-700">Homebase / Area <span className="text-red-500">*</span></label>
             <select value={homebase} onChange={(e) => { setHomebase(e.target.value); setSite(""); }} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600">
               <option value="">Pilih homebase...</option>
-              {homebases.map((h) => <option key={h.code} value={h.name}>{h.name} — {h.area}</option>)}
+              {homebases.filter((h) => h.status === "Active").map((h) => <option key={h.code} value={h.name}>{h.name} — {h.area}</option>)}
             </select>
             {hb && (
               <div className="mt-2 text-xs text-gray-500 bg-gray-50 rounded-lg p-3 space-y-1">
@@ -1529,7 +1529,7 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast }) {
           <label className="text-xs font-medium text-gray-500">Material <span className="text-red-500">*</span></label>
           <select value={material} onChange={(e) => { setMaterial(e.target.value); setSerials([""]); setBulkText(""); }} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600">
             <option value="">Pilih material...</option>
-            {materials.map((m) => <option key={m.id} value={m.name}>{m.name} {m.serialized ? "(Serialized)" : ""}</option>)}
+            {materials.filter((m) => m.status === "Active").map((m) => <option key={m.id} value={m.name}>{m.name} {m.serialized ? "(Serialized)" : ""}</option>)}
           </select>
         </div>
 
@@ -2059,7 +2059,7 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
                 <label className="text-sm font-medium text-gray-700">Material <span className="text-red-500">*</span></label>
                 <select value={item.material} onChange={(e) => updateItem(itemIdx, "material", e.target.value)} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600">
                   <option value="">Pilih material...</option>
-                  {materials.map((m) => <option key={m.id} value={m.name}>{m.name}</option>)}
+                  {materials.filter((m) => m.status === "Active").map((m) => <option key={m.id} value={m.name}>{m.name}</option>)}
                 </select>
               </div>
               <div>
@@ -2370,7 +2370,7 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
             <label className="text-sm font-medium text-gray-700">Homebase <span className="text-red-500">*</span></label>
             <select value={homebase} onChange={(e) => setHomebase(e.target.value)} disabled={isEdit} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600 disabled:bg-gray-50 disabled:text-gray-500">
               <option value="">Pilih homebase...</option>
-              {homebases.map((h) => <option key={h.code} value={h.name}>{h.name}</option>)}
+              {homebases.filter((h) => h.status === "Active").map((h) => <option key={h.code} value={h.name}>{h.name}</option>)}
             </select>
           </div>
           <div>
@@ -2850,14 +2850,14 @@ function MasterSite({ sites, homebases, customers, onImport, onCreate, showToast
             <label className="text-xs font-medium text-gray-500">Customer</label>
             <select value={form.customer} onChange={(e) => setForm({ ...form, customer: e.target.value })} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600">
               <option value="">Pilih...</option>
-              {customers.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
+              {customers.filter((c) => c.status === "Active").map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
             </select>
           </div>
           <div>
             <label className="text-xs font-medium text-gray-500">Homebase <span className="text-red-500">*</span></label>
             <select value={form.homebase} onChange={(e) => setForm({ ...form, homebase: e.target.value, area: homebases.find((h) => h.name === e.target.value)?.area || form.area })} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600">
               <option value="">Pilih...</option>
-              {homebases.map((h) => <option key={h.code} value={h.name}>{h.name}</option>)}
+              {homebases.filter((h) => h.status === "Active").map((h) => <option key={h.code} value={h.name}>{h.name}</option>)}
             </select>
           </div>
           <div>
@@ -4005,7 +4005,7 @@ export default function App() {
     onCreate={createHomebase} onToggle={toggleHomebase}
     fields={[
       { key: "name", label: "Nama Homebase", required: true },
-      { key: "area", label: "Area", type: "select", options: areas.map((a) => a.name), required: true },
+      { key: "area", label: "Area", type: "select", options: areas.filter((a) => a.status === "Active").map((a) => a.name), required: true },
       { key: "address", label: "Alamat", fullWidth: true },
       { key: "pic", label: "PIC" },
       { key: "phone", label: "Phone" },
