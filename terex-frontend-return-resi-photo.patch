@@ -1,0 +1,111 @@
+From dfba95e75ad7665c002265e105071588c9421c52 Mon Sep 17 00:00:00 2001
+From: TEREX Dev <dev@terex.local>
+Date: Wed, 12 Aug 2026 12:23:58 +0000
+Subject: [PATCH] Return Faulty: add resi photo upload UI matching Delivery
+ Request
+
+---
+ src/App.jsx | 60 ++++++++++++++++++++++++++++++++++++-----------------
+ 1 file changed, 41 insertions(+), 19 deletions(-)
+
+diff --git a/src/App.jsx b/src/App.jsx
+index 531f432..76f7074 100644
+--- a/src/App.jsx
++++ b/src/App.jsx
+@@ -2127,13 +2127,15 @@ function ReturnFaultyDetail({ r, onBack, onApprove, onRevise, onShip, onAddResi,
+   const [revisionText, setRevisionText] = useState("");
+   const [showRevisionInput, setShowRevisionInput] = useState(false);
+   const [resiInput, setResiInput] = useState("");
++  const [resiPhotoInput, setResiPhotoInput] = useState("");
+   const [showResiInput, setShowResiInput] = useState(false);
+   const [lightboxSrc, setLightboxSrc] = useState(null);
+ 
+   const canReview = (role === ROLES.LOGISTICS || role === ROLES.MANAGER) && r.status === "Waiting Logistics Review";
+   const canShip = role === ROLES.TECH && r.status === "Ready to Ship";
+   const canEdit = role === ROLES.TECH && r.status === "Revision Required";
+-  const canAddResi = role === ROLES.TECH && !r.resiNumber && ["On Delivery", "Received by Warehouse", "QC Checking"].includes(r.status);
++  const canEditResi = role === ROLES.TECH && ["On Delivery", "Received by Warehouse", "QC Checking"].includes(r.status);
++  const hasResi = !!(r.resiNumber || r.resiPhoto);
+   const canReceive = (role === ROLES.LOGISTICS || role === ROLES.MANAGER) && r.status === "On Delivery";
+   const canQC = (role === ROLES.LOGISTICS || role === ROLES.MANAGER) && r.status === "Received by Warehouse";
+   const canComplete = (role === ROLES.LOGISTICS || role === ROLES.MANAGER) && r.status === "QC Checking";
+@@ -2228,8 +2230,43 @@ function ReturnFaultyDetail({ r, onBack, onApprove, onRevise, onShip, onAddResi,
+               <span className={c.ok ? "text-gray-700" : "text-red-600"}>{c.label}</span>
+             </div>
+           ))}
+-          <div className="flex items-center gap-2.5 text-sm pt-1 border-t border-gray-50 mt-2">
+-            <span className="text-gray-400">Resi: {r.resiNumber || "Belum tersedia (optional)"}</span>
++          <div className="pt-2 border-t border-gray-50 mt-2 space-y-2">
++            <div className="flex items-center justify-between">
++              <span className="text-sm text-gray-600">
++                Resi: <span className="font-medium text-gray-800">{r.resiNumber || (r.resiPhoto ? "(nomor belum diisi)" : "Belum tersedia (optional)")}</span>
++              </span>
++              {canEditResi && !showResiInput && (
++                <GhostButton onClick={() => { setResiInput(r.resiNumber || ""); setResiPhotoInput(r.resiPhoto || ""); setShowResiInput(true); }}>
++                  {hasResi ? "Edit Resi" : "+ Tambah Resi"}
++                </GhostButton>
++              )}
++            </div>
++
++            {r.resiPhoto && !showResiInput && (
++              <div className="w-32">
++                <PhotoThumb src={r.resiPhoto} alt="Foto resi" className="w-full h-24 object-cover rounded-lg border border-gray-100" onOpen={setLightboxSrc} />
++                <div className="text-xs text-gray-400 mt-1">Foto resi</div>
++              </div>
++            )}
++
++            {showResiInput && (
++              <div className="space-y-3 pt-1">
++                <input value={resiInput} onChange={(e) => setResiInput(e.target.value)} placeholder="Nomor resi (opsional jika ada foto)..." className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
++                <PhotoUpload label="Foto Resi" value={resiPhotoInput} onChange={setResiPhotoInput} />
++                <div className="flex justify-end gap-2">
++                  <GhostButton onClick={() => { setShowResiInput(false); setResiInput(""); setResiPhotoInput(""); }}>Batal</GhostButton>
++                  <PrimaryButton
++                    disabled={!resiInput.trim() && !resiPhotoInput}
++                    onClick={() => {
++                      onAddResi(r.id, { resiNumber: resiInput.trim() || undefined, resiPhoto: resiPhotoInput || undefined });
++                      setShowResiInput(false); setResiInput(""); setResiPhotoInput("");
++                    }}
++                  >
++                    Simpan
++                  </PrimaryButton>
++                </div>
++              </div>
++            )}
+           </div>
+         </div>
+       </Card>
+@@ -2263,21 +2300,6 @@ function ReturnFaultyDetail({ r, onBack, onApprove, onRevise, onShip, onAddResi,
+         </Card>
+       )}
+ 
+-      {canAddResi && (
+-        <Card className="p-5">
+-          {showResiInput ? (
+-            <div className="flex items-center gap-2">
+-              <input value={resiInput} onChange={(e) => setResiInput(e.target.value)} placeholder="Nomor resi..." className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
+-              <PrimaryButton onClick={() => resiInput.trim() && onAddResi(r.id, resiInput)}>Simpan</PrimaryButton>
+-            </div>
+-          ) : (
+-            <div className="flex items-center justify-between">
+-              <div className="text-sm text-gray-600">Resi sudah terbit dari ekspedisi? Tambahkan nomornya di sini.</div>
+-              <GhostButton onClick={() => setShowResiInput(true)}>+ Tambah Resi</GhostButton>
+-            </div>
+-          )}
+-        </Card>
+-      )}
+ 
+       {canReceive && (
+         <Card className="p-5 flex items-center justify-between">
+@@ -3295,7 +3317,7 @@ function createApiClient(baseUrl, getToken) {
+     reviseReturn: (id, note) => request(`/returns/${id}/revise`, { method: "POST", body: { note } }),
+     resubmitReturn: (id, payload) => request(`/returns/${id}/resubmit`, { method: "POST", body: payload }),
+     shipReturn: (id) => request(`/returns/${id}/ship`, { method: "POST" }),
+-    addResi: (id, resiNumber) => request(`/returns/${id}/resi`, { method: "POST", body: { resiNumber } }),
++    addResi: (id, payload) => request(`/returns/${id}/resi`, { method: "POST", body: payload }),
+     receiveReturn: (id) => request(`/returns/${id}/receive`, { method: "POST" }),
+     qcReturn: (id) => request(`/returns/${id}/qc`, { method: "POST" }),
+     completeReturn: (id) => request(`/returns/${id}/complete`, { method: "POST" }),
+-- 
+2.43.0
+
