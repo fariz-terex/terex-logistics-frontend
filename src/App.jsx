@@ -2128,6 +2128,7 @@ function ReturnFaultyDetail({ r, onBack, onApprove, onRevise, onShip, onAddResi,
   const [showRevisionInput, setShowRevisionInput] = useState(false);
   const [resiInput, setResiInput] = useState("");
   const [showResiInput, setShowResiInput] = useState(false);
+  const [lightboxSrc, setLightboxSrc] = useState(null);
 
   const canReview = (role === ROLES.LOGISTICS || role === ROLES.MANAGER) && r.status === "Waiting Logistics Review";
   const canShip = role === ROLES.TECH && r.status === "Ready to Ship";
@@ -2174,7 +2175,11 @@ function ReturnFaultyDetail({ r, onBack, onApprove, onRevise, onShip, onAddResi,
             <div className="grid grid-cols-2 gap-2">
               {i.serials.map((s, si) => (
                 <div key={si} className="flex items-center gap-2 text-xs bg-gray-50 rounded-lg px-3 py-2">
-                  {typeof s.photo === "string" && s.photo ? <img src={s.photo} alt="" className="w-7 h-7 rounded object-cover" /> : <div className="w-7 h-7 rounded bg-gray-200" />}
+                  {typeof s.photo === "string" && s.photo ? (
+                    <PhotoThumb src={s.photo} alt={s.sn} className="w-7 h-7 rounded object-cover" onOpen={setLightboxSrc} />
+                  ) : (
+                    <div className="w-7 h-7 rounded bg-gray-200" />
+                  )}
                   <span className="text-gray-600 flex-1">{s.sn}</span>
                   <span className={s.photo ? "text-emerald-600" : "text-red-500"}>{s.photo ? "Foto ✓" : "Foto belum ada"}</span>
                 </div>
@@ -2183,6 +2188,34 @@ function ReturnFaultyDetail({ r, onBack, onApprove, onRevise, onShip, onAddResi,
           </div>
         ))}
       </Card>
+
+      {(r.docs.beforePacking || r.docs.afterPacking || r.docs.weighing) && (
+        <Card className="p-5">
+          <SectionTitle title="Dokumentasi Foto" />
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            {r.docs.beforePacking && (
+              <div>
+                <PhotoThumb src={r.docs.beforePacking} alt="Sebelum packing" className="w-full h-24 object-cover rounded-lg border border-gray-100" onOpen={setLightboxSrc} />
+                <div className="text-xs text-gray-400 mt-1">Sebelum packing</div>
+              </div>
+            )}
+            {r.docs.afterPacking && (
+              <div>
+                <PhotoThumb src={r.docs.afterPacking} alt="Setelah packing" className="w-full h-24 object-cover rounded-lg border border-gray-100" onOpen={setLightboxSrc} />
+                <div className="text-xs text-gray-400 mt-1">Setelah packing</div>
+              </div>
+            )}
+            {r.docs.weighing && (
+              <div>
+                <PhotoThumb src={r.docs.weighing} alt="Packing + timbangan" className="w-full h-24 object-cover rounded-lg border border-gray-100" onOpen={setLightboxSrc} />
+                <div className="text-xs text-gray-400 mt-1">Packing + timbangan</div>
+              </div>
+            )}
+          </div>
+        </Card>
+      )}
+
+      <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
 
       <Card className="p-5">
         <SectionTitle title="Checklist Dokumentasi" />
