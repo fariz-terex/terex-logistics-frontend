@@ -404,7 +404,7 @@ function hasAccess(key, role) {
   return !allowed || allowed.includes(role);
 }
 
-function Sidebar({ page, setPage, role, userName, mobileOpen, onClose }) {
+function Sidebar({ page, setPage, role, userName, userCustomer, mobileOpen, onClose }) {
   const [open, setOpen] = useState({ material: true, inventory: false, reportsGroup: false, masterGroup: false });
 
   const toggle = (key) => setOpen((o) => ({ ...o, [key]: !o[key] }));
@@ -487,7 +487,7 @@ function Sidebar({ page, setPage, role, userName, mobileOpen, onClose }) {
           </div>
           <div className="min-w-0">
             <div className="text-sm font-medium text-gray-900 truncate">{userName || "—"}</div>
-            <div className="text-xs text-gray-500 truncate">{role}</div>
+            <div className="text-xs text-gray-500 truncate">{role}{userCustomer ? ` · ${userCustomer}` : ""}</div>
           </div>
         </div>
       </div>
@@ -607,7 +607,7 @@ function TopBar({ user, onLogout, title, subtitle, searchQuery, setSearchQuery, 
 
           <div className="hidden sm:block text-right">
             <div className="text-xs font-medium text-gray-800 truncate max-w-[140px]">{user?.name}</div>
-            <div className="text-[11px] text-gray-400 truncate max-w-[140px]">{user?.role}</div>
+            <div className="text-[11px] text-gray-400 truncate max-w-[140px]">{user?.role}{user?.customer ? ` · ${user.customer}` : ""}</div>
           </div>
           <button
             onClick={onLogout}
@@ -854,7 +854,7 @@ function DeliveryList({ deliveries, setSelected, setPage, role }) {
   );
 }
 
-function DeliveryCreate({ onSubmit, onCancel, materials, sites, homebases }) {
+function DeliveryCreate({ onSubmit, onCancel, materials, sites, homebases, currentUser, customers }) {
   const [step, setStep] = useState(1);
   const [homebase, setHomebase] = useState("");
   const [site, setSite] = useState("");
@@ -864,6 +864,9 @@ function DeliveryCreate({ onSubmit, onCancel, materials, sites, homebases }) {
   const [note, setNote] = useState("");
   const [cart, setCart] = useState({});
   const [matSearch, setMatSearch] = useState("");
+  const [customer, setCustomer] = useState("");
+
+  const isManager = currentUser?.role === ROLES.MANAGER;
 
   const hb = homebases.find((h) => h.name === homebase);
   const siteOptions = sites.filter((s) =>
@@ -882,7 +885,7 @@ function DeliveryCreate({ onSubmit, onCancel, materials, sites, homebases }) {
   };
 
   const cartItems = Object.entries(cart).filter(([, q]) => q > 0).map(([id, q]) => ({ material: materials.find((m) => m.id === id), qty: q }));
-  const step1Valid = homebase && keperluan && (keperluan !== "Other" || otherDesc.trim());
+  const step1Valid = homebase && keperluan && (keperluan !== "Other" || otherDesc.trim()) && (!isManager || customer);
   const step2Valid = cartItems.length > 0 && cartItems.every((i) => i.qty <= i.material.ready);
 
   return (
@@ -905,6 +908,17 @@ function DeliveryCreate({ onSubmit, onCancel, materials, sites, homebases }) {
 
       {step === 1 && (
         <Card className="p-6 space-y-5">
+          {isManager && (
+            <div>
+              <label className="text-sm font-medium text-gray-700">Divisi (Customer) <span className="text-red-500">*</span></label>
+              <select value={customer} onChange={(e) => setCustomer(e.target.value)} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600">
+                <option value="">Pilih divisi...</option>
+                {customers.filter((c) => c.status === "Active").map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
+              </select>
+              <div className="text-xs text-gray-400 mt-1">Stock yang ditampilkan di langkah berikutnya adalah total semua divisi — sistem akan cek ulang stock divisi terpilih saat submit.</div>
+            </div>
+          )}
+
           <div>
             <label className="text-sm font-medium text-gray-700">Homebase / Area <span className="text-red-500">*</span></label>
             <select value={homebase} onChange={(e) => { setHomebase(e.target.value); setSite(""); }} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600">
@@ -1023,7 +1037,7 @@ function DeliveryCreate({ onSubmit, onCancel, materials, sites, homebases }) {
           </div>
           <div className="flex justify-between pt-2">
             <GhostButton onClick={() => setStep(2)}><ChevronLeft size={16} /> Kembali</GhostButton>
-            <PrimaryButton onClick={() => onSubmit({ homebase, site: site ? sites.find((s) => s.code === site)?.name : "", keperluan: keperluan === "Other" ? `Other - ${otherDesc}` : keperluan, note, items: cartItems.map((i) => ({ material: i.material.name, qty: i.qty })) })}>
+            <PrimaryButton onClick={() => onSubmit({ homebase, site: site ? sites.find((s) => s.code === site)?.name : "", keperluan: keperluan === "Other" ? `Other - ${otherDesc}` : keperluan, note, items: cartItems.map((i) => ({ material: i.material.name, qty: i.qty })), ...(isManager ? { customer } : {}) })}>
               <Check size={16} /> Submit Request
             </PrimaryButton>
           </div>
@@ -1061,7 +1075,7 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, 
     if (!canAssignStock || serializedItems.length === 0) return;
     let cancelled = false;
     setLoadingSerials(true);
-    Promise.all(serializedItems.map((i) => api.getSerials(i.material, "Ready").then((data) => [i.material, data])))
+    Promise.all(serializedItems.map((i) => api.getSerials(i.material, "Ready", delivery.customer).then((data) => [i.material, data])))
       .then((results) => {
         if (cancelled) return;
         const map = {};
@@ -1531,15 +1545,22 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, 
    WAREHOUSE STOCK + MOVEMENT
    ============================================================ */
 
-function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast }) {
+function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast, currentUser, customers }) {
   const [material, setMaterial] = useState("");
   const [serials, setSerials] = useState([""]);
   const [qty, setQty] = useState(1);
   const [note, setNote] = useState("");
+  const [customer, setCustomer] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [bulkMode, setBulkMode] = useState(false);
   const [bulkText, setBulkText] = useState("");
+
+  // Manager has no fixed division and must pick one explicitly; everyone
+  // else is pinned to their own division — no choice to make (and no way to
+  // accidentally credit someone else's stock).
+  const isManager = currentUser?.role === ROLES.MANAGER;
+  const effectiveCustomer = isManager ? customer : currentUser?.customer;
 
   const mat = materials.find((m) => m.name === material);
 
@@ -1553,14 +1574,16 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast }) {
 
   const trimmedSerials = bulkMode ? bulkSerials : serials.map((s) => s.trim()).filter(Boolean);
   const hasDuplicates = new Set(trimmedSerials).size !== trimmedSerials.length;
-  const valid = mat && (mat.serialized ? trimmedSerials.length > 0 && !hasDuplicates : qty > 0);
+  const valid = mat && !!effectiveCustomer && (mat.serialized ? trimmedSerials.length > 0 && !hasDuplicates : qty > 0);
 
   const submit = async () => {
     setSaving(true); setError("");
     const submittedMaterial = material;
     const submittedQty = mat.serialized ? trimmedSerials.length : qty;
     try {
-      await onSubmit(mat.serialized ? { material, serials: trimmedSerials, note } : { material, qty, note });
+      const payload = mat.serialized ? { material, serials: trimmedSerials, note } : { material, qty, note };
+      if (isManager) payload.customer = customer;
+      await onSubmit(payload);
       showToast(`Berhasil menerima ${submittedQty} unit ${submittedMaterial}`);
       // Reset fields for the next entry, but keep the form open.
       setMaterial(""); setSerials([""]); setQty(1); setNote(""); setBulkText("");
@@ -1581,6 +1604,18 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast }) {
             <option value="">Pilih material...</option>
             {materials.filter((m) => m.status === "Active").map((m) => <option key={m.id} value={m.name}>{m.name} {m.serialized ? "(Serialized)" : ""}</option>)}
           </select>
+        </div>
+
+        <div>
+          <label className="text-xs font-medium text-gray-500">Divisi (Customer) <span className="text-red-500">*</span></label>
+          {isManager ? (
+            <select value={customer} onChange={(e) => setCustomer(e.target.value)} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600">
+              <option value="">Pilih divisi tujuan...</option>
+              {customers.filter((c) => c.status === "Active").map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
+            </select>
+          ) : (
+            <div className="mt-1 w-full border border-gray-100 bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-600">{currentUser?.customer || "—"}</div>
+          )}
         </div>
 
         {mat && !mat.serialized && (
@@ -1646,7 +1681,7 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast }) {
   );
 }
 
-function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMaterial, onSubmitReceipt, showToast, clearSerialHighlight }) {
+function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMaterial, onSubmitReceipt, showToast, clearSerialHighlight, currentUser, customers }) {
   const [search, setSearch] = useState("");
   const [showReceiptForm, setShowReceiptForm] = useState(false);
   const filtered = materials.filter((m) => m.name.toLowerCase().includes(search.toLowerCase()));
@@ -1664,6 +1699,8 @@ function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMateri
           onCancel={() => setShowReceiptForm(false)}
           onSubmit={onSubmitReceipt}
           showToast={showToast}
+          currentUser={currentUser}
+          customers={customers}
         />
       )}
 
@@ -2119,8 +2156,10 @@ function findSNConflict(sn, { returns = [], reconciliations = [], excludeId = nu
   return null;
 }
 
-function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconciliations, initialData, excludeId, revisionNote }) {
+function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconciliations, initialData, excludeId, revisionNote, currentUser, customers }) {
   const isEdit = !!initialData;
+  const isManager = currentUser?.role === ROLES.MANAGER;
+  const [customer, setCustomer] = useState("");
   const [items, setItems] = useState(
     initialData?.items?.length
       ? initialData.items.map((it) => ({ material: it.material, serials: it.serials.map((s) => ({ ...s })) }))
@@ -2142,7 +2181,7 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
   const allSNTrimmed = allSerials.map((s) => s.sn.trim()).filter(Boolean);
   const hasDuplicateSN = new Set(allSNTrimmed).size !== allSNTrimmed.length;
   const conflicts = allSerials.map((s) => ({ sn: s.sn, conflict: findSNConflict(s.sn, { returns, reconciliations, excludeId }) })).filter((c) => c.conflict);
-  const valid = items.length > 0 && items.every((it) => it.material) && allSNFilled && !hasDuplicateSN && conflicts.length === 0 && docs.beforePacking && docs.afterPacking && docs.weighing;
+  const valid = items.length > 0 && items.every((it) => it.material) && allSNFilled && !hasDuplicateSN && conflicts.length === 0 && docs.beforePacking && docs.afterPacking && docs.weighing && (isEdit || !isManager || customer);
 
   // qty is always derived from how many SN rows are filled in — a material
   // can't be submitted with a qty that doesn't match its Serial Numbers,
@@ -2150,6 +2189,7 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
   const buildSubmission = () => ({
     items: items.map((it) => ({ material: it.material, qty: it.serials.length, serials: it.serials })),
     docs,
+    ...(!isEdit && isManager ? { customer } : {}),
   });
 
   return (
@@ -2158,6 +2198,16 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
         title={isEdit ? `Perbaiki Return Material Faulty — ${excludeId}` : "Buat Return Material Faulty"}
         subtitle={isEdit ? "Perbarui data sesuai catatan revisi, lalu kirim ulang ke Logistics" : "Input Serial Number secara manual untuk setiap unit — bisa lebih dari satu material"}
       />
+
+      {!isEdit && isManager && (
+        <Card className="p-5">
+          <label className="text-sm font-medium text-gray-700">Divisi (Customer) <span className="text-red-500">*</span></label>
+          <select value={customer} onChange={(e) => setCustomer(e.target.value)} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600">
+            <option value="">Pilih divisi...</option>
+            {customers.filter((c) => c.status === "Active").map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
+          </select>
+        </Card>
+      )}
 
       {isEdit && revisionNote && (
         <Card className="p-4 border-red-200 bg-red-50/50 flex items-start gap-3">
@@ -2507,8 +2557,10 @@ function ReconciliationList({ items, setSelected, setPage, role }) {
   );
 }
 
-function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconciliations, homebases, initialData, excludeId, revisionNote }) {
+function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconciliations, homebases, initialData, excludeId, revisionNote, currentUser, customers }) {
   const isEdit = !!initialData;
+  const isManager = currentUser?.role === ROLES.MANAGER;
+  const [customer, setCustomer] = useState("");
   const [homebase, setHomebase] = useState(initialData?.homebase || "");
   const [period, setPeriod] = useState(initialData?.period || "01 - 15 Agustus 2026");
   const [rows, setRows] = useState(
@@ -2525,7 +2577,7 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
   const updateSerial = (idx, si, val) => setRows(rows.map((r, i) => (i === idx ? { ...r, serials: r.serials.map((s, j) => (j === si ? val : s)) } : r)));
 
   const snConflicts = rows.flatMap((r) => (r.serials || []).map((sn) => findSNConflict(sn, { returns, reconciliations, excludeId })).filter(Boolean));
-  const valid = homebase && snConflicts.length === 0 && rows.every((r) => r.photo && (r.systemQty === r.actualQty || r.reason.trim()) && (!r.serialized || r.serials.every((s) => s.trim())));
+  const valid = homebase && snConflicts.length === 0 && rows.every((r) => r.photo && (r.systemQty === r.actualQty || r.reason.trim()) && (!r.serialized || r.serials.every((s) => s.trim()))) && (isEdit || !isManager || customer);
 
   return (
     <div className="p-4 sm:p-8 max-w-3xl mx-auto space-y-6">
@@ -2540,6 +2592,15 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
         </Card>
       )}
       <Card className="p-6 space-y-4">
+        {!isEdit && isManager && (
+          <div>
+            <label className="text-sm font-medium text-gray-700">Divisi (Customer) <span className="text-red-500">*</span></label>
+            <select value={customer} onChange={(e) => setCustomer(e.target.value)} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600">
+              <option value="">Pilih divisi...</option>
+              {customers.filter((c) => c.status === "Active").map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
+            </select>
+          </div>
+        )}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label className="text-sm font-medium text-gray-700">Homebase <span className="text-red-500">*</span></label>
@@ -2593,7 +2654,7 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
 
       <div className="flex justify-between">
         <GhostButton onClick={onCancel}>Batal</GhostButton>
-        <PrimaryButton disabled={!valid} onClick={() => onSubmit({ homebase, period, items: rows })}>
+        <PrimaryButton disabled={!valid} onClick={() => onSubmit({ homebase, period, items: rows, ...(!isEdit && isManager ? { customer } : {}) })}>
           <Check size={16} /> {isEdit ? "Kirim Ulang ke Logistics" : "Submit Reconciliation"}
         </PrimaryButton>
       </div>
@@ -3151,7 +3212,7 @@ function MasterCrudTable({ title, subtitle, entityLabel, fields, items, idField 
 
   const handleSubmit = async () => {
     // Fields marked createOnlyRequired (e.g. password) aren't mandatory when editing.
-    const requiredMissing = fields.some((f) => f.required && !(editingId && f.createOnlyRequired) && !String(form[f.key] ?? "").trim());
+    const requiredMissing = fields.some((f) => (!f.showIf || f.showIf(form)) && f.required && !(editingId && f.createOnlyRequired) && !String(form[f.key] ?? "").trim());
     if (requiredMissing) return;
     setSaving(true); setError("");
     try {
@@ -3189,7 +3250,7 @@ function MasterCrudTable({ title, subtitle, entityLabel, fields, items, idField 
         <Card className="p-5 space-y-4">
           <div className="text-sm font-semibold text-gray-800">{editingId ? `Edit — ${editingId}` : "Tambah Baru"}</div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {fields.map((f) => (
+            {fields.filter((f) => !f.showIf || f.showIf(form)).map((f) => (
               <div key={f.key} className={f.fullWidth ? "sm:col-span-2" : ""}>
                 <label className="text-xs font-medium text-gray-500">
                   {f.label}
@@ -3411,10 +3472,11 @@ function createApiClient(baseUrl, getToken) {
 
     getStock: () => request("/stock"),
     getMovements: (material) => request(`/stock/movements${material ? `?material=${encodeURIComponent(material)}` : ""}`),
-    getSerials: (material, status) => {
+    getSerials: (material, status, customer) => {
       const params = new URLSearchParams();
       if (material) params.set("material", material);
       if (status) params.set("status", status);
+      if (customer !== undefined) params.set("customer", customer || "");
       const qs = params.toString();
       return request(`/stock/serials${qs ? `?${qs}` : ""}`);
     },
@@ -4072,13 +4134,13 @@ export default function App() {
       const d = deliveries.find((x) => x.id === selectedDelivery);
       content = <DeliveryDetail delivery={d} onBack={() => setSelectedDelivery(null)} onApprove={approveDelivery} onReject={rejectDelivery} onAssignStock={assignDeliveryStock} onShip={shipDelivery} onAddResi={addDeliveryResi} onAddBast={addDeliveryBast} onAdvance={advanceDelivery} role={role} materials={materials} api={api} />;
     } else content = <DeliveryList deliveries={deliveries} setSelected={setSelectedDelivery} setPage={goto} role={role} />;
-  } else if (page === "deliveryCreate") content = <DeliveryCreate onSubmit={submitDelivery} onCancel={() => goto("delivery")} materials={materials} sites={sites} homebases={homebases} />;
+  } else if (page === "deliveryCreate") content = <DeliveryCreate onSubmit={submitDelivery} onCancel={() => goto("delivery")} materials={materials} sites={sites} homebases={homebases} currentUser={currentUser} customers={customers} />;
   else if (page === "returnFaulty") {
     if (selectedReturn) {
       const r = returns.find((x) => x.id === selectedReturn);
       content = <ReturnFaultyDetail r={r} onBack={() => setSelectedReturn(null)} onApprove={approveReturn} onRevise={reviseReturn} onShip={shipReturn} onAddResi={addResiReturn} onReceive={receiveReturn} onQC={qcReturn} onComplete={completeReturn} onEdit={() => setPage("returnFaultyEdit")} role={role} />;
     } else content = <ReturnFaultyList returns={returns} setSelected={setSelectedReturn} setPage={goto} role={role} />;
-  } else if (page === "returnFaultyCreate") content = <ReturnFaultyCreate onSubmit={submitReturn} onCancel={() => goto("returnFaulty")} materials={materials} returns={returns} reconciliations={reconciliations} />;
+  } else if (page === "returnFaultyCreate") content = <ReturnFaultyCreate onSubmit={submitReturn} onCancel={() => goto("returnFaulty")} materials={materials} returns={returns} reconciliations={reconciliations} currentUser={currentUser} customers={customers} />;
   else if (page === "returnFaultyEdit") {
     const r = returns.find((x) => x.id === selectedReturn);
     content = <ReturnFaultyCreate
@@ -4090,6 +4152,8 @@ export default function App() {
       initialData={{ items: r.items, docs: r.docs }}
       excludeId={r.id}
       revisionNote={r.revisionNote}
+      currentUser={currentUser}
+      customers={customers}
     />;
   }
   else if (page === "reconciliation") {
@@ -4097,7 +4161,7 @@ export default function App() {
       const r = reconciliations.find((x) => x.id === selectedRecon);
       content = <ReconciliationDetail r={r} onBack={() => setSelectedRecon(null)} onApprove={approveRecon} onRevise={reviseRecon} onEdit={() => setPage("reconciliationEdit")} role={role} />;
     } else content = <ReconciliationList items={reconciliations} setSelected={setSelectedRecon} setPage={goto} role={role} />;
-  } else if (page === "reconciliationCreate") content = <ReconciliationCreate onSubmit={submitRecon} onCancel={() => goto("reconciliation")} materials={materials} returns={returns} reconciliations={reconciliations} homebases={homebases} />;
+  } else if (page === "reconciliationCreate") content = <ReconciliationCreate onSubmit={submitRecon} onCancel={() => goto("reconciliation")} materials={materials} returns={returns} reconciliations={reconciliations} homebases={homebases} currentUser={currentUser} customers={customers} />;
   else if (page === "reconciliationEdit") {
     const r = reconciliations.find((x) => x.id === selectedRecon);
     content = <ReconciliationCreate
@@ -4110,9 +4174,11 @@ export default function App() {
       initialData={{ homebase: r.homebase, period: r.period, items: r.items }}
       excludeId={r.id}
       revisionNote={r.revisionNote}
+      currentUser={currentUser}
+      customers={customers}
     />;
   }
-  else if (page === "stock") content = <WarehouseStock materials={materials} setPage={goto} setMovementFilter={setMovementFilter} setSerialMaterial={setSerialMaterial} onSubmitReceipt={createReceipt} showToast={showToast} clearSerialHighlight={() => setHighlightSerial("")} />;
+  else if (page === "stock") content = <WarehouseStock materials={materials} setPage={goto} setMovementFilter={setMovementFilter} setSerialMaterial={setSerialMaterial} onSubmitReceipt={createReceipt} showToast={showToast} clearSerialHighlight={() => setHighlightSerial("")} currentUser={currentUser} customers={customers} />;
   else if (page === "movement") content = <StockMovement movements={movements} filter={movementFilter} setFilter={setMovementFilter} deliveries={deliveries} />;
   else if (page === "serialDetail") content = <MaterialSerialDetail material={serialMaterial} api={api} onBack={() => goto("stock")} highlightSerial={highlightSerial} highlightToken={highlightToken} deliveries={deliveries} />;
   else if (page === "reports") content = <ReportsPage
@@ -4259,13 +4325,14 @@ export default function App() {
     title="User Management" subtitle="Kelola akses pengguna sistem"
     entityLabel="User" showToast={showToast}
     items={users} idField="id"
-    buildLabel={(u) => `${u.name} ${u.role} ${u.assignment}`}
+    buildLabel={(u) => `${u.name} ${u.role} ${u.assignment} ${u.customer || ""}`}
     onCreate={createUserAccount} onToggle={toggleUser} onUpdate={updateUserAccount}
     fields={[
       { key: "name", label: "Nama", required: true },
       { key: "username", label: "Username", required: true },
       { key: "password", label: "Password", required: true, createOnlyRequired: true, inputType: "password" },
       { key: "role", label: "Role", type: "select", options: Object.values(ROLES), required: true },
+      { key: "customer", label: "Divisi (Customer)", type: "select", options: customers.map((c) => c.name), required: true, showIf: (f) => f.role && f.role !== ROLES.MANAGER },
       { key: "assignment", label: "Homebase / Area", placeholder: "mis. Merauke, atau Semua Area" },
     ]}
   />;
@@ -4286,7 +4353,7 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-gray-50/50 font-sans text-gray-900" style={{ fontFamily: "'Inter', system-ui, sans-serif" }}>
-      <Sidebar page={page} setPage={goto} role={role} userName={currentUser?.name} mobileOpen={mobileSidebarOpen} onClose={() => setMobileSidebarOpen(false)} />
+      <Sidebar page={page} setPage={goto} role={role} userName={currentUser?.name} userCustomer={currentUser?.customer} mobileOpen={mobileSidebarOpen} onClose={() => setMobileSidebarOpen(false)} />
       <div className="flex-1 flex flex-col overflow-hidden">
         <TopBar
           user={currentUser} onLogout={handleLogout} title={titleMain} subtitle={titleSub}
