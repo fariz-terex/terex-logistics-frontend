@@ -1418,10 +1418,10 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, 
                 {delivery.bastDocument.startsWith("data:image/") ? (
                   <PhotoThumb src={delivery.bastDocument} alt="Dokumen BAST" className="w-full h-24 object-cover rounded-lg border border-gray-100" onOpen={setLightboxSrc} />
                 ) : (
-                  <a href={delivery.bastDocument} target="_blank" rel="noreferrer" className="flex flex-col items-center justify-center gap-1.5 w-full h-24 rounded-lg border border-gray-100 bg-gray-50 hover:bg-gray-100 transition-colors">
+                  <button onClick={() => openDataUrlInNewTab(delivery.bastDocument)} className="flex flex-col items-center justify-center gap-1.5 w-full h-24 rounded-lg border border-gray-100 bg-gray-50 hover:bg-gray-100 transition-colors">
                     <FileText size={22} className="text-gray-400" />
                     <span className="text-xs text-gray-500 px-2 truncate max-w-full">{delivery.bastFilename || "Lihat PDF"}</span>
-                  </a>
+                  </button>
                 )}
               </div>
             )}
@@ -1947,6 +1947,28 @@ function DocCheck({ label, checked, onToggle }) {
       <Camera size={15} className="ml-auto text-gray-300" />
     </button>
   );
+}
+
+/* Very long data: URIs (a base64 PDF can easily be a few MB of text) are
+   unreliable to open directly — some browsers cap URL length or refuse to
+   render them, showing a blank tab instead of the PDF (exactly what
+   happened when opening a BAST PDF this way). Converting to a Blob and
+   opening THAT URL instead is what browsers' native PDF viewers expect. */
+function openDataUrlInNewTab(dataUrl) {
+  try {
+    const [header, base64] = dataUrl.split(",");
+    const mime = header.match(/data:(.*?);base64/)?.[1] || "application/octet-stream";
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const blob = new Blob([bytes], { type: mime });
+    const blobUrl = URL.createObjectURL(blob);
+    window.open(blobUrl, "_blank");
+    // Revoke well after the new tab has had time to load the resource.
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+  } catch {
+    window.open(dataUrl, "_blank");
+  }
 }
 
 /* Real photo upload with thumbnail preview - stores a data URL so the checklist
