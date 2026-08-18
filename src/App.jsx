@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Package, Truck, Undo2, ClipboardList, Boxes, ArrowLeftRight,
   FileBarChart, Database, Users, Settings as SettingsIcon, ChevronDown, ChevronRight,
   Search, Bell, LogOut, Plus, Minus, X, Check, AlertTriangle, Camera, ChevronLeft,
-  Filter, Download, Upload, Eye, MapPin, Phone, User as UserIcon, Menu
+  Filter, Download, Upload, Eye, MapPin, Phone, User as UserIcon, Menu, FileText
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
@@ -1033,7 +1033,7 @@ function DeliveryCreate({ onSubmit, onCancel, materials, sites, homebases }) {
   );
 }
 
-function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, onShip, onAddResi, onAdvance, role, materials, api }) {
+function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, onShip, onAddResi, onAddBast, onAdvance, role, materials, api }) {
   // Stage 1 — Manager reviews qty only, no SN involved.
   const canApprove = role === ROLES.MANAGER && delivery.status === "Waiting Logistics Approval";
   // Stage 2 — Logistics Staff (or Manager) picks the actual units to fulfill it.
@@ -1042,6 +1042,7 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, 
   const canShip = (role === ROLES.LOGISTICS || role === ROLES.MANAGER) && delivery.status === "Preparing";
   const canEditResi = (role === ROLES.LOGISTICS || role === ROLES.MANAGER) && ["Shipped", "Delivered"].includes(delivery.status);
   const hasResi = !!(delivery.resiNumber || delivery.resiPhoto);
+  const canEditBast = (role === ROLES.LOGISTICS || role === ROLES.MANAGER) && ["Shipped", "Delivered"].includes(delivery.status);
   const canAdvance = (role === ROLES.LOGISTICS || role === ROLES.MANAGER) && delivery.status === "Shipped";
 
   const [approving, setApproving] = useState(false);
@@ -1150,6 +1151,11 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, 
   const [resiInput, setResiInput] = useState("");
   const [resiPhotoInput, setResiPhotoInput] = useState("");
   const [showResiInput, setShowResiInput] = useState(false);
+
+  // ---- BAST (Berita Acara Serah Terima — optional, added after shipping) ----
+  const [bastInput, setBastInput] = useState("");
+  const [bastNameInput, setBastNameInput] = useState("");
+  const [showBastInput, setShowBastInput] = useState(false);
 
   const [lightboxSrc, setLightboxSrc] = useState(null);
 
@@ -1386,6 +1392,50 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, 
                     onClick={() => {
                       onAddResi(delivery.id, { resiNumber: resiInput.trim() || undefined, resiPhoto: resiPhotoInput || undefined });
                       setShowResiInput(false); setResiInput(""); setResiPhotoInput("");
+                    }}
+                  >
+                    Simpan
+                  </PrimaryButton>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="pt-2 border-t border-gray-50 space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="text-sm text-gray-600">
+                BAST: <span className="font-medium text-gray-800">{delivery.bastDocument ? (delivery.bastFilename || "Dokumen terupload") : "Belum tersedia (optional)"}</span>
+              </div>
+              {canEditBast && !showBastInput && (
+                <GhostButton onClick={() => { setBastInput(delivery.bastDocument || ""); setBastNameInput(delivery.bastFilename || ""); setShowBastInput(true); }}>
+                  {delivery.bastDocument ? "Ganti BAST" : "+ Upload BAST"}
+                </GhostButton>
+              )}
+            </div>
+
+            {delivery.bastDocument && !showBastInput && (
+              <div className="w-32">
+                {delivery.bastDocument.startsWith("data:image/") ? (
+                  <PhotoThumb src={delivery.bastDocument} alt="Dokumen BAST" className="w-full h-24 object-cover rounded-lg border border-gray-100" onOpen={setLightboxSrc} />
+                ) : (
+                  <a href={delivery.bastDocument} target="_blank" rel="noreferrer" className="flex flex-col items-center justify-center gap-1.5 w-full h-24 rounded-lg border border-gray-100 bg-gray-50 hover:bg-gray-100 transition-colors">
+                    <FileText size={22} className="text-gray-400" />
+                    <span className="text-xs text-gray-500 px-2 truncate max-w-full">{delivery.bastFilename || "Lihat PDF"}</span>
+                  </a>
+                )}
+              </div>
+            )}
+
+            {showBastInput && (
+              <div className="space-y-3 pt-1">
+                <DocumentUpload label="Upload Dokumen BAST" value={bastInput} valueName={bastNameInput} onChange={(v, name) => { setBastInput(v); setBastNameInput(name); }} />
+                <div className="flex justify-end gap-2">
+                  <GhostButton onClick={() => { setShowBastInput(false); setBastInput(""); setBastNameInput(""); }}>Batal</GhostButton>
+                  <PrimaryButton
+                    disabled={!bastInput}
+                    onClick={() => {
+                      onAddBast(delivery.id, { bastDocument: bastInput, bastFilename: bastNameInput });
+                      setShowBastInput(false); setBastInput(""); setBastNameInput("");
                     }}
                   >
                     Simpan
@@ -1973,6 +2023,54 @@ function PhotoUpload({ label, value, onChange, compact }) {
         )}
         <span className={value ? "text-gray-800 font-medium" : "text-gray-500"}>{compressing ? "Memproses foto..." : label}</span>
         <span className="ml-auto text-xs text-gray-400">{value ? "Ganti foto" : "Ambil / pilih foto"}</span>
+      </button>
+    </div>
+  );
+}
+
+/* Upload for formal documents like BAST — accepts PDF or a scanned photo.
+   Images get compressed the same way PhotoUpload does; PDFs are read as-is
+   since they can't go through canvas resizing. */
+function DocumentUpload({ label, value, valueName, onChange }) {
+  const inputRef = React.useRef(null);
+  const [processing, setProcessing] = useState(false);
+
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setProcessing(true);
+    try {
+      if (file.type.startsWith("image/")) {
+        const compressed = await compressImage(file);
+        onChange(compressed, file.name);
+      } else {
+        const dataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = () => reject(new Error("Gagal membaca file"));
+          reader.readAsDataURL(file);
+        });
+        onChange(dataUrl, file.name);
+      }
+    } catch {
+      // ignore — user can just retry the upload
+    } finally {
+      setProcessing(false);
+      e.target.value = "";
+    }
+  };
+
+  return (
+    <div>
+      <input ref={inputRef} type="file" accept="application/pdf,image/*" className="hidden" onChange={handleFile} />
+      <button onClick={() => inputRef.current?.click()} disabled={processing} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl border text-sm text-left transition-colors ${value ? "border-emerald-200 bg-emerald-50/50" : "border-gray-200"}`}>
+        <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${value ? "bg-emerald-100 text-emerald-700" : "bg-gray-100 text-gray-400"}`}>
+          <FileText size={16} />
+        </div>
+        <span className={value ? "text-gray-800 font-medium truncate" : "text-gray-500"}>
+          {processing ? "Memproses dokumen..." : value ? (valueName || "Dokumen terupload") : label}
+        </span>
+        <span className="ml-auto text-xs text-gray-400 shrink-0">{value ? "Ganti" : "Upload PDF / Foto"}</span>
       </button>
     </div>
   );
@@ -3309,6 +3407,7 @@ function createApiClient(baseUrl, getToken) {
     assignDeliveryStock: (id, serialSelections) => request(`/deliveries/${id}/assign-stock`, { method: "POST", body: serialSelections ? { serialSelections } : {} }),
     shipDelivery: (id, payload) => request(`/deliveries/${id}/ship`, { method: "POST", body: payload }),
     addDeliveryResi: (id, payload) => request(`/deliveries/${id}/resi`, { method: "POST", body: payload }),
+    addDeliveryBast: (id, payload) => request(`/deliveries/${id}/bast`, { method: "POST", body: payload }),
     advanceDelivery: (id, payload) => request(`/deliveries/${id}/advance`, { method: "POST", body: payload }),
 
     getReturns: () => request("/returns"),
@@ -3714,6 +3813,13 @@ export default function App() {
     } catch (err) { setApiError(err.message); }
   };
 
+  const addDeliveryBast = async (id, payload) => {
+    try {
+      const updated = await api.addDeliveryBast(id, payload);
+      setDeliveries((prev) => prev.map((d) => (d.id === id ? updated : d)));
+    } catch (err) { setApiError(err.message); }
+  };
+
   const rejectDelivery = async (id) => {
     try {
       const updated = await api.rejectDelivery(id);
@@ -3942,7 +4048,7 @@ export default function App() {
   else if (page === "delivery") {
     if (selectedDelivery) {
       const d = deliveries.find((x) => x.id === selectedDelivery);
-      content = <DeliveryDetail delivery={d} onBack={() => setSelectedDelivery(null)} onApprove={approveDelivery} onReject={rejectDelivery} onAssignStock={assignDeliveryStock} onShip={shipDelivery} onAddResi={addDeliveryResi} onAdvance={advanceDelivery} role={role} materials={materials} api={api} />;
+      content = <DeliveryDetail delivery={d} onBack={() => setSelectedDelivery(null)} onApprove={approveDelivery} onReject={rejectDelivery} onAssignStock={assignDeliveryStock} onShip={shipDelivery} onAddResi={addDeliveryResi} onAddBast={addDeliveryBast} onAdvance={advanceDelivery} role={role} materials={materials} api={api} />;
     } else content = <DeliveryList deliveries={deliveries} setSelected={setSelectedDelivery} setPage={goto} role={role} />;
   } else if (page === "deliveryCreate") content = <DeliveryCreate onSubmit={submitDelivery} onCancel={() => goto("delivery")} materials={materials} sites={sites} homebases={homebases} />;
   else if (page === "returnFaulty") {
