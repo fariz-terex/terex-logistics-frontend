@@ -1,0 +1,924 @@
+From 03ed5726d9bead87095563fb0996a6fec31d75c3 Mon Sep 17 00:00:00 2001
+From: TEREX Dev <dev@terex.local>
+Date: Thu, 20 Aug 2026 05:04:45 +0000
+Subject: [PATCH] Add Tools/Peminjaman Alat module UI: Master Alat, Stock Alat,
+ checkout/return flow
+
+---
+ src/App.jsx | 797 +++++++++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 793 insertions(+), 4 deletions(-)
+
+diff --git a/src/App.jsx b/src/App.jsx
+index 4caaad5..ebd4bf7 100644
+--- a/src/App.jsx
++++ b/src/App.jsx
+@@ -3,7 +3,7 @@ import {
+   LayoutDashboard, Package, Truck, Undo2, ClipboardList, Boxes, ArrowLeftRight,
+   FileBarChart, Database, Users, Settings as SettingsIcon, ChevronDown, ChevronRight,
+   Search, Bell, LogOut, Plus, Minus, X, Check, AlertTriangle, Camera, ChevronLeft,
+-  Filter, Download, Upload, Eye, MapPin, Phone, User as UserIcon, Menu, FileText
++  Filter, Download, Upload, Eye, MapPin, Phone, User as UserIcon, Menu, FileText, Wrench
+ } from "lucide-react";
+ import {
+   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
+@@ -188,6 +188,8 @@ const NAV_ACCESS = {
+   receipts: [ROLES.MANAGER, ROLES.LOGISTICS],
+   reports: [ROLES.MANAGER, ROLES.LOGISTICS],
+   reportsDeviceLocation: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV],
++  toolCheckouts: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV, ROLES.TECH],
++  toolStock: [ROLES.MANAGER, ROLES.LOGISTICS],
+   master: [ROLES.MANAGER],
+   users: [ROLES.MANAGER],
+   settings: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV, ROLES.TECH],
+@@ -227,6 +229,11 @@ const STATUS_STYLES = {
+   "Reserved": "bg-blue-50 text-blue-700",
+   "In Transit": "bg-indigo-50 text-indigo-700",
+   "Faulty": "bg-red-50 text-red-700",
++  "Waiting Approval": "bg-amber-50 text-amber-700",
++  "Checked Out": "bg-indigo-50 text-indigo-700",
++  "Returned": "bg-emerald-50 text-emerald-700",
++  "Available": "bg-emerald-50 text-emerald-700",
++  "Under Repair": "bg-red-50 text-red-700",
+ };
+ 
+ function StatusBadge({ status }) {
+@@ -368,6 +375,13 @@ const NAV_TREE = [
+       { key: "movement", label: "Stock Movement" },
+     ],
+   },
++  {
++    key: "toolsGroup", label: "Peralatan", icon: Wrench,
++    children: [
++      { key: "toolCheckouts", label: "Peminjaman Alat" },
++      { key: "toolStock", label: "Stock Alat" },
++    ],
++  },
+   {
+     key: "reportsGroup", label: "Reports", icon: FileBarChart,
+     children: [
+@@ -385,6 +399,7 @@ const NAV_TREE = [
+       { key: "masterHomebase", label: "Master Homebase" },
+       { key: "masterArea", label: "Master Area" },
+       { key: "masterCustomer", label: "Master Customer" },
++      { key: "masterTools", label: "Master Alat" },
+     ],
+   },
+   { key: "users", label: "User Management", icon: Users },
+@@ -395,9 +410,10 @@ function hasAccess(key, role) {
+   const map = {
+     delivery: NAV_ACCESS.delivery, returnFaulty: NAV_ACCESS.returnFaulty, reconciliation: NAV_ACCESS.reconciliation,
+     stock: NAV_ACCESS.stock, movement: NAV_ACCESS.movement,
++    toolCheckouts: NAV_ACCESS.toolCheckouts, toolStock: NAV_ACCESS.toolStock,
+     reports: NAV_ACCESS.reports, reportsFaulty: NAV_ACCESS.reports, reportsRecon: NAV_ACCESS.reports, reportsDeviceLocation: NAV_ACCESS.reportsDeviceLocation,
+     masterMaterial: NAV_ACCESS.master, masterSite: NAV_ACCESS.master, masterHomebase: NAV_ACCESS.master,
+-    masterArea: NAV_ACCESS.master, masterCustomer: NAV_ACCESS.master,
++    masterArea: NAV_ACCESS.master, masterCustomer: NAV_ACCESS.master, masterTools: NAV_ACCESS.master,
+     users: NAV_ACCESS.users, dashboard: NAV_ACCESS.dashboard, settings: NAV_ACCESS.settings,
+   };
+   const allowed = map[key];
+@@ -2819,6 +2835,601 @@ function ReconciliationDetail({ r, onBack, onApprove, onRevise, onEdit, role })
+   );
+ }
+ 
++/* ============================================================
++   TOOLS / PERALATAN (Peminjaman Alat)
++   Separate pool from materials — round-trip (checkout/return), no
++   division split. Mirrors the Warehouse Stock + Delivery Request patterns
++   but simplified: single-stage approval (Logistics picks SN and hands
++   over in one step), and returns come back as a whole transaction.
++   ============================================================ */
++
++function ToolStockPage({ tools, setPage, setToolSerialName, onSubmitReceipt, showToast }) {
++  const [search, setSearch] = useState("");
++  const [showReceiptForm, setShowReceiptForm] = useState(false);
++  const filtered = tools.filter((t) => t.name.toLowerCase().includes(search.toLowerCase()));
++
++  return (
++    <div className="p-4 sm:p-8 space-y-5">
++      <SectionTitle
++        title="Stock Alat" subtitle="Ketersediaan peralatan kerja — dipinjam & dikembalikan, tanpa pembagian divisi"
++        right={<PrimaryButton onClick={() => setShowReceiptForm(!showReceiptForm)}><Plus size={16} /> Terima Alat</PrimaryButton>}
++      />
++
++      {showReceiptForm && (
++        <ToolReceiptForm tools={tools} onCancel={() => setShowReceiptForm(false)} onSubmit={onSubmitReceipt} showToast={showToast} />
++      )}
++
++      <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2.5 w-80">
++        <Search size={16} className="text-gray-400" />
++        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari alat..." className="bg-transparent text-sm outline-none w-full" />
++      </div>
++      <Card className="overflow-hidden">
++        <div className="overflow-x-auto">
++        <table className="w-full text-sm">
++          <thead>
++            <tr className="text-left text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
++              <th className="px-5 py-3 font-medium">Alat</th>
++              <th className="px-5 py-3 font-medium">Category</th>
++              <th className="px-5 py-3 font-medium">Available</th>
++              <th className="px-5 py-3 font-medium">Checked Out</th>
++              <th className="px-5 py-3 font-medium">Under Repair</th>
++              <th className="px-5 py-3 font-medium">Total</th>
++              <th className="px-5 py-3 font-medium"></th>
++            </tr>
++          </thead>
++          <tbody>
++            {filtered.map((t) => {
++              const total = t.available + t.checked_out + t.under_repair;
++              const low = t.available <= t.min_stock;
++              return (
++                <tr key={t.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/50">
++                  <td className="px-5 py-3">
++                    <div className="font-medium text-gray-800">{t.name}</div>
++                    {low && <div className="text-xs text-red-600 font-medium mt-0.5 flex items-center gap-1"><AlertTriangle size={11} /> Mendekati stok minimum ({t.min_stock})</div>}
++                  </td>
++                  <td className="px-5 py-3 text-gray-500">{t.category}</td>
++                  <td className="px-5 py-3 font-semibold text-emerald-700">{t.available}</td>
++                  <td className="px-5 py-3 text-indigo-600">{t.checked_out}</td>
++                  <td className="px-5 py-3 text-red-600">{t.under_repair}</td>
++                  <td className="px-5 py-3 font-medium text-gray-800">{total}</td>
++                  <td className="px-5 py-3">
++                    {t.serialized === true || t.serialized === 1 ? (
++                      <button onClick={() => { setToolSerialName(t.name); setPage("toolSerialDetail"); }} className="text-emerald-800 text-xs font-medium">Lihat SN</button>
++                    ) : null}
++                  </td>
++                </tr>
++              );
++            })}
++            {filtered.length === 0 && <tr><td colSpan={7}><EmptyState text="Belum ada data alat." /></td></tr>}
++          </tbody>
++        </table>
++        </div>
++      </Card>
++    </div>
++  );
++}
++
++function ToolSerialDetail({ toolName, api, onBack }) {
++  const [status, setStatus] = useState("All");
++  const [serials, setSerials] = useState([]);
++  const [loading, setLoading] = useState(true);
++  const [search, setSearch] = useState("");
++
++  React.useEffect(() => {
++    let cancelled = false;
++    setLoading(true);
++    api.getToolSerials(toolName, status === "All" ? undefined : status)
++      .then((data) => { if (!cancelled) { setSerials(data); setLoading(false); } })
++      .catch(() => { if (!cancelled) setLoading(false); });
++    return () => { cancelled = true; };
++  }, [toolName, status]);
++
++  const filtered = search ? serials.filter((s) => s.sn.toLowerCase().includes(search.toLowerCase())) : serials;
++  const statusOptions = ["All", "Available", "Checked Out", "Under Repair"];
++
++  return (
++    <div className="p-4 sm:p-8 space-y-5">
++      <button onClick={onBack} className="text-sm text-gray-500 flex items-center gap-1 hover:text-gray-800"><ChevronLeft size={16} /> Kembali ke Stock Alat</button>
++      <SectionTitle title={`Serial Number — ${toolName}`} subtitle="Daftar unit alat dan status terkininya" />
++      <div className="flex flex-wrap gap-2">
++        {statusOptions.map((s) => (
++          <button key={s} onClick={() => setStatus(s)} className={`px-3 py-1.5 rounded-lg text-xs font-medium border ${status === s ? "bg-emerald-800 text-white border-emerald-800" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}>
++            {s}
++          </button>
++        ))}
++      </div>
++      <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2.5 w-80">
++        <Search size={16} className="text-gray-400" />
++        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari Serial Number..." className="bg-transparent text-sm outline-none w-full" />
++      </div>
++      <Card className="overflow-hidden">
++        <div className="overflow-x-auto">
++        <table className="w-full text-sm">
++          <thead>
++            <tr className="text-left text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
++              <th className="px-5 py-3 font-medium">Serial Number</th>
++              <th className="px-5 py-3 font-medium">Status</th>
++              <th className="px-5 py-3 font-medium">Referensi</th>
++            </tr>
++          </thead>
++          <tbody>
++            {loading ? (
++              <tr><td colSpan={3}><div className="py-10 text-center text-sm text-gray-400">Memuat...</div></td></tr>
++            ) : filtered.length === 0 ? (
++              <tr><td colSpan={3}><EmptyState text="Tidak ada Serial Number untuk filter ini." /></td></tr>
++            ) : (
++              filtered.map((s) => (
++                <tr key={s.sn} className="border-b border-gray-50 last:border-0">
++                  <td className="px-5 py-3 font-medium text-gray-800">{s.sn}</td>
++                  <td className="px-5 py-3"><StatusBadge status={s.status} /></td>
++                  <td className="px-5 py-3 text-gray-500 text-xs">{s.current_ref || s.received_ref || "-"}</td>
++                </tr>
++              ))
++            )}
++          </tbody>
++        </table>
++        </div>
++      </Card>
++    </div>
++  );
++}
++
++function ToolReceiptForm({ tools, onSubmit, onCancel, showToast }) {
++  const [tool, setTool] = useState("");
++  const [serials, setSerials] = useState([""]);
++  const [qty, setQty] = useState(1);
++  const [note, setNote] = useState("");
++  const [saving, setSaving] = useState(false);
++  const [error, setError] = useState("");
++  const [bulkMode, setBulkMode] = useState(false);
++  const [bulkText, setBulkText] = useState("");
++
++  const t = tools.find((x) => x.name === tool);
++  const addSN = () => setSerials([...serials, ""]);
++  const updateSN = (i, val) => setSerials(serials.map((s, idx) => (idx === i ? val : s)));
++  const removeSN = (i) => setSerials(serials.filter((_, idx) => idx !== i));
++  const bulkSerials = bulkText.split(/[\n,;\t]+/).map((s) => s.trim()).filter(Boolean);
++  const trimmedSerials = bulkMode ? bulkSerials : serials.map((s) => s.trim()).filter(Boolean);
++  const hasDuplicates = new Set(trimmedSerials).size !== trimmedSerials.length;
++  const valid = t && (t.serialized ? trimmedSerials.length > 0 && !hasDuplicates : qty > 0);
++
++  const submit = async () => {
++    setSaving(true); setError("");
++    const submittedTool = tool;
++    const submittedQty = t.serialized ? trimmedSerials.length : qty;
++    try {
++      await onSubmit(t.serialized ? { tool, serials: trimmedSerials, note } : { tool, qty, note });
++      showToast(`Berhasil menerima ${submittedQty} unit ${submittedTool}`);
++      setTool(""); setSerials([""]); setQty(1); setNote(""); setBulkText("");
++    } catch (err) {
++      setError(err.message || "Gagal menyimpan penerimaan alat");
++    } finally {
++      setSaving(false);
++    }
++  };
++
++  return (
++    <Card className="p-5 space-y-4">
++      <div className="text-sm font-semibold text-gray-800">Terima Alat</div>
++      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
++        <div>
++          <label className="text-xs font-medium text-gray-500">Alat <span className="text-red-500">*</span></label>
++          <select value={tool} onChange={(e) => { setTool(e.target.value); setSerials([""]); setBulkText(""); }} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600">
++            <option value="">Pilih alat...</option>
++            {tools.filter((x) => x.status === "Active").map((x) => <option key={x.id} value={x.name}>{x.name} {x.serialized ? "(Serialized)" : ""}</option>)}
++          </select>
++        </div>
++        {t && !t.serialized && (
++          <div>
++            <label className="text-xs font-medium text-gray-500">Qty <span className="text-red-500">*</span></label>
++            <input type="number" min={1} value={qty} onChange={(e) => setQty(Number(e.target.value))} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
++          </div>
++        )}
++        <div className={t && !t.serialized ? "" : "sm:col-span-2"}>
++          <label className="text-xs font-medium text-gray-500">Catatan <span className="text-gray-400 font-normal">(opsional)</span></label>
++          <input value={note} onChange={(e) => setNote(e.target.value)} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
++        </div>
++      </div>
++
++      {t && t.serialized && (
++        <div className="space-y-3 pt-2 border-t border-gray-50">
++          <div className="flex items-center justify-between">
++            <div className="text-sm font-semibold text-gray-800">Serial Number Unit Baru</div>
++            <div className="flex items-center gap-3">
++              {!bulkMode && <button onClick={addSN} className="text-xs text-emerald-800 font-medium flex items-center gap-1"><Plus size={14} /> Add SN</button>}
++              <button onClick={() => { setBulkMode(!bulkMode); setSerials([""]); setBulkText(""); }} className="text-xs text-gray-500 font-medium underline decoration-dotted">
++                {bulkMode ? "Input satu-satu" : "Tempel banyak SN sekaligus"}
++              </button>
++            </div>
++          </div>
++          {bulkMode ? (
++            <div className="space-y-1.5">
++              <textarea value={bulkText} onChange={(e) => setBulkText(e.target.value)} placeholder={"Tempel daftar Serial Number, satu per baris."} rows={6} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600 font-mono" />
++              <div className="text-xs text-gray-400">{trimmedSerials.length} SN terdeteksi.</div>
++            </div>
++          ) : (
++            serials.map((s, i) => (
++              <div key={i} className="flex items-center gap-2">
++                <span className="text-xs text-gray-400 w-5">{i + 1}.</span>
++                <input value={s} onChange={(e) => updateSN(i, e.target.value)} placeholder="Masukkan Serial Number" className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
++                {serials.length > 1 && <button onClick={() => removeSN(i)} className="text-gray-300 hover:text-red-500"><X size={16} /></button>}
++              </div>
++            ))
++          )}
++          {hasDuplicates && <div className="text-xs text-red-600">Ada Serial Number duplikat dalam daftar ini.</div>}
++          <div className="text-xs text-gray-400">Total unit: {trimmedSerials.length}</div>
++        </div>
++      )}
++
++      {error && <div className="bg-red-50 border border-red-100 text-red-700 text-xs rounded-lg px-3 py-2">{error}</div>}
++      <div className="flex justify-end gap-2">
++        <GhostButton onClick={onCancel}>Batal</GhostButton>
++        <PrimaryButton disabled={!valid || saving} onClick={submit}>{saving ? "Menyimpan..." : "Simpan Penerimaan"}</PrimaryButton>
++      </div>
++    </Card>
++  );
++}
++
++function ToolCheckoutList({ checkouts, setSelected, setPage, role }) {
++  const [filter, setFilter] = useState("All");
++  const statuses = ["All", "Waiting Approval", "Checked Out", "Returned", "Rejected"];
++  const filtered = filter === "All" ? checkouts : checkouts.filter((c) => c.status === filter);
++
++  return (
++    <div className="p-4 sm:p-8 space-y-5">
++      <SectionTitle
++        title="Peminjaman Alat" subtitle="Pinjam & kembalikan peralatan kerja"
++        right={<PrimaryButton onClick={() => setPage("toolCheckoutCreate")}><Plus size={16} /> Ajukan Peminjaman</PrimaryButton>}
++      />
++      <div className="flex flex-wrap gap-2">
++        {statuses.map((s) => (
++          <button key={s} onClick={() => setFilter(s)} className={`px-3 py-1.5 rounded-lg text-xs font-medium border ${filter === s ? "bg-emerald-800 text-white border-emerald-800" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}>{s}</button>
++        ))}
++      </div>
++      <Card className="overflow-hidden">
++        <div className="overflow-x-auto">
++        <table className="w-full text-sm">
++          <thead>
++            <tr className="text-left text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
++              <th className="px-5 py-3 font-medium">No. Peminjaman</th>
++              <th className="px-5 py-3 font-medium">Requester</th>
++              <th className="px-5 py-3 font-medium">Homebase</th>
++              <th className="px-5 py-3 font-medium">Keperluan</th>
++              <th className="px-5 py-3 font-medium">Tgl</th>
++              <th className="px-5 py-3 font-medium">Status</th>
++              <th className="px-5 py-3 font-medium"></th>
++            </tr>
++          </thead>
++          <tbody>
++            {filtered.map((c) => (
++              <tr key={c.id} className="border-b border-gray-50 last:border-0">
++                <td className="px-5 py-3 font-medium text-gray-800">{c.id}</td>
++                <td className="px-5 py-3 text-gray-600">{c.requester}</td>
++                <td className="px-5 py-3 text-gray-600">{c.homebase}</td>
++                <td className="px-5 py-3 text-gray-600">{c.purpose}</td>
++                <td className="px-5 py-3 text-gray-500">{c.date}</td>
++                <td className="px-5 py-3"><StatusBadge status={c.status} /></td>
++                <td className="px-5 py-3"><button onClick={() => setSelected(c.id)} className="text-emerald-800 text-xs font-medium flex items-center gap-1"><Eye size={13} /> Detail</button></td>
++              </tr>
++            ))}
++            {filtered.length === 0 && <tr><td colSpan={7}><EmptyState text="Belum ada peminjaman alat." /></td></tr>}
++          </tbody>
++        </table>
++        </div>
++      </Card>
++    </div>
++  );
++}
++
++function ToolCheckoutCreate({ tools, homebases, onSubmit, onCancel }) {
++  const [homebase, setHomebase] = useState("");
++  const [purpose, setPurpose] = useState("");
++  const [note, setNote] = useState("");
++  const [expectedReturn, setExpectedReturn] = useState("");
++  const [cart, setCart] = useState({});
++  const [search, setSearch] = useState("");
++
++  const filteredTools = tools.filter((t) => t.status === "Active" && t.name.toLowerCase().includes(search.toLowerCase()));
++  const updateQty = (id, delta) => setCart((c) => ({ ...c, [id]: Math.max(0, (c[id] || 0) + delta) }));
++  const cartItems = Object.entries(cart).filter(([, q]) => q > 0).map(([id, q]) => ({ tool: tools.find((t) => t.id === id), qty: q }));
++  const valid = homebase && purpose.trim() && cartItems.length > 0 && cartItems.every((i) => i.qty <= i.tool.available);
++
++  return (
++    <div className="p-4 sm:p-8 max-w-3xl mx-auto space-y-6">
++      <SectionTitle title="Ajukan Peminjaman Alat" subtitle="Pilih alat yang ingin dipinjam" />
++      <Card className="p-6 space-y-4">
++        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
++          <div>
++            <label className="text-sm font-medium text-gray-700">Homebase <span className="text-red-500">*</span></label>
++            <select value={homebase} onChange={(e) => setHomebase(e.target.value)} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600">
++              <option value="">Pilih homebase...</option>
++              {homebases.filter((h) => h.status === "Active").map((h) => <option key={h.code} value={h.name}>{h.name}</option>)}
++            </select>
++          </div>
++          <div>
++            <label className="text-sm font-medium text-gray-700">Estimasi Kembali <span className="text-gray-400 font-normal">(opsional)</span></label>
++            <input type="date" value={expectedReturn} onChange={(e) => setExpectedReturn(e.target.value)} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
++          </div>
++        </div>
++        <div>
++          <label className="text-sm font-medium text-gray-700">Keperluan <span className="text-red-500">*</span></label>
++          <input value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder="mis. Instalasi fiber pelanggan" className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
++        </div>
++        <div>
++          <label className="text-sm font-medium text-gray-700">Catatan <span className="text-gray-400 font-normal">(opsional)</span></label>
++          <input value={note} onChange={(e) => setNote(e.target.value)} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
++        </div>
++      </Card>
++
++      <Card className="p-6 space-y-4">
++        <div className="text-sm font-semibold text-gray-800">Pilih Alat</div>
++        <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
++          <Search size={16} className="text-gray-400" />
++          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari alat..." className="bg-transparent text-sm outline-none w-full" />
++        </div>
++        <div className="divide-y divide-gray-50 max-h-80 overflow-y-auto">
++          {filteredTools.map((t) => (
++            <div key={t.id} className="flex items-center justify-between py-3">
++              <div>
++                <div className="text-sm font-medium text-gray-800">{t.name}</div>
++                <div className="text-xs text-gray-400">Available: {t.available}</div>
++              </div>
++              <div className="flex items-center gap-3">
++                <button onClick={() => updateQty(t.id, -1)} className="w-7 h-7 rounded-lg border border-gray-200 flex items-center justify-center text-gray-500 hover:bg-gray-50"><Minus size={14} /></button>
++                <span className="w-6 text-center text-sm font-medium">{cart[t.id] || 0}</span>
++                <button onClick={() => updateQty(t.id, 1)} disabled={(cart[t.id] || 0) >= t.available} className="w-7 h-7 rounded-lg border border-gray-200 flex items-center justify-center text-gray-500 hover:bg-gray-50 disabled:opacity-30"><Plus size={14} /></button>
++              </div>
++            </div>
++          ))}
++          {filteredTools.length === 0 && <div className="py-6 text-center text-sm text-gray-400">Tidak ada alat ditemukan.</div>}
++        </div>
++      </Card>
++
++      <div className="flex justify-between">
++        <GhostButton onClick={onCancel}>Batal</GhostButton>
++        <PrimaryButton
++          disabled={!valid}
++          onClick={() => onSubmit({ homebase, purpose, note, expectedReturn: expectedReturn || undefined, items: cartItems.map((i) => ({ tool: i.tool.name, qty: i.qty })) })}
++        >
++          Ajukan Peminjaman
++        </PrimaryButton>
++      </div>
++    </div>
++  );
++}
++
++function ToolCheckoutDetail({ checkout, onBack, onApprove, onReject, onReturn, role, tools, api }) {
++  const canApprove = (role === ROLES.LOGISTICS || role === ROLES.MANAGER) && checkout.status === "Waiting Approval";
++  const canReturn = checkout.status === "Checked Out";
++
++  const serializedItems = checkout.items.filter((i) => tools.find((t) => t.name === i.tool)?.serialized);
++  const [availableSerials, setAvailableSerials] = useState({});
++  const [selectedSerials, setSelectedSerials] = useState({});
++  const [loadingSerials, setLoadingSerials] = useState(false);
++  const [handoverPhoto, setHandoverPhoto] = useState("");
++  const [approving, setApproving] = useState(false);
++  const [confirmApprove, setConfirmApprove] = useState(false);
++
++  React.useEffect(() => {
++    if (!canApprove || serializedItems.length === 0) return;
++    let cancelled = false;
++    setLoadingSerials(true);
++    Promise.all(serializedItems.map((i) => api.getToolSerials(i.tool, "Available").then((data) => [i.tool, data])))
++      .then((results) => { if (!cancelled) { const map = {}; results.forEach(([t, d]) => { map[t] = d; }); setAvailableSerials(map); } })
++      .finally(() => { if (!cancelled) setLoadingSerials(false); });
++    return () => { cancelled = true; };
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [checkout.id, canApprove]);
++
++  const toggleSerial = (tool, sn, qty) => {
++    setSelectedSerials((prev) => {
++      const current = new Set(prev[tool] || []);
++      if (current.has(sn)) current.delete(sn);
++      else { if (current.size >= qty) return prev; current.add(sn); }
++      return { ...prev, [tool]: current };
++    });
++  };
++  const allSelected = serializedItems.every((i) => (selectedSerials[i.tool]?.size || 0) === i.qty);
++  const approveDisabled = serializedItems.length > 0 && (!allSelected || loadingSerials);
++
++  const handleApprove = async () => {
++    setApproving(true);
++    try {
++      let serialSelections;
++      if (serializedItems.length > 0) {
++        serialSelections = {};
++        serializedItems.forEach((i) => { serialSelections[i.tool] = Array.from(selectedSerials[i.tool] || []); });
++      }
++      await onApprove(checkout.id, { serialSelections, handoverPhoto: handoverPhoto || undefined });
++    } finally {
++      setApproving(false);
++    }
++  };
++
++  // ---- Return ----
++  const [returnCondition, setReturnCondition] = useState("Baik");
++  const [returnNote, setReturnNote] = useState("");
++  const [returnPhoto, setReturnPhoto] = useState("");
++  const [returning, setReturning] = useState(false);
++  const [confirmReturn, setConfirmReturn] = useState(false);
++  const [lightboxSrc, setLightboxSrc] = useState(null);
++
++  const handleReturn = async () => {
++    setReturning(true);
++    try {
++      await onReturn(checkout.id, { returnCondition, returnNote, returnPhoto: returnPhoto || undefined });
++    } finally {
++      setReturning(false);
++    }
++  };
++
++  return (
++    <div className="p-4 sm:p-8 max-w-4xl mx-auto space-y-5">
++      <button onClick={onBack} className="text-sm text-gray-500 flex items-center gap-1 hover:text-gray-800"><ChevronLeft size={16} /> Kembali ke daftar</button>
++      <div className="flex items-start justify-between">
++        <div>
++          <div className="text-xl font-bold text-gray-900">{checkout.id}</div>
++          <div className="text-sm text-gray-500 mt-1">Diajukan oleh {checkout.requester} · {checkout.date}</div>
++        </div>
++        <StatusBadge status={checkout.status} />
++      </div>
++
++      <Card className="p-5 grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
++        <div><div className="text-gray-400 text-xs">Homebase</div><div className="font-medium text-gray-800">{checkout.homebase}</div></div>
++        <div><div className="text-gray-400 text-xs">Keperluan</div><div className="font-medium text-gray-800">{checkout.purpose}</div></div>
++        <div><div className="text-gray-400 text-xs">Estimasi Kembali</div><div className="font-medium text-gray-800">{checkout.expectedReturn || "-"}</div></div>
++        <div><div className="text-gray-400 text-xs">Catatan</div><div className="font-medium text-gray-800">{checkout.note || "-"}</div></div>
++      </Card>
++
++      <Card className="p-5">
++        <SectionTitle title="Alat Diajukan" />
++        <div className="divide-y divide-gray-50">
++          {checkout.items.map((i, idx) => (
++            <div key={idx} className="py-2.5 text-sm">
++              <div className="flex justify-between">
++                <span className="text-gray-700">{i.tool}</span>
++                <span className="font-medium text-gray-800">Qty {i.qty}</span>
++              </div>
++              {i.serials?.length > 0 && (
++                <div className="flex flex-wrap gap-1.5 mt-1.5">
++                  {i.serials.map((sn) => <span key={sn} className="text-xs bg-gray-50 rounded-full px-2 py-0.5 text-gray-500">{sn}</span>)}
++                </div>
++              )}
++            </div>
++          ))}
++        </div>
++      </Card>
++
++      {canApprove && serializedItems.length > 0 && (
++        <Card className="p-5 space-y-5">
++          <SectionTitle title="Pilih Serial Number" subtitle="Tentukan unit alat yang akan diserahkan" />
++          {loadingSerials ? (
++            <div className="text-sm text-gray-400">Memuat Serial Number tersedia...</div>
++          ) : (
++            serializedItems.map((item) => {
++              const selected = selectedSerials[item.tool]?.size || 0;
++              const options = availableSerials[item.tool] || [];
++              return (
++                <div key={item.tool}>
++                  <div className="flex items-center justify-between mb-2">
++                    <div className="text-sm font-medium text-gray-800">{item.tool}</div>
++                    <span className={`text-xs font-semibold ${selected === item.qty ? "text-emerald-700" : "text-amber-600"}`}>{selected} / {item.qty} dipilih</span>
++                  </div>
++                  {options.length === 0 ? (
++                    <div className="text-xs text-red-600">Tidak ada unit Available untuk alat ini.</div>
++                  ) : (
++                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-48 overflow-y-auto pr-1">
++                      {options.map((opt) => {
++                        const checked = selectedSerials[item.tool]?.has(opt.sn) || false;
++                        return (
++                          <label key={opt.sn} className={`flex items-center gap-2 text-xs border rounded-lg px-2.5 py-2 cursor-pointer ${checked ? "border-emerald-300 bg-emerald-50/50" : "border-gray-200"}`}>
++                            <input type="checkbox" checked={checked} onChange={() => toggleSerial(item.tool, opt.sn, item.qty)} className="accent-emerald-800" />
++                            {opt.sn}
++                          </label>
++                        );
++                      })}
++                    </div>
++                  )}
++                </div>
++              );
++            })
++          )}
++          <PhotoUpload label="Foto Serah Terima (opsional)" value={handoverPhoto} onChange={setHandoverPhoto} />
++        </Card>
++      )}
++
++      {canApprove && (
++        <Card className="p-5 flex items-center justify-between">
++          <div className="text-sm text-gray-600">Tinjau permintaan ini dan tentukan persetujuan.</div>
++          <div className="flex gap-2">
++            <DangerButton onClick={() => onReject(checkout.id)}><X size={15} /> Reject</DangerButton>
++            <PrimaryButton onClick={() => setConfirmApprove(true)} disabled={approveDisabled || approving}>
++              <Check size={15} /> {approving ? "Memproses..." : "Approve & Serahkan"}
++            </PrimaryButton>
++          </div>
++        </Card>
++      )}
++
++      {canReturn && (
++        <Card className="p-5 space-y-4">
++          <SectionTitle title="Kembalikan Alat" subtitle="Catat kondisi alat saat dikembalikan" />
++          <div className="flex gap-3">
++            {["Baik", "Rusak"].map((c) => (
++              <button key={c} onClick={() => setReturnCondition(c)} className={`px-4 py-2 rounded-lg text-sm font-medium border ${returnCondition === c ? (c === "Baik" ? "bg-emerald-800 text-white border-emerald-800" : "bg-red-600 text-white border-red-600") : "border-gray-200 text-gray-600"}`}>
++                {c === "Baik" ? "Kondisi Baik" : "Rusak / Perlu Perbaikan"}
++              </button>
++            ))}
++          </div>
++          <div>
++            <label className="text-xs font-medium text-gray-500">Catatan <span className="text-gray-400 font-normal">(opsional)</span></label>
++            <input value={returnNote} onChange={(e) => setReturnNote(e.target.value)} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
++          </div>
++          <PhotoUpload label="Foto Kondisi Alat (opsional)" value={returnPhoto} onChange={setReturnPhoto} />
++          <div className="flex justify-end pt-2 border-t border-gray-50">
++            <PrimaryButton onClick={() => setConfirmReturn(true)} disabled={returning}>{returning ? "Memproses..." : "Kembalikan Alat"}</PrimaryButton>
++          </div>
++        </Card>
++      )}
++
++      {(checkout.handoverPhoto || checkout.returnPhoto) && (
++        <Card className="p-5 space-y-3">
++          <SectionTitle title="Dokumentasi" />
++          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
++            {checkout.handoverPhoto && (
++              <div>
++                <PhotoThumb src={checkout.handoverPhoto} alt="Serah terima" className="w-full h-24 object-cover rounded-lg border border-gray-100" onOpen={setLightboxSrc} />
++                <div className="text-xs text-gray-400 mt-1">Serah terima</div>
++              </div>
++            )}
++            {checkout.returnPhoto && (
++              <div>
++                <PhotoThumb src={checkout.returnPhoto} alt="Kondisi kembali" className="w-full h-24 object-cover rounded-lg border border-gray-100" onOpen={setLightboxSrc} />
++                <div className="text-xs text-gray-400 mt-1">Kondisi saat kembali</div>
++              </div>
++            )}
++          </div>
++          {checkout.status === "Returned" && (
++            <div className="text-sm text-gray-600 pt-2 border-t border-gray-50">
++              Dikembalikan {checkout.returnedDate} · Kondisi: <StatusBadge status={checkout.returnCondition === "Rusak" ? "Under Repair" : "Available"} /> {checkout.returnNote && <span className="text-gray-500">— {checkout.returnNote}</span>}
++            </div>
++          )}
++        </Card>
++      )}
++
++      <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
++
++      <ConfirmDialog
++        open={confirmApprove}
++        title="Approve & Serahkan Alat"
++        message={`Alat berikut akan diserahkan untuk ${checkout.id}: ${checkout.items.map((i) => `${i.tool} (${i.qty})`).join(", ")}. Lanjutkan?`}
++        confirmLabel="Ya, Serahkan"
++        onConfirm={() => { setConfirmApprove(false); handleApprove(); }}
++        onCancel={() => setConfirmApprove(false)}
++      />
++      <ConfirmDialog
++        open={confirmReturn}
++        title="Kembalikan Alat"
++        message={`Tandai alat pada ${checkout.id} sudah dikembalikan dengan kondisi "${returnCondition}"?`}
++        confirmLabel="Ya, Kembalikan"
++        onConfirm={() => { setConfirmReturn(false); handleReturn(); }}
++        onCancel={() => setConfirmReturn(false)}
++      />
++
++      <Card className="p-5">
++        <SectionTitle title="Audit Trail" />
++        <div className="space-y-3">
++          {checkout.history.map((h, i) => (
++            <div key={i} className="flex gap-3 text-sm">
++              <div className="text-xs text-gray-400 w-32 shrink-0">{h.time}</div>
++              <div className="text-gray-700">{h.text}</div>
++            </div>
++          ))}
++        </div>
++      </Card>
++    </div>
++  );
++}
++
+ /* ============================================================
+    MASTER DATA
+    ============================================================ */
+@@ -2944,6 +3555,92 @@ function MasterMaterial({ materials, onCreate, onToggle, onImport, showToast })
+   );
+ }
+ 
++function MasterTools({ tools, onCreate, onToggle, showToast }) {
++  const [search, setSearch] = useState("");
++  const [showForm, setShowForm] = useState(false);
++  const [form, setForm] = useState({ name: "", category: "", unit: "Unit", serialized: true, minStock: 1 });
++  const [saving, setSaving] = useState(false);
++
++  const filtered = tools.filter((t) => t.name.toLowerCase().includes(search.toLowerCase()));
++
++  const addTool = async () => {
++    if (!form.name || !form.category) return;
++    setSaving(true);
++    const submittedName = form.name;
++    try {
++      await onCreate({ name: form.name, category: form.category, unit: form.unit, serialized: form.serialized, minStock: form.minStock });
++      showToast(`Alat "${submittedName}" berhasil ditambahkan`);
++      setForm({ name: "", category: "", unit: "Unit", serialized: true, minStock: 1 });
++    } finally {
++      setSaving(false);
++    }
++  };
++
++  return (
++    <div className="p-4 sm:p-8 space-y-5">
++      <SectionTitle
++        title="Master Alat" subtitle="Kelola jenis peralatan kerja (Peminjaman Alat)"
++        right={<PrimaryButton onClick={() => setShowForm(!showForm)}><Plus size={16} /> Tambah Alat</PrimaryButton>}
++      />
++
++      {showForm && (
++        <Card className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
++          <input placeholder="Nama alat" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
++          <input placeholder="Category" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} className="border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
++          <input placeholder="Unit" value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} className="border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
++          <input type="number" placeholder="Minimum stock" value={form.minStock} onChange={(e) => setForm({ ...form, minStock: Number(e.target.value) })} className="border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
++          <label className="flex items-center gap-2 text-sm text-gray-600 sm:col-span-2">
++            <input type="checkbox" checked={form.serialized} onChange={(e) => setForm({ ...form, serialized: e.target.checked })} className="accent-emerald-800" /> Serialized (butuh Serial Number per unit)
++          </label>
++          <div className="sm:col-span-2 flex justify-end gap-2">
++            <GhostButton onClick={() => setShowForm(false)}>Tutup</GhostButton>
++            <PrimaryButton onClick={addTool} disabled={saving}>{saving ? "Menyimpan..." : "Simpan"}</PrimaryButton>
++          </div>
++        </Card>
++      )}
++
++      <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2.5 w-80">
++        <Search size={16} className="text-gray-400" />
++        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari alat..." className="bg-transparent text-sm outline-none w-full" />
++      </div>
++
++      <Card className="overflow-hidden">
++        <div className="overflow-x-auto">
++        <table className="w-full text-sm">
++          <thead>
++            <tr className="text-left text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
++              <th className="px-5 py-3 font-medium">Alat ID</th>
++              <th className="px-5 py-3 font-medium">Nama</th>
++              <th className="px-5 py-3 font-medium">Category</th>
++              <th className="px-5 py-3 font-medium">Unit</th>
++              <th className="px-5 py-3 font-medium">Serialized</th>
++              <th className="px-5 py-3 font-medium">Min Stock</th>
++              <th className="px-5 py-3 font-medium">Status</th>
++              <th className="px-5 py-3 font-medium"></th>
++            </tr>
++          </thead>
++          <tbody>
++            {filtered.map((t) => (
++              <tr key={t.id} className="border-b border-gray-50 last:border-0">
++                <td className="px-5 py-3 text-gray-500">{t.id}</td>
++                <td className="px-5 py-3 font-medium text-gray-800">{t.name}</td>
++                <td className="px-5 py-3 text-gray-600">{t.category}</td>
++                <td className="px-5 py-3 text-gray-500">{t.unit}</td>
++                <td className="px-5 py-3 text-gray-500">{t.serialized ? "Yes" : "No"}</td>
++                <td className="px-5 py-3 text-gray-500">{t.min_stock}</td>
++                <td className="px-5 py-3"><StatusBadge status={t.status} /></td>
++                <td className="px-5 py-3"><button onClick={() => onToggle(t.id)} className="text-xs font-medium text-emerald-800">{t.status === "Active" ? "Deactivate" : "Activate"}</button></td>
++              </tr>
++            ))}
++            {filtered.length === 0 && <tr><td colSpan={8}><EmptyState text="Belum ada data alat." /></td></tr>}
++          </tbody>
++        </table>
++        </div>
++      </Card>
++    </div>
++  );
++}
++
+ /* Generic Excel/CSV import panel — download template → upload → validated
+    preview → confirm. Shared across every Master Data screen instead of
+    duplicating this flow per-resource; each caller just supplies its own
+@@ -3575,6 +4272,26 @@ function createApiClient(baseUrl, getToken) {
+     createReceipt: (payload) => request("/stock/receipts", { method: "POST", body: payload }),
+     getReceipts: () => request("/stock/receipts"),
+ 
++    // ---- Tools / Peminjaman Alat (separate pool, no division split) ----
++    getTools: () => request("/tools"),
++    createTool: (payload) => request("/tools", { method: "POST", body: payload }),
++    toggleToolStatus: (id) => request(`/tools/${id}/toggle-status`, { method: "PATCH" }),
++    getToolSerials: (tool, status) => {
++      const params = new URLSearchParams();
++      if (tool) params.set("tool", tool);
++      if (status) params.set("status", status);
++      const qs = params.toString();
++      return request(`/tools/serials${qs ? `?${qs}` : ""}`);
++    },
++    createToolReceipt: (payload) => request("/tools/receipts", { method: "POST", body: payload }),
++    getToolReceipts: () => request("/tools/receipts"),
++    getCheckouts: () => request("/tools/checkouts"),
++    getCheckout: (id) => request(`/tools/checkouts/${id}`),
++    createCheckout: (payload) => request("/tools/checkouts", { method: "POST", body: payload }),
++    approveCheckout: (id, payload) => request(`/tools/checkouts/${id}/approve`, { method: "POST", body: payload }),
++    rejectCheckout: (id) => request(`/tools/checkouts/${id}/reject`, { method: "POST" }),
++    returnCheckout: (id, payload) => request(`/tools/checkouts/${id}/return`, { method: "POST", body: payload }),
++
+     getDeliveries: () => request("/deliveries"),
+     createDelivery: (payload) => request("/deliveries", { method: "POST", body: payload }),
+     approveDelivery: (id) => request(`/deliveries/${id}/approve`, { method: "POST" }),
+@@ -3706,6 +4423,10 @@ export default function App() {
+   const [areas, setAreas] = useState([]);
+   const [customers, setCustomers] = useState([]);
+   const [users, setUsers] = useState([]);
++  const [tools, setTools] = useState([]);
++  const [toolCheckouts, setToolCheckouts] = useState([]);
++  const [toolSerialName, setToolSerialName] = useState("");
++  const [selectedToolCheckout, setSelectedToolCheckout] = useState(null);
+   const [searchQuery, setSearchQuery] = useState("");
+ 
+   const role = currentUser?.role;
+@@ -3730,10 +4451,11 @@ export default function App() {
+     setDataLoading(true);
+     setApiError("");
+     try {
+-      const [mats, movs, dels, rets, recs, sts, hbs, ars, custs, usrs] = await Promise.all([
++      const [mats, movs, dels, rets, recs, sts, hbs, ars, custs, usrs, tls, checkouts] = await Promise.all([
+         api.getMaterials(), api.getMovements(), api.getDeliveries(), api.getReturns(),
+         api.getReconciliations(), api.getSites(), api.getHomebases(), api.getAreas(),
+         api.getCustomers(), api.getUsers().catch(() => []), // Users list is Manager-only; ignore 403 for other roles
++        api.getTools(), api.getCheckouts(),
+       ]);
+       setMaterials(mats.map(normalizeMaterial));
+       setMovements(movs);
+@@ -3745,6 +4467,8 @@ export default function App() {
+       setAreas(ars);
+       setCustomers(custs);
+       setUsers(usrs);
++      setTools(tls);
++      setToolCheckouts(checkouts);
+     } catch (err) {
+       setApiError(err.message || "Gagal memuat data dari server");
+     } finally {
+@@ -3782,7 +4506,63 @@ export default function App() {
+     await refreshStock();
+   };
+ 
+-  const goto = (p) => { setPage(p); setSelectedDelivery(null); setSelectedReturn(null); setSelectedRecon(null); };
++  // ---- Tools / Peminjaman Alat ----
++  const refreshTools = async () => {
++    try {
++      const tls = await api.getTools();
++      setTools(tls);
++    } catch (err) {
++      setApiError(err.message);
++    }
++  };
++
++  const createToolReceipt = async (payload) => {
++    await api.createToolReceipt(payload);
++    await refreshTools();
++  };
++
++  const submitToolCheckout = async (data) => {
++    try {
++      const created = await api.createCheckout(data);
++      setToolCheckouts((prev) => [created, ...prev]);
++      showToast(`Peminjaman ${created.id} berhasil diajukan`);
++      goto("toolCheckouts");
++    } catch (err) { setApiError(err.message); }
++  };
++
++  const approveToolCheckout = async (id, payload) => {
++    try {
++      const updated = await api.approveCheckout(id, payload);
++      setToolCheckouts((prev) => prev.map((c) => (c.id === id ? updated : c)));
++      await refreshTools();
++    } catch (err) { setApiError(err.message); }
++  };
++
++  const rejectToolCheckout = async (id) => {
++    try {
++      const updated = await api.rejectCheckout(id);
++      setToolCheckouts((prev) => prev.map((c) => (c.id === id ? updated : c)));
++    } catch (err) { setApiError(err.message); }
++  };
++
++  const returnToolCheckout = async (id, payload) => {
++    try {
++      const updated = await api.returnCheckout(id, payload);
++      setToolCheckouts((prev) => prev.map((c) => (c.id === id ? updated : c)));
++      await refreshTools();
++    } catch (err) { setApiError(err.message); }
++  };
++
++  const createToolMaster = async (payload) => {
++    const created = await api.createTool(payload);
++    setTools((prev) => [...prev, created]);
++  };
++  const toggleTool = async (id) => {
++    const updated = await api.toggleToolStatus(id);
++    setTools((prev) => prev.map((t) => (t.id === id ? updated : t)));
++  };
++
++  const goto = (p) => { setPage(p); setSelectedDelivery(null); setSelectedReturn(null); setSelectedRecon(null); setSelectedToolCheckout(null); };
+ 
+   /* Navigates directly to a specific record's detail view — clears the other
+      two selection states in the same pass so stale selections from a previous
+@@ -4280,6 +5060,14 @@ export default function App() {
+   else if (page === "stock") content = <WarehouseStock materials={materials} setPage={goto} setMovementFilter={setMovementFilter} setSerialMaterial={setSerialMaterial} onSubmitReceipt={createReceipt} showToast={showToast} clearSerialHighlight={() => setHighlightSerial("")} currentUser={currentUser} customers={customers} />;
+   else if (page === "movement") content = <StockMovement movements={movements} filter={movementFilter} setFilter={setMovementFilter} deliveries={deliveries} />;
+   else if (page === "serialDetail") content = <MaterialSerialDetail material={serialMaterial} api={api} onBack={() => goto("stock")} highlightSerial={highlightSerial} highlightToken={highlightToken} deliveries={deliveries} />;
++  else if (page === "toolStock") content = <ToolStockPage tools={tools} setPage={goto} setToolSerialName={setToolSerialName} onSubmitReceipt={createToolReceipt} showToast={showToast} />;
++  else if (page === "toolSerialDetail") content = <ToolSerialDetail toolName={toolSerialName} api={api} onBack={() => goto("toolStock")} />;
++  else if (page === "toolCheckouts") {
++    if (selectedToolCheckout) {
++      const c = toolCheckouts.find((x) => x.id === selectedToolCheckout);
++      content = <ToolCheckoutDetail checkout={c} onBack={() => setSelectedToolCheckout(null)} onApprove={approveToolCheckout} onReject={rejectToolCheckout} onReturn={returnToolCheckout} role={role} tools={tools} api={api} />;
++    } else content = <ToolCheckoutList checkouts={toolCheckouts} setSelected={setSelectedToolCheckout} setPage={goto} role={role} />;
++  } else if (page === "toolCheckoutCreate") content = <ToolCheckoutCreate tools={tools} homebases={homebases} onSubmit={submitToolCheckout} onCancel={() => goto("toolCheckouts")} />;
+   else if (page === "reports") content = <ReportsPage
+     title="Delivery Report" subtitle="Laporan seluruh pengajuan delivery"
+     data={deliveries}
+@@ -4420,6 +5208,7 @@ export default function App() {
+       onImport: importCustomersToServer,
+     }}
+   />;
++  else if (page === "masterTools") content = <MasterTools tools={tools} onCreate={createToolMaster} onToggle={toggleTool} showToast={showToast} />;
+   else if (page === "users") content = <MasterCrudTable
+     title="User Management" subtitle="Kelola akses pengguna sistem"
+     entityLabel="User" showToast={showToast}
+-- 
+2.43.0
+
