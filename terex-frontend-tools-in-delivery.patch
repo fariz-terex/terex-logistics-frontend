@@ -1,0 +1,818 @@
+From e2c6b3202e3f59b5556ff73e646cd98705b5feb6 Mon Sep 17 00:00:00 2001
+From: TEREX Dev <dev@terex.local>
+Date: Thu, 20 Aug 2026 09:21:03 +0000
+Subject: [PATCH] Merge Tools into Delivery Request UI: mixed material+tool
+ cart, unified detail view, independent 'Kembalikan Alat' panel
+
+---
+ src/App.jsx | 580 +++++++++++++---------------------------------------
+ 1 file changed, 142 insertions(+), 438 deletions(-)
+
+diff --git a/src/App.jsx b/src/App.jsx
+index ebd4bf7..6f56a33 100644
+--- a/src/App.jsx
++++ b/src/App.jsx
+@@ -188,7 +188,6 @@ const NAV_ACCESS = {
+   receipts: [ROLES.MANAGER, ROLES.LOGISTICS],
+   reports: [ROLES.MANAGER, ROLES.LOGISTICS],
+   reportsDeviceLocation: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV],
+-  toolCheckouts: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV, ROLES.TECH],
+   toolStock: [ROLES.MANAGER, ROLES.LOGISTICS],
+   master: [ROLES.MANAGER],
+   users: [ROLES.MANAGER],
+@@ -373,12 +372,6 @@ const NAV_TREE = [
+     children: [
+       { key: "stock", label: "Warehouse Stock" },
+       { key: "movement", label: "Stock Movement" },
+-    ],
+-  },
+-  {
+-    key: "toolsGroup", label: "Peralatan", icon: Wrench,
+-    children: [
+-      { key: "toolCheckouts", label: "Peminjaman Alat" },
+       { key: "toolStock", label: "Stock Alat" },
+     ],
+   },
+@@ -410,7 +403,7 @@ function hasAccess(key, role) {
+   const map = {
+     delivery: NAV_ACCESS.delivery, returnFaulty: NAV_ACCESS.returnFaulty, reconciliation: NAV_ACCESS.reconciliation,
+     stock: NAV_ACCESS.stock, movement: NAV_ACCESS.movement,
+-    toolCheckouts: NAV_ACCESS.toolCheckouts, toolStock: NAV_ACCESS.toolStock,
++    toolStock: NAV_ACCESS.toolStock,
+     reports: NAV_ACCESS.reports, reportsFaulty: NAV_ACCESS.reports, reportsRecon: NAV_ACCESS.reports, reportsDeviceLocation: NAV_ACCESS.reportsDeviceLocation,
+     masterMaterial: NAV_ACCESS.master, masterSite: NAV_ACCESS.master, masterHomebase: NAV_ACCESS.master,
+     masterArea: NAV_ACCESS.master, masterCustomer: NAV_ACCESS.master, masterTools: NAV_ACCESS.master,
+@@ -870,7 +863,7 @@ function DeliveryList({ deliveries, setSelected, setPage, role }) {
+   );
+ }
+ 
+-function DeliveryCreate({ onSubmit, onCancel, materials, sites, homebases, currentUser, customers }) {
++function DeliveryCreate({ onSubmit, onCancel, materials, tools, sites, homebases, currentUser, customers }) {
+   const [step, setStep] = useState(1);
+   const [homebase, setHomebase] = useState("");
+   const [site, setSite] = useState("");
+@@ -893,7 +886,15 @@ function DeliveryCreate({ onSubmit, onCancel, materials, sites, homebases, curre
+     (s.name.toLowerCase().includes(siteSearch.toLowerCase()) || s.code.toLowerCase().includes(siteSearch.toLowerCase()) || s.terminalId.toLowerCase().includes(siteSearch.toLowerCase()))
+   );
+ 
+-  const filteredMaterials = materials.filter((m) => m.status === "Active" && m.name.toLowerCase().includes(matSearch.toLowerCase()));
++  // Sparepart (dikirim, one-way) and alat (dipinjam, harus dikembalikan)
++  // live in one combined catalog here so a single request can mix both —
++  // `ready` is aliased onto tools (from `available`) so the rest of this
++  // component's qty-vs-stock logic works the same for either kind.
++  const catalogItems = [
++    ...materials.filter((m) => m.status === "Active").map((m) => ({ ...m, _type: "material" })),
++    ...tools.filter((t) => t.status === "Active").map((t) => ({ ...t, _type: "tool", ready: t.available })),
++  ];
++  const filteredCatalog = catalogItems.filter((m) => m.name.toLowerCase().includes(matSearch.toLowerCase()));
+ 
+   const updateQty = (matId, delta) => {
+     setCart((c) => {
+@@ -903,7 +904,7 @@ function DeliveryCreate({ onSubmit, onCancel, materials, sites, homebases, curre
+     });
+   };
+ 
+-  const cartItems = Object.entries(cart).filter(([, q]) => q > 0).map(([id, q]) => ({ material: materials.find((m) => m.id === id), qty: q }));
++  const cartItems = Object.entries(cart).filter(([, q]) => q > 0).map(([id, q]) => ({ material: catalogItems.find((m) => m.id === id), qty: q }));
+   const step1Valid = homebase && keperluan && (keperluan !== "Other" || otherDesc.trim()) && (!needsDivisionPicker || customer);
+   const step2Valid = cartItems.length > 0 && cartItems.every((i) => i.qty <= i.material.ready);
+ 
+@@ -1005,16 +1006,20 @@ function DeliveryCreate({ onSubmit, onCancel, materials, sites, homebases, curre
+         <Card className="p-6 space-y-4">
+           <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2.5">
+             <Search size={16} className="text-gray-400" />
+-            <input value={matSearch} onChange={(e) => setMatSearch(e.target.value)} placeholder="Cari material..." className="bg-transparent text-sm outline-none w-full" />
++            <input value={matSearch} onChange={(e) => setMatSearch(e.target.value)} placeholder="Cari material atau alat..." className="bg-transparent text-sm outline-none w-full" />
+           </div>
+           <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
+-            {filteredMaterials.map((m) => {
++            {filteredCatalog.map((m) => {
+               const qty = cart[m.id] || 0;
+               const insufficient = qty > m.ready;
++              const isTool = m._type === "tool";
+               return (
+                 <div key={m.id} className={`flex items-center justify-between border rounded-xl px-4 py-3 ${qty > 0 ? "border-emerald-200 bg-emerald-50/30" : "border-gray-100"}`}>
+                   <div>
+-                    <div className="text-sm font-medium text-gray-800">{m.name}</div>
++                    <div className="text-sm font-medium text-gray-800 flex items-center gap-2">
++                      {m.name}
++                      {isTool && <span className="text-[10px] font-semibold uppercase tracking-wide text-indigo-600 bg-indigo-50 rounded-full px-2 py-0.5">Alat · Pinjam</span>}
++                    </div>
+                     <div className={`text-xs mt-0.5 ${insufficient ? "text-red-600 font-medium" : "text-gray-400"}`}>
+                       Stock Available: {m.ready}{qty > 0 && ` · Requested: ${qty} · ${insufficient ? "Insufficient Stock" : "Available"}`}
+                     </div>
+@@ -1044,11 +1049,14 @@ function DeliveryCreate({ onSubmit, onCancel, materials, sites, homebases, curre
+             <div><div className="text-gray-400 text-xs">Catatan</div><div className="font-medium text-gray-800">{note || "-"}</div></div>
+           </div>
+           <div>
+-            <div className="text-xs text-gray-400 mb-2">Material Diajukan</div>
++            <div className="text-xs text-gray-400 mb-2">Item Diajukan</div>
+             <div className="divide-y divide-gray-50 border border-gray-100 rounded-xl">
+               {cartItems.map((i) => (
+                 <div key={i.material.id} className="flex justify-between px-4 py-2.5 text-sm">
+-                  <span className="text-gray-700">{i.material.name}</span>
++                  <span className="text-gray-700 flex items-center gap-2">
++                    {i.material.name}
++                    {i.material._type === "tool" && <span className="text-[10px] font-semibold uppercase tracking-wide text-indigo-600 bg-indigo-50 rounded-full px-2 py-0.5">Alat · Pinjam</span>}
++                  </span>
+                   <span className="font-medium text-gray-800">Qty {i.qty}</span>
+                 </div>
+               ))}
+@@ -1056,7 +1064,7 @@ function DeliveryCreate({ onSubmit, onCancel, materials, sites, homebases, curre
+           </div>
+           <div className="flex justify-between pt-2">
+             <GhostButton onClick={() => setStep(2)}><ChevronLeft size={16} /> Kembali</GhostButton>
+-            <PrimaryButton onClick={() => onSubmit({ homebase, site: site ? sites.find((s) => s.code === site)?.name : "", keperluan: keperluan === "Other" ? `Other - ${otherDesc}` : keperluan, note, items: cartItems.map((i) => ({ material: i.material.name, qty: i.qty })), ...(needsDivisionPicker ? { customer } : {}) })}>
++            <PrimaryButton onClick={() => onSubmit({ homebase, site: site ? sites.find((s) => s.code === site)?.name : "", keperluan: keperluan === "Other" ? `Other - ${otherDesc}` : keperluan, note, items: cartItems.map((i) => ({ material: i.material.name, qty: i.qty, type: i.material._type })), ...(needsDivisionPicker ? { customer } : {}) })}>
+               <Check size={16} /> Submit Request
+             </PrimaryButton>
+           </div>
+@@ -1066,7 +1074,7 @@ function DeliveryCreate({ onSubmit, onCancel, materials, sites, homebases, curre
+   );
+ }
+ 
+-function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, onShip, onAddResi, onAddBast, onAddBkbLink, onAdvance, role, materials, api }) {
++function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, onShip, onAddResi, onAddBast, onAddBkbLink, onAdvance, onReturnTools, role, materials, tools, api }) {
+   // Stage 1 — Manager reviews qty only, no SN involved.
+   const canApprove = role === ROLES.MANAGER && delivery.status === "Waiting Logistics Approval";
+   // Stage 2 — Logistics Staff (or Manager) picks the actual units to fulfill it.
+@@ -1084,7 +1092,12 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock,
+     try { await onApprove(delivery.id); } finally { setApproving(false); }
+   };
+ 
+-  const serializedItems = delivery.items.filter((i) => materials.find((m) => m.name === i.material)?.serialized);
++  // Serialized items needing a Serial Number pick at assign-stock time —
++  // works for both sparepart (materials) and alat (tools), just checking a
++  // different master list depending on the item's type.
++  const serializedItems = delivery.items.filter((i) =>
++    i.type === "tool" ? tools.find((t) => t.name === i.material)?.serialized : materials.find((m) => m.name === i.material)?.serialized
++  );
+   const [availableSerials, setAvailableSerials] = useState({}); // { material: [{sn,status},...] }
+   const [selectedSerials, setSelectedSerials] = useState({}); // { material: Set<sn> }
+   const [loadingSerials, setLoadingSerials] = useState(false);
+@@ -1094,7 +1107,9 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock,
+     if (!canAssignStock || serializedItems.length === 0) return;
+     let cancelled = false;
+     setLoadingSerials(true);
+-    Promise.all(serializedItems.map((i) => api.getSerials(i.material, "Ready", delivery.customer).then((data) => [i.material, data])))
++    Promise.all(serializedItems.map((i) =>
++      (i.type === "tool" ? api.getToolSerials(i.material, "Available") : api.getSerials(i.material, "Ready", delivery.customer)).then((data) => [i.material, data])
++    ))
+       .then((results) => {
+         if (cancelled) return;
+         const map = {};
+@@ -1180,6 +1195,36 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock,
+     }
+   };
+ 
++  // ---- Kembalikan Alat — independent of the delivery's own status/stage;
++  // any tool unit still Checked Out under this delivery can be returned any
++  // time, including long after the delivery itself reached Delivered.
++  // Partial returns are supported (return some units now, more later). ----
++  const canReturnTools = (role === ROLES.LOGISTICS || role === ROLES.MANAGER || role === ROLES.SPV || role === ROLES.TECH) && (delivery.outstandingTools?.length || 0) > 0;
++  const [selectedReturns, setSelectedReturns] = useState(new Set());
++  const [returnCondition, setReturnCondition] = useState("Baik");
++  const [returnNote, setReturnNote] = useState("");
++  const [returnPhoto, setReturnPhoto] = useState("");
++  const [returningTools, setReturningTools] = useState(false);
++  const [confirmReturnTools, setConfirmReturnTools] = useState(false);
++
++  const toggleReturnSn = (sn) => {
++    setSelectedReturns((prev) => {
++      const next = new Set(prev);
++      if (next.has(sn)) next.delete(sn); else next.add(sn);
++      return next;
++    });
++  };
++
++  const handleReturnTools = async () => {
++    setReturningTools(true);
++    try {
++      await onReturnTools(delivery.id, { serials: Array.from(selectedReturns), condition: returnCondition, note: returnNote, photo: returnPhoto || undefined });
++      setSelectedReturns(new Set()); setReturnNote(""); setReturnPhoto(""); setReturnCondition("Baik");
++    } finally {
++      setReturningTools(false);
++    }
++  };
++
+   // ---- Resi (optional, can be added after shipping) ----
+   const [resiInput, setResiInput] = useState("");
+   const [resiPhotoInput, setResiPhotoInput] = useState("");
+@@ -1216,17 +1261,27 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock,
+       </Card>
+ 
+       <Card className="p-5">
+-        <SectionTitle title="Material Diajukan" />
++        <SectionTitle title="Item Diajukan" />
+         <div className="divide-y divide-gray-50">
+           {delivery.items.map((i, idx) => (
+             <div key={idx} className="py-2.5 text-sm">
+               <div className="flex justify-between">
+-                <span className="text-gray-700">{i.material}</span>
++                <span className="text-gray-700 flex items-center gap-2">
++                  {i.material}
++                  {i.type === "tool" && <span className="text-[10px] font-semibold uppercase tracking-wide text-indigo-600 bg-indigo-50 rounded-full px-2 py-0.5">Alat · Pinjam</span>}
++                </span>
+                 <span className="font-medium text-gray-800">Qty {i.qty}</span>
+               </div>
+               {i.serials?.length > 0 && (
+                 <div className="flex flex-wrap gap-1.5 mt-1.5">
+-                  {i.serials.map((sn) => <span key={sn} className="text-xs bg-gray-50 rounded-full px-2 py-0.5 text-gray-500">{sn}</span>)}
++                  {i.serials.map((sn) => {
++                    const snStatus = i.type === "tool" ? i.serialStatuses?.[sn] : null;
++                    return (
++                      <span key={sn} className={`text-xs rounded-full px-2 py-0.5 ${snStatus === "Checked Out" ? "bg-indigo-50 text-indigo-700" : snStatus ? "bg-emerald-50 text-emerald-700" : "bg-gray-50 text-gray-500"}`}>
++                        {sn}{snStatus ? ` · ${snStatus}` : ""}
++                      </span>
++                    );
++                  })}
+                 </div>
+               )}
+             </div>
+@@ -1236,7 +1291,7 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock,
+ 
+       {canAssignStock && serializedItems.length > 0 && (
+         <Card className="p-5 space-y-5">
+-          <SectionTitle title="Pilih Serial Number" subtitle="Material serialized wajib dipilih unitnya sebelum stock bisa direservasi" />
++          <SectionTitle title="Pilih Serial Number" subtitle="Material atau alat serialized wajib dipilih unitnya sebelum stock bisa direservasi" />
+           {loadingSerials ? (
+             <div className="text-sm text-gray-400">Memuat Serial Number tersedia...</div>
+           ) : (
+@@ -1592,6 +1647,49 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock,
+         onCancel={() => setConfirmAdvance(false)}
+       />
+ 
++      {canReturnTools && (
++        <Card className="p-5 space-y-4 border-indigo-100 bg-indigo-50/20">
++          <SectionTitle title="Kembalikan Alat" subtitle="Alat berikut masih dipinjam pada request ini — bisa dikembalikan sebagian atau sekaligus, kapan saja" />
++          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
++            {delivery.outstandingTools.map(({ tool, sn }) => {
++              const checked = selectedReturns.has(sn);
++              return (
++                <label key={sn} className={`flex items-center gap-2 text-xs border rounded-lg px-2.5 py-2 cursor-pointer ${checked ? "border-indigo-300 bg-indigo-50" : "border-gray-200 bg-white"}`}>
++                  <input type="checkbox" checked={checked} onChange={() => toggleReturnSn(sn)} className="accent-indigo-700" />
++                  <span className="truncate"><span className="font-medium">{sn}</span> <span className="text-gray-400">({tool})</span></span>
++                </label>
++              );
++            })}
++          </div>
++          <div className="flex gap-3">
++            {["Baik", "Rusak"].map((c) => (
++              <button key={c} onClick={() => setReturnCondition(c)} className={`px-4 py-2 rounded-lg text-sm font-medium border ${returnCondition === c ? (c === "Baik" ? "bg-emerald-800 text-white border-emerald-800" : "bg-red-600 text-white border-red-600") : "border-gray-200 text-gray-600 bg-white"}`}>
++                {c === "Baik" ? "Kondisi Baik" : "Rusak / Perlu Perbaikan"}
++              </button>
++            ))}
++          </div>
++          <div>
++            <label className="text-xs font-medium text-gray-500">Catatan <span className="text-gray-400 font-normal">(opsional)</span></label>
++            <input value={returnNote} onChange={(e) => setReturnNote(e.target.value)} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
++          </div>
++          <PhotoUpload label="Foto Kondisi Alat (opsional)" value={returnPhoto} onChange={setReturnPhoto} />
++          <div className="flex justify-end pt-2 border-t border-indigo-100">
++            <PrimaryButton onClick={() => setConfirmReturnTools(true)} disabled={selectedReturns.size === 0 || returningTools}>
++              {returningTools ? "Memproses..." : `Kembalikan ${selectedReturns.size || ""} Unit`}
++            </PrimaryButton>
++          </div>
++        </Card>
++      )}
++
++      <ConfirmDialog
++        open={confirmReturnTools}
++        title="Kembalikan Alat"
++        message={`Tandai ${selectedReturns.size} unit alat sebagai dikembalikan dengan kondisi "${returnCondition}"?`}
++        confirmLabel="Ya, Kembalikan"
++        onConfirm={() => { setConfirmReturnTools(false); handleReturnTools(); }}
++        onCancel={() => setConfirmReturnTools(false)}
++      />
++
+       <Card className="p-5">
+         <SectionTitle title="Audit Trail" />
+         <div className="space-y-3">
+@@ -3070,366 +3168,6 @@ function ToolReceiptForm({ tools, onSubmit, onCancel, showToast }) {
+   );
+ }
+ 
+-function ToolCheckoutList({ checkouts, setSelected, setPage, role }) {
+-  const [filter, setFilter] = useState("All");
+-  const statuses = ["All", "Waiting Approval", "Checked Out", "Returned", "Rejected"];
+-  const filtered = filter === "All" ? checkouts : checkouts.filter((c) => c.status === filter);
+-
+-  return (
+-    <div className="p-4 sm:p-8 space-y-5">
+-      <SectionTitle
+-        title="Peminjaman Alat" subtitle="Pinjam & kembalikan peralatan kerja"
+-        right={<PrimaryButton onClick={() => setPage("toolCheckoutCreate")}><Plus size={16} /> Ajukan Peminjaman</PrimaryButton>}
+-      />
+-      <div className="flex flex-wrap gap-2">
+-        {statuses.map((s) => (
+-          <button key={s} onClick={() => setFilter(s)} className={`px-3 py-1.5 rounded-lg text-xs font-medium border ${filter === s ? "bg-emerald-800 text-white border-emerald-800" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}>{s}</button>
+-        ))}
+-      </div>
+-      <Card className="overflow-hidden">
+-        <div className="overflow-x-auto">
+-        <table className="w-full text-sm">
+-          <thead>
+-            <tr className="text-left text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
+-              <th className="px-5 py-3 font-medium">No. Peminjaman</th>
+-              <th className="px-5 py-3 font-medium">Requester</th>
+-              <th className="px-5 py-3 font-medium">Homebase</th>
+-              <th className="px-5 py-3 font-medium">Keperluan</th>
+-              <th className="px-5 py-3 font-medium">Tgl</th>
+-              <th className="px-5 py-3 font-medium">Status</th>
+-              <th className="px-5 py-3 font-medium"></th>
+-            </tr>
+-          </thead>
+-          <tbody>
+-            {filtered.map((c) => (
+-              <tr key={c.id} className="border-b border-gray-50 last:border-0">
+-                <td className="px-5 py-3 font-medium text-gray-800">{c.id}</td>
+-                <td className="px-5 py-3 text-gray-600">{c.requester}</td>
+-                <td className="px-5 py-3 text-gray-600">{c.homebase}</td>
+-                <td className="px-5 py-3 text-gray-600">{c.purpose}</td>
+-                <td className="px-5 py-3 text-gray-500">{c.date}</td>
+-                <td className="px-5 py-3"><StatusBadge status={c.status} /></td>
+-                <td className="px-5 py-3"><button onClick={() => setSelected(c.id)} className="text-emerald-800 text-xs font-medium flex items-center gap-1"><Eye size={13} /> Detail</button></td>
+-              </tr>
+-            ))}
+-            {filtered.length === 0 && <tr><td colSpan={7}><EmptyState text="Belum ada peminjaman alat." /></td></tr>}
+-          </tbody>
+-        </table>
+-        </div>
+-      </Card>
+-    </div>
+-  );
+-}
+-
+-function ToolCheckoutCreate({ tools, homebases, onSubmit, onCancel }) {
+-  const [homebase, setHomebase] = useState("");
+-  const [purpose, setPurpose] = useState("");
+-  const [note, setNote] = useState("");
+-  const [expectedReturn, setExpectedReturn] = useState("");
+-  const [cart, setCart] = useState({});
+-  const [search, setSearch] = useState("");
+-
+-  const filteredTools = tools.filter((t) => t.status === "Active" && t.name.toLowerCase().includes(search.toLowerCase()));
+-  const updateQty = (id, delta) => setCart((c) => ({ ...c, [id]: Math.max(0, (c[id] || 0) + delta) }));
+-  const cartItems = Object.entries(cart).filter(([, q]) => q > 0).map(([id, q]) => ({ tool: tools.find((t) => t.id === id), qty: q }));
+-  const valid = homebase && purpose.trim() && cartItems.length > 0 && cartItems.every((i) => i.qty <= i.tool.available);
+-
+-  return (
+-    <div className="p-4 sm:p-8 max-w-3xl mx-auto space-y-6">
+-      <SectionTitle title="Ajukan Peminjaman Alat" subtitle="Pilih alat yang ingin dipinjam" />
+-      <Card className="p-6 space-y-4">
+-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+-          <div>
+-            <label className="text-sm font-medium text-gray-700">Homebase <span className="text-red-500">*</span></label>
+-            <select value={homebase} onChange={(e) => setHomebase(e.target.value)} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600">
+-              <option value="">Pilih homebase...</option>
+-              {homebases.filter((h) => h.status === "Active").map((h) => <option key={h.code} value={h.name}>{h.name}</option>)}
+-            </select>
+-          </div>
+-          <div>
+-            <label className="text-sm font-medium text-gray-700">Estimasi Kembali <span className="text-gray-400 font-normal">(opsional)</span></label>
+-            <input type="date" value={expectedReturn} onChange={(e) => setExpectedReturn(e.target.value)} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+-          </div>
+-        </div>
+-        <div>
+-          <label className="text-sm font-medium text-gray-700">Keperluan <span className="text-red-500">*</span></label>
+-          <input value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder="mis. Instalasi fiber pelanggan" className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+-        </div>
+-        <div>
+-          <label className="text-sm font-medium text-gray-700">Catatan <span className="text-gray-400 font-normal">(opsional)</span></label>
+-          <input value={note} onChange={(e) => setNote(e.target.value)} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+-        </div>
+-      </Card>
+-
+-      <Card className="p-6 space-y-4">
+-        <div className="text-sm font-semibold text-gray-800">Pilih Alat</div>
+-        <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+-          <Search size={16} className="text-gray-400" />
+-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari alat..." className="bg-transparent text-sm outline-none w-full" />
+-        </div>
+-        <div className="divide-y divide-gray-50 max-h-80 overflow-y-auto">
+-          {filteredTools.map((t) => (
+-            <div key={t.id} className="flex items-center justify-between py-3">
+-              <div>
+-                <div className="text-sm font-medium text-gray-800">{t.name}</div>
+-                <div className="text-xs text-gray-400">Available: {t.available}</div>
+-              </div>
+-              <div className="flex items-center gap-3">
+-                <button onClick={() => updateQty(t.id, -1)} className="w-7 h-7 rounded-lg border border-gray-200 flex items-center justify-center text-gray-500 hover:bg-gray-50"><Minus size={14} /></button>
+-                <span className="w-6 text-center text-sm font-medium">{cart[t.id] || 0}</span>
+-                <button onClick={() => updateQty(t.id, 1)} disabled={(cart[t.id] || 0) >= t.available} className="w-7 h-7 rounded-lg border border-gray-200 flex items-center justify-center text-gray-500 hover:bg-gray-50 disabled:opacity-30"><Plus size={14} /></button>
+-              </div>
+-            </div>
+-          ))}
+-          {filteredTools.length === 0 && <div className="py-6 text-center text-sm text-gray-400">Tidak ada alat ditemukan.</div>}
+-        </div>
+-      </Card>
+-
+-      <div className="flex justify-between">
+-        <GhostButton onClick={onCancel}>Batal</GhostButton>
+-        <PrimaryButton
+-          disabled={!valid}
+-          onClick={() => onSubmit({ homebase, purpose, note, expectedReturn: expectedReturn || undefined, items: cartItems.map((i) => ({ tool: i.tool.name, qty: i.qty })) })}
+-        >
+-          Ajukan Peminjaman
+-        </PrimaryButton>
+-      </div>
+-    </div>
+-  );
+-}
+-
+-function ToolCheckoutDetail({ checkout, onBack, onApprove, onReject, onReturn, role, tools, api }) {
+-  const canApprove = (role === ROLES.LOGISTICS || role === ROLES.MANAGER) && checkout.status === "Waiting Approval";
+-  const canReturn = checkout.status === "Checked Out";
+-
+-  const serializedItems = checkout.items.filter((i) => tools.find((t) => t.name === i.tool)?.serialized);
+-  const [availableSerials, setAvailableSerials] = useState({});
+-  const [selectedSerials, setSelectedSerials] = useState({});
+-  const [loadingSerials, setLoadingSerials] = useState(false);
+-  const [handoverPhoto, setHandoverPhoto] = useState("");
+-  const [approving, setApproving] = useState(false);
+-  const [confirmApprove, setConfirmApprove] = useState(false);
+-
+-  React.useEffect(() => {
+-    if (!canApprove || serializedItems.length === 0) return;
+-    let cancelled = false;
+-    setLoadingSerials(true);
+-    Promise.all(serializedItems.map((i) => api.getToolSerials(i.tool, "Available").then((data) => [i.tool, data])))
+-      .then((results) => { if (!cancelled) { const map = {}; results.forEach(([t, d]) => { map[t] = d; }); setAvailableSerials(map); } })
+-      .finally(() => { if (!cancelled) setLoadingSerials(false); });
+-    return () => { cancelled = true; };
+-    // eslint-disable-next-line react-hooks/exhaustive-deps
+-  }, [checkout.id, canApprove]);
+-
+-  const toggleSerial = (tool, sn, qty) => {
+-    setSelectedSerials((prev) => {
+-      const current = new Set(prev[tool] || []);
+-      if (current.has(sn)) current.delete(sn);
+-      else { if (current.size >= qty) return prev; current.add(sn); }
+-      return { ...prev, [tool]: current };
+-    });
+-  };
+-  const allSelected = serializedItems.every((i) => (selectedSerials[i.tool]?.size || 0) === i.qty);
+-  const approveDisabled = serializedItems.length > 0 && (!allSelected || loadingSerials);
+-
+-  const handleApprove = async () => {
+-    setApproving(true);
+-    try {
+-      let serialSelections;
+-      if (serializedItems.length > 0) {
+-        serialSelections = {};
+-        serializedItems.forEach((i) => { serialSelections[i.tool] = Array.from(selectedSerials[i.tool] || []); });
+-      }
+-      await onApprove(checkout.id, { serialSelections, handoverPhoto: handoverPhoto || undefined });
+-    } finally {
+-      setApproving(false);
+-    }
+-  };
+-
+-  // ---- Return ----
+-  const [returnCondition, setReturnCondition] = useState("Baik");
+-  const [returnNote, setReturnNote] = useState("");
+-  const [returnPhoto, setReturnPhoto] = useState("");
+-  const [returning, setReturning] = useState(false);
+-  const [confirmReturn, setConfirmReturn] = useState(false);
+-  const [lightboxSrc, setLightboxSrc] = useState(null);
+-
+-  const handleReturn = async () => {
+-    setReturning(true);
+-    try {
+-      await onReturn(checkout.id, { returnCondition, returnNote, returnPhoto: returnPhoto || undefined });
+-    } finally {
+-      setReturning(false);
+-    }
+-  };
+-
+-  return (
+-    <div className="p-4 sm:p-8 max-w-4xl mx-auto space-y-5">
+-      <button onClick={onBack} className="text-sm text-gray-500 flex items-center gap-1 hover:text-gray-800"><ChevronLeft size={16} /> Kembali ke daftar</button>
+-      <div className="flex items-start justify-between">
+-        <div>
+-          <div className="text-xl font-bold text-gray-900">{checkout.id}</div>
+-          <div className="text-sm text-gray-500 mt-1">Diajukan oleh {checkout.requester} · {checkout.date}</div>
+-        </div>
+-        <StatusBadge status={checkout.status} />
+-      </div>
+-
+-      <Card className="p-5 grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+-        <div><div className="text-gray-400 text-xs">Homebase</div><div className="font-medium text-gray-800">{checkout.homebase}</div></div>
+-        <div><div className="text-gray-400 text-xs">Keperluan</div><div className="font-medium text-gray-800">{checkout.purpose}</div></div>
+-        <div><div className="text-gray-400 text-xs">Estimasi Kembali</div><div className="font-medium text-gray-800">{checkout.expectedReturn || "-"}</div></div>
+-        <div><div className="text-gray-400 text-xs">Catatan</div><div className="font-medium text-gray-800">{checkout.note || "-"}</div></div>
+-      </Card>
+-
+-      <Card className="p-5">
+-        <SectionTitle title="Alat Diajukan" />
+-        <div className="divide-y divide-gray-50">
+-          {checkout.items.map((i, idx) => (
+-            <div key={idx} className="py-2.5 text-sm">
+-              <div className="flex justify-between">
+-                <span className="text-gray-700">{i.tool}</span>
+-                <span className="font-medium text-gray-800">Qty {i.qty}</span>
+-              </div>
+-              {i.serials?.length > 0 && (
+-                <div className="flex flex-wrap gap-1.5 mt-1.5">
+-                  {i.serials.map((sn) => <span key={sn} className="text-xs bg-gray-50 rounded-full px-2 py-0.5 text-gray-500">{sn}</span>)}
+-                </div>
+-              )}
+-            </div>
+-          ))}
+-        </div>
+-      </Card>
+-
+-      {canApprove && serializedItems.length > 0 && (
+-        <Card className="p-5 space-y-5">
+-          <SectionTitle title="Pilih Serial Number" subtitle="Tentukan unit alat yang akan diserahkan" />
+-          {loadingSerials ? (
+-            <div className="text-sm text-gray-400">Memuat Serial Number tersedia...</div>
+-          ) : (
+-            serializedItems.map((item) => {
+-              const selected = selectedSerials[item.tool]?.size || 0;
+-              const options = availableSerials[item.tool] || [];
+-              return (
+-                <div key={item.tool}>
+-                  <div className="flex items-center justify-between mb-2">
+-                    <div className="text-sm font-medium text-gray-800">{item.tool}</div>
+-                    <span className={`text-xs font-semibold ${selected === item.qty ? "text-emerald-700" : "text-amber-600"}`}>{selected} / {item.qty} dipilih</span>
+-                  </div>
+-                  {options.length === 0 ? (
+-                    <div className="text-xs text-red-600">Tidak ada unit Available untuk alat ini.</div>
+-                  ) : (
+-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-48 overflow-y-auto pr-1">
+-                      {options.map((opt) => {
+-                        const checked = selectedSerials[item.tool]?.has(opt.sn) || false;
+-                        return (
+-                          <label key={opt.sn} className={`flex items-center gap-2 text-xs border rounded-lg px-2.5 py-2 cursor-pointer ${checked ? "border-emerald-300 bg-emerald-50/50" : "border-gray-200"}`}>
+-                            <input type="checkbox" checked={checked} onChange={() => toggleSerial(item.tool, opt.sn, item.qty)} className="accent-emerald-800" />
+-                            {opt.sn}
+-                          </label>
+-                        );
+-                      })}
+-                    </div>
+-                  )}
+-                </div>
+-              );
+-            })
+-          )}
+-          <PhotoUpload label="Foto Serah Terima (opsional)" value={handoverPhoto} onChange={setHandoverPhoto} />
+-        </Card>
+-      )}
+-
+-      {canApprove && (
+-        <Card className="p-5 flex items-center justify-between">
+-          <div className="text-sm text-gray-600">Tinjau permintaan ini dan tentukan persetujuan.</div>
+-          <div className="flex gap-2">
+-            <DangerButton onClick={() => onReject(checkout.id)}><X size={15} /> Reject</DangerButton>
+-            <PrimaryButton onClick={() => setConfirmApprove(true)} disabled={approveDisabled || approving}>
+-              <Check size={15} /> {approving ? "Memproses..." : "Approve & Serahkan"}
+-            </PrimaryButton>
+-          </div>
+-        </Card>
+-      )}
+-
+-      {canReturn && (
+-        <Card className="p-5 space-y-4">
+-          <SectionTitle title="Kembalikan Alat" subtitle="Catat kondisi alat saat dikembalikan" />
+-          <div className="flex gap-3">
+-            {["Baik", "Rusak"].map((c) => (
+-              <button key={c} onClick={() => setReturnCondition(c)} className={`px-4 py-2 rounded-lg text-sm font-medium border ${returnCondition === c ? (c === "Baik" ? "bg-emerald-800 text-white border-emerald-800" : "bg-red-600 text-white border-red-600") : "border-gray-200 text-gray-600"}`}>
+-                {c === "Baik" ? "Kondisi Baik" : "Rusak / Perlu Perbaikan"}
+-              </button>
+-            ))}
+-          </div>
+-          <div>
+-            <label className="text-xs font-medium text-gray-500">Catatan <span className="text-gray-400 font-normal">(opsional)</span></label>
+-            <input value={returnNote} onChange={(e) => setReturnNote(e.target.value)} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
+-          </div>
+-          <PhotoUpload label="Foto Kondisi Alat (opsional)" value={returnPhoto} onChange={setReturnPhoto} />
+-          <div className="flex justify-end pt-2 border-t border-gray-50">
+-            <PrimaryButton onClick={() => setConfirmReturn(true)} disabled={returning}>{returning ? "Memproses..." : "Kembalikan Alat"}</PrimaryButton>
+-          </div>
+-        </Card>
+-      )}
+-
+-      {(checkout.handoverPhoto || checkout.returnPhoto) && (
+-        <Card className="p-5 space-y-3">
+-          <SectionTitle title="Dokumentasi" />
+-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+-            {checkout.handoverPhoto && (
+-              <div>
+-                <PhotoThumb src={checkout.handoverPhoto} alt="Serah terima" className="w-full h-24 object-cover rounded-lg border border-gray-100" onOpen={setLightboxSrc} />
+-                <div className="text-xs text-gray-400 mt-1">Serah terima</div>
+-              </div>
+-            )}
+-            {checkout.returnPhoto && (
+-              <div>
+-                <PhotoThumb src={checkout.returnPhoto} alt="Kondisi kembali" className="w-full h-24 object-cover rounded-lg border border-gray-100" onOpen={setLightboxSrc} />
+-                <div className="text-xs text-gray-400 mt-1">Kondisi saat kembali</div>
+-              </div>
+-            )}
+-          </div>
+-          {checkout.status === "Returned" && (
+-            <div className="text-sm text-gray-600 pt-2 border-t border-gray-50">
+-              Dikembalikan {checkout.returnedDate} · Kondisi: <StatusBadge status={checkout.returnCondition === "Rusak" ? "Under Repair" : "Available"} /> {checkout.returnNote && <span className="text-gray-500">— {checkout.returnNote}</span>}
+-            </div>
+-          )}
+-        </Card>
+-      )}
+-
+-      <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
+-
+-      <ConfirmDialog
+-        open={confirmApprove}
+-        title="Approve & Serahkan Alat"
+-        message={`Alat berikut akan diserahkan untuk ${checkout.id}: ${checkout.items.map((i) => `${i.tool} (${i.qty})`).join(", ")}. Lanjutkan?`}
+-        confirmLabel="Ya, Serahkan"
+-        onConfirm={() => { setConfirmApprove(false); handleApprove(); }}
+-        onCancel={() => setConfirmApprove(false)}
+-      />
+-      <ConfirmDialog
+-        open={confirmReturn}
+-        title="Kembalikan Alat"
+-        message={`Tandai alat pada ${checkout.id} sudah dikembalikan dengan kondisi "${returnCondition}"?`}
+-        confirmLabel="Ya, Kembalikan"
+-        onConfirm={() => { setConfirmReturn(false); handleReturn(); }}
+-        onCancel={() => setConfirmReturn(false)}
+-      />
+-
+-      <Card className="p-5">
+-        <SectionTitle title="Audit Trail" />
+-        <div className="space-y-3">
+-          {checkout.history.map((h, i) => (
+-            <div key={i} className="flex gap-3 text-sm">
+-              <div className="text-xs text-gray-400 w-32 shrink-0">{h.time}</div>
+-              <div className="text-gray-700">{h.text}</div>
+-            </div>
+-          ))}
+-        </div>
+-      </Card>
+-    </div>
+-  );
+-}
+-
+ /* ============================================================
+    MASTER DATA
+    ============================================================ */
+@@ -4272,7 +4010,7 @@ function createApiClient(baseUrl, getToken) {
+     createReceipt: (payload) => request("/stock/receipts", { method: "POST", body: payload }),
+     getReceipts: () => request("/stock/receipts"),
+ 
+-    // ---- Tools / Peminjaman Alat (separate pool, no division split) ----
++    // ---- Tools / Alat (shared pool, no division split — Peminjaman now happens via Delivery Request) ----
+     getTools: () => request("/tools"),
+     createTool: (payload) => request("/tools", { method: "POST", body: payload }),
+     toggleToolStatus: (id) => request(`/tools/${id}/toggle-status`, { method: "PATCH" }),
+@@ -4285,12 +4023,6 @@ function createApiClient(baseUrl, getToken) {
+     },
+     createToolReceipt: (payload) => request("/tools/receipts", { method: "POST", body: payload }),
+     getToolReceipts: () => request("/tools/receipts"),
+-    getCheckouts: () => request("/tools/checkouts"),
+-    getCheckout: (id) => request(`/tools/checkouts/${id}`),
+-    createCheckout: (payload) => request("/tools/checkouts", { method: "POST", body: payload }),
+-    approveCheckout: (id, payload) => request(`/tools/checkouts/${id}/approve`, { method: "POST", body: payload }),
+-    rejectCheckout: (id) => request(`/tools/checkouts/${id}/reject`, { method: "POST" }),
+-    returnCheckout: (id, payload) => request(`/tools/checkouts/${id}/return`, { method: "POST", body: payload }),
+ 
+     getDeliveries: () => request("/deliveries"),
+     createDelivery: (payload) => request("/deliveries", { method: "POST", body: payload }),
+@@ -4301,6 +4033,7 @@ function createApiClient(baseUrl, getToken) {
+     addDeliveryResi: (id, payload) => request(`/deliveries/${id}/resi`, { method: "POST", body: payload }),
+     addDeliveryBast: (id, payload) => request(`/deliveries/${id}/bast`, { method: "POST", body: payload }),
+     addDeliveryBkbLink: (id, bkbLink) => request(`/deliveries/${id}/bkb-link`, { method: "POST", body: { bkbLink } }),
++    returnDeliveryTools: (id, payload) => request(`/deliveries/${id}/return-tools`, { method: "POST", body: payload }),
+     advanceDelivery: (id, payload) => request(`/deliveries/${id}/advance`, { method: "POST", body: payload }),
+ 
+     getReturns: () => request("/returns"),
+@@ -4424,9 +4157,7 @@ export default function App() {
+   const [customers, setCustomers] = useState([]);
+   const [users, setUsers] = useState([]);
+   const [tools, setTools] = useState([]);
+-  const [toolCheckouts, setToolCheckouts] = useState([]);
+   const [toolSerialName, setToolSerialName] = useState("");
+-  const [selectedToolCheckout, setSelectedToolCheckout] = useState(null);
+   const [searchQuery, setSearchQuery] = useState("");
+ 
+   const role = currentUser?.role;
+@@ -4451,11 +4182,11 @@ export default function App() {
+     setDataLoading(true);
+     setApiError("");
+     try {
+-      const [mats, movs, dels, rets, recs, sts, hbs, ars, custs, usrs, tls, checkouts] = await Promise.all([
++      const [mats, movs, dels, rets, recs, sts, hbs, ars, custs, usrs, tls] = await Promise.all([
+         api.getMaterials(), api.getMovements(), api.getDeliveries(), api.getReturns(),
+         api.getReconciliations(), api.getSites(), api.getHomebases(), api.getAreas(),
+         api.getCustomers(), api.getUsers().catch(() => []), // Users list is Manager-only; ignore 403 for other roles
+-        api.getTools(), api.getCheckouts(),
++        api.getTools(),
+       ]);
+       setMaterials(mats.map(normalizeMaterial));
+       setMovements(movs);
+@@ -4468,7 +4199,6 @@ export default function App() {
+       setCustomers(custs);
+       setUsers(usrs);
+       setTools(tls);
+-      setToolCheckouts(checkouts);
+     } catch (err) {
+       setApiError(err.message || "Gagal memuat data dari server");
+     } finally {
+@@ -4493,9 +4223,10 @@ export default function App() {
+   // touches warehouse stock, instead of a full reload of every collection.
+   const refreshStock = async () => {
+     try {
+-      const [mats, movs] = await Promise.all([api.getMaterials(), api.getMovements()]);
++      const [mats, movs, tls] = await Promise.all([api.getMaterials(), api.getMovements(), api.getTools()]);
+       setMaterials(mats.map(normalizeMaterial));
+       setMovements(movs);
++      setTools(tls);
+     } catch (err) {
+       setApiError(err.message);
+     }
+@@ -4521,38 +4252,6 @@ export default function App() {
+     await refreshTools();
+   };
+ 
+-  const submitToolCheckout = async (data) => {
+-    try {
+-      const created = await api.createCheckout(data);
+-      setToolCheckouts((prev) => [created, ...prev]);
+-      showToast(`Peminjaman ${created.id} berhasil diajukan`);
+-      goto("toolCheckouts");
+-    } catch (err) { setApiError(err.message); }
+-  };
+-
+-  const approveToolCheckout = async (id, payload) => {
+-    try {
+-      const updated = await api.approveCheckout(id, payload);
+-      setToolCheckouts((prev) => prev.map((c) => (c.id === id ? updated : c)));
+-      await refreshTools();
+-    } catch (err) { setApiError(err.message); }
+-  };
+-
+-  const rejectToolCheckout = async (id) => {
+-    try {
+-      const updated = await api.rejectCheckout(id);
+-      setToolCheckouts((prev) => prev.map((c) => (c.id === id ? updated : c)));
+-    } catch (err) { setApiError(err.message); }
+-  };
+-
+-  const returnToolCheckout = async (id, payload) => {
+-    try {
+-      const updated = await api.returnCheckout(id, payload);
+-      setToolCheckouts((prev) => prev.map((c) => (c.id === id ? updated : c)));
+-      await refreshTools();
+-    } catch (err) { setApiError(err.message); }
+-  };
+-
+   const createToolMaster = async (payload) => {
+     const created = await api.createTool(payload);
+     setTools((prev) => [...prev, created]);
+@@ -4562,7 +4261,18 @@ export default function App() {
+     setTools((prev) => prev.map((t) => (t.id === id ? updated : t)));
+   };
+ 
+-  const goto = (p) => { setPage(p); setSelectedDelivery(null); setSelectedReturn(null); setSelectedRecon(null); setSelectedToolCheckout(null); };
++  // Tools attached to a Delivery Request come back independently of that
++  // delivery's own status — this can be called any time, including long
++  // after the delivery itself is "Delivered".
++  const returnDeliveryTools = async (id, payload) => {
++    try {
++      const updated = await api.returnDeliveryTools(id, payload);
++      setDeliveries((prev) => prev.map((d) => (d.id === id ? updated : d)));
++      await refreshTools();
++    } catch (err) { setApiError(err.message); }
++  };
++
++  const goto = (p) => { setPage(p); setSelectedDelivery(null); setSelectedReturn(null); setSelectedRecon(null); };
+ 
+   /* Navigates directly to a specific record's detail view — clears the other
+      two selection states in the same pass so stale selections from a previous
+@@ -5011,9 +4721,9 @@ export default function App() {
+   else if (page === "delivery") {
+     if (selectedDelivery) {
+       const d = deliveries.find((x) => x.id === selectedDelivery);
+-      content = <DeliveryDetail delivery={d} onBack={() => setSelectedDelivery(null)} onApprove={approveDelivery} onReject={rejectDelivery} onAssignStock={assignDeliveryStock} onShip={shipDelivery} onAddResi={addDeliveryResi} onAddBast={addDeliveryBast} onAddBkbLink={addDeliveryBkbLink} onAdvance={advanceDelivery} role={role} materials={materials} api={api} />;
++      content = <DeliveryDetail delivery={d} onBack={() => setSelectedDelivery(null)} onApprove={approveDelivery} onReject={rejectDelivery} onAssignStock={assignDeliveryStock} onShip={shipDelivery} onAddResi={addDeliveryResi} onAddBast={addDeliveryBast} onAddBkbLink={addDeliveryBkbLink} onAdvance={advanceDelivery} onReturnTools={returnDeliveryTools} role={role} materials={materials} tools={tools} api={api} />;
+     } else content = <DeliveryList deliveries={deliveries} setSelected={setSelectedDelivery} setPage={goto} role={role} />;
+-  } else if (page === "deliveryCreate") content = <DeliveryCreate onSubmit={submitDelivery} onCancel={() => goto("delivery")} materials={materials} sites={sites} homebases={homebases} currentUser={currentUser} customers={customers} />;
++  } else if (page === "deliveryCreate") content = <DeliveryCreate onSubmit={submitDelivery} onCancel={() => goto("delivery")} materials={materials} tools={tools} sites={sites} homebases={homebases} currentUser={currentUser} customers={customers} />;
+   else if (page === "returnFaulty") {
+     if (selectedReturn) {
+       const r = returns.find((x) => x.id === selectedReturn);
+@@ -5062,12 +4772,6 @@ export default function App() {
+   else if (page === "serialDetail") content = <MaterialSerialDetail material={serialMaterial} api={api} onBack={() => goto("stock")} highlightSerial={highlightSerial} highlightToken={highlightToken} deliveries={deliveries} />;
+   else if (page === "toolStock") content = <ToolStockPage tools={tools} setPage={goto} setToolSerialName={setToolSerialName} onSubmitReceipt={createToolReceipt} showToast={showToast} />;
+   else if (page === "toolSerialDetail") content = <ToolSerialDetail toolName={toolSerialName} api={api} onBack={() => goto("toolStock")} />;
+-  else if (page === "toolCheckouts") {
+-    if (selectedToolCheckout) {
+-      const c = toolCheckouts.find((x) => x.id === selectedToolCheckout);
+-      content = <ToolCheckoutDetail checkout={c} onBack={() => setSelectedToolCheckout(null)} onApprove={approveToolCheckout} onReject={rejectToolCheckout} onReturn={returnToolCheckout} role={role} tools={tools} api={api} />;
+-    } else content = <ToolCheckoutList checkouts={toolCheckouts} setSelected={setSelectedToolCheckout} setPage={goto} role={role} />;
+-  } else if (page === "toolCheckoutCreate") content = <ToolCheckoutCreate tools={tools} homebases={homebases} onSubmit={submitToolCheckout} onCancel={() => goto("toolCheckouts")} />;
+   else if (page === "reports") content = <ReportsPage
+     title="Delivery Report" subtitle="Laporan seluruh pengajuan delivery"
+     data={deliveries}
+-- 
+2.43.0
+
