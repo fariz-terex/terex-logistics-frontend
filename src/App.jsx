@@ -3042,6 +3042,27 @@ function MaterialSwapPage({ swaps, api, onSubmit, showToast, setPage, setReturnP
   const [error, setError] = useState("");
   const [lastSwap, setLastSwap] = useState(null);
 
+  // Full candidate lists, fetched once — Installed units (for the unit
+  // currently at the site) and Delivered-not-yet-installed units (for the
+  // replacement) — so the picker can show "what's available" instead of
+  // making the user know/type an exact SN from memory.
+  const [installedOptions, setInstalledOptions] = useState([]);
+  const [deliveredOptions, setDeliveredOptions] = useState([]);
+  const [oldFocused, setOldFocused] = useState(false);
+  const [newFocused, setNewFocused] = useState(false);
+
+  React.useEffect(() => {
+    api.getSerials(undefined, "Installed").then(setInstalledOptions).catch(() => {});
+    api.getSerials(undefined, "Delivered").then(setDeliveredOptions).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const filterOptions = (list, query) => {
+    const q = query.trim().toLowerCase();
+    const matches = q ? list.filter((r) => r.sn.toLowerCase().includes(q) || r.material.toLowerCase().includes(q)) : list;
+    return matches.slice(0, 8);
+  };
+
   const checkSn = async (sn, expectedStatus, setInfo) => {
     const trimmed = sn.trim();
     if (!trimmed) { setInfo(undefined); return; }
@@ -3080,6 +3101,8 @@ function MaterialSwapPage({ swaps, api, onSubmit, showToast, setPage, setReturnP
       showToast(`Penggantian ${created.id} berhasil dicatat`);
       setLastSwap(created);
       setOldSn(""); setNewSn(""); setSite(""); setHomebase(""); setNote(""); setPhoto(""); setOldInfo(undefined); setNewInfo(undefined);
+      api.getSerials(undefined, "Installed").then(setInstalledOptions).catch(() => {});
+      api.getSerials(undefined, "Delivered").then(setDeliveredOptions).catch(() => {});
     } catch (err) {
       setError(err.message || "Gagal mencatat penggantian");
     } finally {
@@ -3092,6 +3115,27 @@ function MaterialSwapPage({ swaps, api, onSubmit, showToast, setPage, setReturnP
     if (info === null) return <div className="text-xs text-red-600 mt-1">Serial Number tidak ditemukan di sistem.</div>;
     if (!info.ok) return <div className="text-xs text-red-600 mt-1">{info.material} — status saat ini <span className="font-medium">{info.status}</span>, harus {label}.</div>;
     return <div className="text-xs text-emerald-700 mt-1">✓ {info.material} — {info.status}{info.install_site ? ` di ${info.install_site}` : ""}</div>;
+  };
+
+  const SnDropdown = ({ options, query, onPick }) => {
+    const filtered = filterOptions(options, query);
+    if (filtered.length === 0) {
+      return <div className="absolute z-10 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg px-3 py-2 text-xs text-gray-400">Tidak ada unit yang cocok.</div>;
+    }
+    return (
+      <div className="absolute z-10 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-56 overflow-y-auto">
+        {filtered.map((opt) => (
+          <button
+            key={opt.sn}
+            onMouseDown={(e) => { e.preventDefault(); onPick(opt.sn); }}
+            className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 flex items-center justify-between gap-2 border-b border-gray-50 last:border-0"
+          >
+            <span className="font-medium text-gray-800">{opt.sn}</span>
+            <span className="text-xs text-gray-400 truncate">{opt.material}{opt.install_site ? ` · ${opt.install_site}` : ""}</span>
+          </button>
+        ))}
+      </div>
+    );
   };
 
   return (
@@ -3111,14 +3155,30 @@ function MaterialSwapPage({ swaps, api, onSubmit, showToast, setPage, setReturnP
 
       <Card className="p-6 space-y-4 max-w-2xl">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div>
-            <label className="text-sm font-medium text-gray-700">Serial Number Lama (Installed) <span className="text-red-500">*</span></label>
-            <input value={oldSn} onChange={(e) => setOldSn(e.target.value)} placeholder="SN unit yang dicabut" className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+          <div className="relative">
+            <label className="text-sm font-medium text-gray-700">Serial Number Baru (Installed) <span className="text-red-500">*</span></label>
+            <input
+              value={oldSn}
+              onChange={(e) => setOldSn(e.target.value)}
+              onFocus={() => setOldFocused(true)}
+              onBlur={() => setTimeout(() => setOldFocused(false), 150)}
+              placeholder="Cari atau pilih unit yang sedang terpasang..."
+              className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600"
+            />
+            {oldFocused && <SnDropdown options={installedOptions} query={oldSn} onPick={(sn) => { setOldSn(sn); setOldFocused(false); }} />}
             <SnStatusLine info={oldInfo} label="Installed" />
           </div>
-          <div>
+          <div className="relative">
             <label className="text-sm font-medium text-gray-700">Serial Number Pengganti (Delivered) <span className="text-red-500">*</span></label>
-            <input value={newSn} onChange={(e) => setNewSn(e.target.value)} placeholder="SN unit baru" className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+            <input
+              value={newSn}
+              onChange={(e) => setNewSn(e.target.value)}
+              onFocus={() => setNewFocused(true)}
+              onBlur={() => setTimeout(() => setNewFocused(false), 150)}
+              placeholder="Cari atau pilih unit pengganti..."
+              className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600"
+            />
+            {newFocused && <SnDropdown options={deliveredOptions} query={newSn} onPick={(sn) => { setNewSn(sn); setNewFocused(false); }} />}
             <SnStatusLine info={newInfo} label="Delivered" />
           </div>
           <div>
