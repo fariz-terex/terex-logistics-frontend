@@ -233,6 +233,7 @@ const STATUS_STYLES = {
   "Returned": "bg-emerald-50 text-emerald-700",
   "Available": "bg-emerald-50 text-emerald-700",
   "Under Repair": "bg-red-50 text-red-700",
+  "Installed": "bg-emerald-100 text-emerald-800",
 };
 
 function StatusBadge({ status }) {
@@ -1074,7 +1075,7 @@ function DeliveryCreate({ onSubmit, onCancel, materials, tools, sites, homebases
   );
 }
 
-function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, onShip, onAddResi, onAddBast, onAddBkbLink, onAdvance, onReturnTools, role, materials, tools, api }) {
+function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, onShip, onAddResi, onAddBast, onAddBkbLink, onAdvance, onReturnTools, onInstall, role, materials, tools, api }) {
   // Stage 1 — Manager reviews qty only, no SN involved.
   const canApprove = role === ROLES.MANAGER && delivery.status === "Waiting Logistics Approval";
   // Stage 2 — Logistics Staff (or Manager) picks the actual units to fulfill it.
@@ -1225,6 +1226,36 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, 
     }
   };
 
+  // ---- Konfirmasi Instalasi — materials only, independent of the
+  // delivery's own status; Logistics confirms specific Delivered units are
+  // physically installed at site, based on a field report. Photo required.
+  // Partial confirmation supported (confirm some units now, more later). ----
+  const canInstall = (role === ROLES.LOGISTICS || role === ROLES.MANAGER) && (delivery.outstandingInstalls?.length || 0) > 0;
+  const [selectedInstalls, setSelectedInstalls] = useState(new Set());
+  const [installSite, setInstallSite] = useState(delivery.site || "");
+  const [installNote, setInstallNote] = useState("");
+  const [installPhoto, setInstallPhoto] = useState("");
+  const [installing, setInstalling] = useState(false);
+  const [confirmInstall, setConfirmInstall] = useState(false);
+
+  const toggleInstallSn = (sn) => {
+    setSelectedInstalls((prev) => {
+      const next = new Set(prev);
+      if (next.has(sn)) next.delete(sn); else next.add(sn);
+      return next;
+    });
+  };
+
+  const handleInstall = async () => {
+    setInstalling(true);
+    try {
+      await onInstall(delivery.id, { serials: Array.from(selectedInstalls), photo: installPhoto, site: installSite.trim() || undefined, note: installNote || undefined });
+      setSelectedInstalls(new Set()); setInstallNote(""); setInstallPhoto("");
+    } finally {
+      setInstalling(false);
+    }
+  };
+
   // ---- Resi (optional, can be added after shipping) ----
   const [resiInput, setResiInput] = useState("");
   const [resiPhotoInput, setResiPhotoInput] = useState("");
@@ -1275,9 +1306,14 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, 
               {i.serials?.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 mt-1.5">
                   {i.serials.map((sn) => {
-                    const snStatus = i.type === "tool" ? i.serialStatuses?.[sn] : null;
+                    const snStatus = i.serialStatuses?.[sn];
+                    const badgeClass = snStatus === "Checked Out" ? "bg-indigo-50 text-indigo-700"
+                      : snStatus === "Installed" ? "bg-emerald-100 text-emerald-800"
+                      : snStatus === "Delivered" ? "bg-amber-50 text-amber-700"
+                      : snStatus ? "bg-emerald-50 text-emerald-700"
+                      : "bg-gray-50 text-gray-500";
                     return (
-                      <span key={sn} className={`text-xs rounded-full px-2 py-0.5 ${snStatus === "Checked Out" ? "bg-indigo-50 text-indigo-700" : snStatus ? "bg-emerald-50 text-emerald-700" : "bg-gray-50 text-gray-500"}`}>
+                      <span key={sn} className={`text-xs rounded-full px-2 py-0.5 ${badgeClass}`}>
                         {sn}{snStatus ? ` · ${snStatus}` : ""}
                       </span>
                     );
@@ -1688,6 +1724,46 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, 
         confirmLabel="Ya, Kembalikan"
         onConfirm={() => { setConfirmReturnTools(false); handleReturnTools(); }}
         onCancel={() => setConfirmReturnTools(false)}
+      />
+
+      {canInstall && (
+        <Card className="p-5 space-y-4 border-emerald-100 bg-emerald-50/20">
+          <SectionTitle title="Konfirmasi Instalasi" subtitle="Material berikut sudah Delivered — tandai unit mana yang sudah terpasang di site berdasarkan laporan lapangan" />
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            {delivery.outstandingInstalls.map(({ material, sn }) => {
+              const checked = selectedInstalls.has(sn);
+              return (
+                <label key={sn} className={`flex items-center gap-2 text-xs border rounded-lg px-2.5 py-2 cursor-pointer ${checked ? "border-emerald-300 bg-emerald-50" : "border-gray-200 bg-white"}`}>
+                  <input type="checkbox" checked={checked} onChange={() => toggleInstallSn(sn)} className="accent-emerald-800" />
+                  <span className="truncate"><span className="font-medium">{sn}</span> <span className="text-gray-400">({material})</span></span>
+                </label>
+              );
+            })}
+          </div>
+          <div>
+            <label className="text-xs font-medium text-gray-500">Site <span className="text-gray-400 font-normal">(opsional — default ke site pada request ini)</span></label>
+            <input value={installSite} onChange={(e) => setInstallSite(e.target.value)} placeholder="Nama site tempat terpasang" className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-gray-500">Catatan <span className="text-gray-400 font-normal">(opsional)</span></label>
+            <input value={installNote} onChange={(e) => setInstallNote(e.target.value)} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
+          </div>
+          <PhotoUpload label="Foto Bukti Terpasang" value={installPhoto} onChange={setInstallPhoto} />
+          <div className="flex justify-end pt-2 border-t border-emerald-100">
+            <PrimaryButton onClick={() => setConfirmInstall(true)} disabled={selectedInstalls.size === 0 || !installPhoto || installing}>
+              {installing ? "Memproses..." : `Tandai ${selectedInstalls.size || ""} Unit Ter-install`}
+            </PrimaryButton>
+          </div>
+        </Card>
+      )}
+
+      <ConfirmDialog
+        open={confirmInstall}
+        title="Konfirmasi Instalasi"
+        message={`Tandai ${selectedInstalls.size} unit sebagai sudah ter-install di site${installSite.trim() ? ` "${installSite.trim()}"` : ""}?`}
+        confirmLabel="Ya, Konfirmasi"
+        onConfirm={() => { setConfirmInstall(false); handleInstall(); }}
+        onCancel={() => setConfirmInstall(false)}
       />
 
       <Card className="p-5">
@@ -4034,6 +4110,7 @@ function createApiClient(baseUrl, getToken) {
     addDeliveryBast: (id, payload) => request(`/deliveries/${id}/bast`, { method: "POST", body: payload }),
     addDeliveryBkbLink: (id, bkbLink) => request(`/deliveries/${id}/bkb-link`, { method: "POST", body: { bkbLink } }),
     returnDeliveryTools: (id, payload) => request(`/deliveries/${id}/return-tools`, { method: "POST", body: payload }),
+    installDeliveryItems: (id, payload) => request(`/deliveries/${id}/install`, { method: "POST", body: payload }),
     advanceDelivery: (id, payload) => request(`/deliveries/${id}/advance`, { method: "POST", body: payload }),
 
     getReturns: () => request("/returns"),
@@ -4272,6 +4349,15 @@ export default function App() {
     } catch (err) { setApiError(err.message); }
   };
 
+  // Confirming installed units doesn't touch stock (they already left the
+  // warehouse when Delivered) — just update the delivery's SN statuses.
+  const installDeliveryItems = async (id, payload) => {
+    try {
+      const updated = await api.installDeliveryItems(id, payload);
+      setDeliveries((prev) => prev.map((d) => (d.id === id ? updated : d)));
+    } catch (err) { setApiError(err.message); }
+  };
+
   const goto = (p) => { setPage(p); setSelectedDelivery(null); setSelectedReturn(null); setSelectedRecon(null); };
 
   /* Navigates directly to a specific record's detail view — clears the other
@@ -4374,16 +4460,20 @@ export default function App() {
   // for non-serialized items), carrying the destination Homebase/Site along
   // — this is exactly the data already tracked via delivery.items[].serials,
   // just reshaped for a location-first view instead of a request-first one.
+  // Materials only — tools ride along in a delivery too but they get
+  // returned rather than permanently placed, so they don't belong in a
+  // "where are our devices" report.
   const deviceLocations = useMemo(() => {
     const rows = [];
     deliveries.filter((d) => d.status === "Delivered").forEach((d) => {
-      d.items.forEach((item) => {
+      d.items.filter((item) => item.type !== "tool").forEach((item) => {
         if (item.serials && item.serials.length > 0) {
           item.serials.forEach((sn) => {
-            rows.push({ sn, material: item.material, qty: 1, homebase: d.homebase, site: d.site, requester: d.requester, deliveryId: d.id, date: d.date });
+            const status = item.serialStatuses?.[sn] || "Delivered";
+            rows.push({ sn, material: item.material, qty: 1, homebase: d.homebase, site: d.site, requester: d.requester, deliveryId: d.id, date: d.date, status });
           });
         } else {
-          rows.push({ sn: "-", material: item.material, qty: item.qty, homebase: d.homebase, site: d.site, requester: d.requester, deliveryId: d.id, date: d.date });
+          rows.push({ sn: "-", material: item.material, qty: item.qty, homebase: d.homebase, site: d.site, requester: d.requester, deliveryId: d.id, date: d.date, status: "Delivered" });
         }
       });
     });
@@ -4721,7 +4811,7 @@ export default function App() {
   else if (page === "delivery") {
     if (selectedDelivery) {
       const d = deliveries.find((x) => x.id === selectedDelivery);
-      content = <DeliveryDetail delivery={d} onBack={() => setSelectedDelivery(null)} onApprove={approveDelivery} onReject={rejectDelivery} onAssignStock={assignDeliveryStock} onShip={shipDelivery} onAddResi={addDeliveryResi} onAddBast={addDeliveryBast} onAddBkbLink={addDeliveryBkbLink} onAdvance={advanceDelivery} onReturnTools={returnDeliveryTools} role={role} materials={materials} tools={tools} api={api} />;
+      content = <DeliveryDetail delivery={d} onBack={() => setSelectedDelivery(null)} onApprove={approveDelivery} onReject={rejectDelivery} onAssignStock={assignDeliveryStock} onShip={shipDelivery} onAddResi={addDeliveryResi} onAddBast={addDeliveryBast} onAddBkbLink={addDeliveryBkbLink} onAdvance={advanceDelivery} onReturnTools={returnDeliveryTools} onInstall={installDeliveryItems} role={role} materials={materials} tools={tools} api={api} />;
     } else content = <DeliveryList deliveries={deliveries} setSelected={setSelectedDelivery} setPage={goto} role={role} />;
   } else if (page === "deliveryCreate") content = <DeliveryCreate onSubmit={submitDelivery} onCancel={() => goto("delivery")} materials={materials} tools={tools} sites={sites} homebases={homebases} currentUser={currentUser} customers={customers} />;
   else if (page === "returnFaulty") {
@@ -4818,7 +4908,7 @@ export default function App() {
     ]}
   />;
   else if (page === "reportsDeviceLocation") content = <ReportsPage
-    title="Lokasi Perangkat" subtitle="Posisi perangkat yang sudah Delivered, berdasarkan Homebase/Site tujuan pengiriman"
+    title="Lokasi Perangkat" subtitle="Posisi perangkat yang sudah Delivered — status menunjukkan apakah sudah dikonfirmasi ter-install di site"
     data={deviceLocations}
     statusOf={(r) => r.homebase}
     statusLabel="Homebase"
@@ -4827,6 +4917,7 @@ export default function App() {
     columns={[
       { label: "Serial Number", render: (r) => r.sn, exportValue: (r) => r.sn },
       { label: "Material", render: (r) => r.material, exportValue: (r) => r.material },
+      { label: "Status", render: (r) => <StatusBadge status={r.status} />, exportValue: (r) => r.status },
       { label: "Qty", render: (r) => r.qty, exportValue: (r) => r.qty },
       { label: "Homebase", render: (r) => r.homebase, exportValue: (r) => r.homebase },
       { label: "Site", render: (r) => r.site || "-", exportValue: (r) => r.site || "-" },
