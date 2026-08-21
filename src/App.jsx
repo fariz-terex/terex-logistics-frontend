@@ -183,6 +183,7 @@ const NAV_ACCESS = {
   delivery: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV],
   returnFaulty: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.TECH],
   reconciliation: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.TECH],
+  materialSwap: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.TECH],
   stock: [ROLES.MANAGER, ROLES.LOGISTICS],
   movement: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV],
   receipts: [ROLES.MANAGER, ROLES.LOGISTICS],
@@ -366,6 +367,7 @@ const NAV_TREE = [
       { key: "delivery", label: "Delivery Request" },
       { key: "returnFaulty", label: "Return Material Faulty" },
       { key: "reconciliation", label: "Reconciliation" },
+      { key: "materialSwap", label: "Penggantian Material" },
     ],
   },
   {
@@ -403,6 +405,7 @@ const NAV_TREE = [
 function hasAccess(key, role) {
   const map = {
     delivery: NAV_ACCESS.delivery, returnFaulty: NAV_ACCESS.returnFaulty, reconciliation: NAV_ACCESS.reconciliation,
+    materialSwap: NAV_ACCESS.materialSwap,
     stock: NAV_ACCESS.stock, movement: NAV_ACCESS.movement,
     toolStock: NAV_ACCESS.toolStock,
     reports: NAV_ACCESS.reports, reportsFaulty: NAV_ACCESS.reports, reportsRecon: NAV_ACCESS.reports, reportsDeviceLocation: NAV_ACCESS.reportsDeviceLocation,
@@ -2401,7 +2404,7 @@ function findSNConflict(sn, { returns = [], reconciliations = [], excludeId = nu
   return null;
 }
 
-function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconciliations, initialData, excludeId, revisionNote, currentUser, customers }) {
+function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconciliations, initialData, excludeId, revisionNote, currentUser, customers, prefillItems }) {
   const isEdit = !!initialData;
   const isManager = currentUser?.role === ROLES.MANAGER;
   const myDivisions = currentUser?.customers || [];
@@ -2411,6 +2414,8 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
   const [items, setItems] = useState(
     initialData?.items?.length
       ? initialData.items.map((it) => ({ material: it.material, serials: it.serials.map((s) => ({ ...s })) }))
+      : prefillItems?.length
+      ? prefillItems.map((it) => ({ material: it.material, serials: [{ sn: it.sn, photo: "" }] }))
       : [{ material: "", serials: [{ sn: "", photo: "" }] }]
   );
   const [docs, setDocs] = useState(initialData?.docs ? { ...initialData.docs } : { beforePacking: "", afterPacking: "", weighing: "" });
@@ -2461,6 +2466,13 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
         <Card className="p-4 border-red-200 bg-red-50/50 flex items-start gap-3">
           <AlertTriangle size={18} className="text-red-500 mt-0.5 shrink-0" />
           <div className="text-sm text-red-700"><span className="font-semibold">Catatan revisi dari Logistics: </span>{revisionNote}</div>
+        </Card>
+      )}
+
+      {!isEdit && prefillItems?.length > 0 && (
+        <Card className="p-4 border-emerald-200 bg-emerald-50/50 flex items-start gap-3">
+          <Check size={18} className="text-emerald-600 mt-0.5 shrink-0" />
+          <div className="text-sm text-emerald-800">Material & Serial Number sudah terisi otomatis dari Penggantian Material — lengkapi foto per SN dan dokumentasi di bawah untuk mengirim.</div>
         </Card>
       )}
 
@@ -3008,6 +3020,163 @@ function ReconciliationDetail({ r, onBack, onApprove, onRevise, onEdit, role }) 
     </div>
   );
 }
+
+/* ============================================================
+   PENGGANTIAN MATERIAL (Material Swap)
+   Swaps a faulty Installed unit at a site for a new one: new unit becomes
+   Installed at the same site, old unit becomes Faulty and is ready to be
+   picked up in a normal Return Material Faulty submission (this doesn't
+   replace that flow — it just feeds into it).
+   ============================================================ */
+
+function MaterialSwapPage({ swaps, api, onSubmit, showToast, setPage, setReturnPrefill }) {
+  const [oldSn, setOldSn] = useState("");
+  const [newSn, setNewSn] = useState("");
+  const [site, setSite] = useState("");
+  const [homebase, setHomebase] = useState("");
+  const [note, setNote] = useState("");
+  const [photo, setPhoto] = useState("");
+  const [oldInfo, setOldInfo] = useState(undefined); // undefined = not checked, null = invalid, object = valid
+  const [newInfo, setNewInfo] = useState(undefined);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [lastSwap, setLastSwap] = useState(null);
+
+  const checkSn = async (sn, expectedStatus, setInfo) => {
+    const trimmed = sn.trim();
+    if (!trimmed) { setInfo(undefined); return; }
+    try {
+      const results = await api.searchSerials(trimmed);
+      const exact = results.find((r) => r.sn === trimmed);
+      if (!exact) { setInfo(null); return; }
+      setInfo({ ...exact, ok: exact.status === expectedStatus });
+    } catch {
+      setInfo(null);
+    }
+  };
+
+  React.useEffect(() => {
+    const t = setTimeout(() => checkSn(oldSn, "Installed", setOldInfo), 400);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [oldSn]);
+
+  React.useEffect(() => {
+    const t = setTimeout(() => checkSn(newSn, "Delivered", setNewInfo), 400);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [newSn]);
+
+  React.useEffect(() => {
+    if (oldInfo?.ok && !site) setSite(oldInfo.install_site || "");
+  }, [oldInfo]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const valid = oldInfo?.ok && newInfo?.ok && photo;
+
+  const submit = async () => {
+    setSaving(true); setError("");
+    try {
+      const created = await onSubmit({ oldSn: oldSn.trim(), newSn: newSn.trim(), site: site.trim() || undefined, homebase: homebase.trim() || undefined, photo, note: note || undefined });
+      showToast(`Penggantian ${created.id} berhasil dicatat`);
+      setLastSwap(created);
+      setOldSn(""); setNewSn(""); setSite(""); setHomebase(""); setNote(""); setPhoto(""); setOldInfo(undefined); setNewInfo(undefined);
+    } catch (err) {
+      setError(err.message || "Gagal mencatat penggantian");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const SnStatusLine = ({ info, label }) => {
+    if (info === undefined) return null;
+    if (info === null) return <div className="text-xs text-red-600 mt-1">Serial Number tidak ditemukan di sistem.</div>;
+    if (!info.ok) return <div className="text-xs text-red-600 mt-1">{info.material} — status saat ini <span className="font-medium">{info.status}</span>, harus {label}.</div>;
+    return <div className="text-xs text-emerald-700 mt-1">✓ {info.material} — {info.status}{info.install_site ? ` di ${info.install_site}` : ""}</div>;
+  };
+
+  return (
+    <div className="p-4 sm:p-8 space-y-5">
+      <SectionTitle title="Penggantian Material" subtitle="Cabut unit rusak dari site, pasang unit pengganti — unit lama otomatis siap dilaporkan lewat Return Material Faulty" />
+
+      {lastSwap && (
+        <Card className="p-4 border-emerald-200 bg-emerald-50/50 flex items-center justify-between">
+          <div className="text-sm text-emerald-800">
+            <span className="font-semibold">{lastSwap.id}</span> — {lastSwap.oldSn} sudah ditandai Faulty. Lanjutkan buat laporan Return Material Faulty untuk unit ini?
+          </div>
+          <PrimaryButton onClick={() => { setReturnPrefill({ material: lastSwap.oldMaterial, sn: lastSwap.oldSn, site: lastSwap.site, homebase: lastSwap.homebase }); setPage("returnFaultyCreate"); }}>
+            Buat Return Faulty
+          </PrimaryButton>
+        </Card>
+      )}
+
+      <Card className="p-6 space-y-4 max-w-2xl">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className="text-sm font-medium text-gray-700">Serial Number Lama (Installed) <span className="text-red-500">*</span></label>
+            <input value={oldSn} onChange={(e) => setOldSn(e.target.value)} placeholder="SN unit yang dicabut" className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+            <SnStatusLine info={oldInfo} label="Installed" />
+          </div>
+          <div>
+            <label className="text-sm font-medium text-gray-700">Serial Number Pengganti (Delivered) <span className="text-red-500">*</span></label>
+            <input value={newSn} onChange={(e) => setNewSn(e.target.value)} placeholder="SN unit baru" className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+            <SnStatusLine info={newInfo} label="Delivered" />
+          </div>
+          <div>
+            <label className="text-sm font-medium text-gray-700">Site <span className="text-gray-400 font-normal">(otomatis dari unit lama)</span></label>
+            <input value={site} onChange={(e) => setSite(e.target.value)} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+          </div>
+          <div>
+            <label className="text-sm font-medium text-gray-700">Homebase <span className="text-gray-400 font-normal">(opsional)</span></label>
+            <input value={homebase} onChange={(e) => setHomebase(e.target.value)} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+          </div>
+        </div>
+        <div>
+          <label className="text-sm font-medium text-gray-700">Catatan <span className="text-gray-400 font-normal">(opsional)</span></label>
+          <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="mis. alasan penggantian" className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+        </div>
+        <PhotoUpload label="Foto Bukti Penggantian" value={photo} onChange={setPhoto} />
+        {error && <div className="bg-red-50 border border-red-100 text-red-700 text-sm rounded-lg px-3 py-2">{error}</div>}
+        <div className="flex justify-end pt-2 border-t border-gray-50">
+          <PrimaryButton onClick={submit} disabled={!valid || saving}>{saving ? "Menyimpan..." : "Catat Penggantian"}</PrimaryButton>
+        </div>
+      </Card>
+
+      <Card className="overflow-hidden">
+        <div className="px-5 py-4 border-b border-gray-50 text-sm font-semibold text-gray-800">Riwayat Penggantian</div>
+        <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
+              <th className="px-5 py-3 font-medium">No.</th>
+              <th className="px-5 py-3 font-medium">Site</th>
+              <th className="px-5 py-3 font-medium">SN Lama</th>
+              <th className="px-5 py-3 font-medium">SN Baru</th>
+              <th className="px-5 py-3 font-medium">Material</th>
+              <th className="px-5 py-3 font-medium">Oleh</th>
+              <th className="px-5 py-3 font-medium">Tgl</th>
+            </tr>
+          </thead>
+          <tbody>
+            {swaps.map((s) => (
+              <tr key={s.id} className="border-b border-gray-50 last:border-0">
+                <td className="px-5 py-3 font-medium text-gray-800">{s.id}</td>
+                <td className="px-5 py-3 text-gray-600">{s.site || "-"}</td>
+                <td className="px-5 py-3 text-red-600">{s.oldSn}</td>
+                <td className="px-5 py-3 text-emerald-700">{s.newSn}</td>
+                <td className="px-5 py-3 text-gray-600">{s.newMaterial}</td>
+                <td className="px-5 py-3 text-gray-500">{s.performedBy}</td>
+                <td className="px-5 py-3 text-gray-500">{s.date}</td>
+              </tr>
+            ))}
+            {swaps.length === 0 && <tr><td colSpan={7}><EmptyState text="Belum ada riwayat penggantian material." /></td></tr>}
+          </tbody>
+        </table>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 
 /* ============================================================
    TOOLS / PERALATAN (Peminjaman Alat)
@@ -4111,6 +4280,10 @@ function createApiClient(baseUrl, getToken) {
     addDeliveryBkbLink: (id, bkbLink) => request(`/deliveries/${id}/bkb-link`, { method: "POST", body: { bkbLink } }),
     returnDeliveryTools: (id, payload) => request(`/deliveries/${id}/return-tools`, { method: "POST", body: payload }),
     installDeliveryItems: (id, payload) => request(`/deliveries/${id}/install`, { method: "POST", body: payload }),
+
+    // ---- Penggantian Material (swap a faulty Installed unit for a new one) ----
+    getMaterialSwaps: () => request("/material-swaps"),
+    createMaterialSwap: (payload) => request("/material-swaps", { method: "POST", body: payload }),
     advanceDelivery: (id, payload) => request(`/deliveries/${id}/advance`, { method: "POST", body: payload }),
 
     getReturns: () => request("/returns"),
@@ -4235,6 +4408,8 @@ export default function App() {
   const [users, setUsers] = useState([]);
   const [tools, setTools] = useState([]);
   const [toolSerialName, setToolSerialName] = useState("");
+  const [materialSwaps, setMaterialSwaps] = useState([]);
+  const [returnPrefill, setReturnPrefill] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
 
   const role = currentUser?.role;
@@ -4259,11 +4434,11 @@ export default function App() {
     setDataLoading(true);
     setApiError("");
     try {
-      const [mats, movs, dels, rets, recs, sts, hbs, ars, custs, usrs, tls] = await Promise.all([
+      const [mats, movs, dels, rets, recs, sts, hbs, ars, custs, usrs, tls, swaps] = await Promise.all([
         api.getMaterials(), api.getMovements(), api.getDeliveries(), api.getReturns(),
         api.getReconciliations(), api.getSites(), api.getHomebases(), api.getAreas(),
         api.getCustomers(), api.getUsers().catch(() => []), // Users list is Manager-only; ignore 403 for other roles
-        api.getTools(),
+        api.getTools(), api.getMaterialSwaps(),
       ]);
       setMaterials(mats.map(normalizeMaterial));
       setMovements(movs);
@@ -4276,6 +4451,7 @@ export default function App() {
       setCustomers(custs);
       setUsers(usrs);
       setTools(tls);
+      setMaterialSwaps(swaps);
     } catch (err) {
       setApiError(err.message || "Gagal memuat data dari server");
     } finally {
@@ -4358,7 +4534,17 @@ export default function App() {
     } catch (err) { setApiError(err.message); }
   };
 
-  const goto = (p) => { setPage(p); setSelectedDelivery(null); setSelectedReturn(null); setSelectedRecon(null); };
+  const submitMaterialSwap = async (payload) => {
+    const created = await api.createMaterialSwap(payload);
+    setMaterialSwaps((prev) => [created, ...prev]);
+    return created;
+  };
+
+  const goto = (p) => {
+    setPage(p);
+    setSelectedDelivery(null); setSelectedReturn(null); setSelectedRecon(null);
+    if (p !== "returnFaultyCreate") setReturnPrefill(null); // only meant for the one navigation right after a swap
+  };
 
   /* Navigates directly to a specific record's detail view — clears the other
      two selection states in the same pass so stale selections from a previous
@@ -4823,7 +5009,7 @@ export default function App() {
       const r = returns.find((x) => x.id === selectedReturn);
       content = <ReturnFaultyDetail r={r} onBack={() => setSelectedReturn(null)} onApprove={approveReturn} onRevise={reviseReturn} onShip={shipReturn} onAddResi={addResiReturn} onReceive={receiveReturn} onQC={qcReturn} onComplete={completeReturn} onEdit={() => setPage("returnFaultyEdit")} role={role} />;
     } else content = <ReturnFaultyList returns={returns} setSelected={setSelectedReturn} setPage={goto} role={role} />;
-  } else if (page === "returnFaultyCreate") content = <ReturnFaultyCreate onSubmit={submitReturn} onCancel={() => goto("returnFaulty")} materials={materials} returns={returns} reconciliations={reconciliations} currentUser={currentUser} customers={customers} />;
+  } else if (page === "returnFaultyCreate") content = <ReturnFaultyCreate onSubmit={submitReturn} onCancel={() => goto("returnFaulty")} materials={materials} returns={returns} reconciliations={reconciliations} currentUser={currentUser} customers={customers} prefillItems={returnPrefill ? [returnPrefill] : undefined} />;
   else if (page === "returnFaultyEdit") {
     const r = returns.find((x) => x.id === selectedReturn);
     content = <ReturnFaultyCreate
@@ -4861,6 +5047,7 @@ export default function App() {
       customers={customers}
     />;
   }
+  else if (page === "materialSwap") content = <MaterialSwapPage swaps={materialSwaps} api={api} onSubmit={submitMaterialSwap} showToast={showToast} setPage={goto} setReturnPrefill={setReturnPrefill} />;
   else if (page === "stock") content = <WarehouseStock materials={materials} setPage={goto} setMovementFilter={setMovementFilter} setSerialMaterial={setSerialMaterial} onSubmitReceipt={createReceipt} showToast={showToast} clearSerialHighlight={() => setHighlightSerial("")} currentUser={currentUser} customers={customers} />;
   else if (page === "movement") content = <StockMovement movements={movements} filter={movementFilter} setFilter={setMovementFilter} deliveries={deliveries} />;
   else if (page === "serialDetail") content = <MaterialSerialDetail material={serialMaterial} api={api} onBack={() => goto("stock")} highlightSerial={highlightSerial} highlightToken={highlightToken} deliveries={deliveries} />;
