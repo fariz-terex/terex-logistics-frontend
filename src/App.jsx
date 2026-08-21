@@ -4470,7 +4470,11 @@ export default function App() {
         if (item.serials && item.serials.length > 0) {
           item.serials.forEach((sn) => {
             const status = item.serialStatuses?.[sn] || "Delivered";
-            rows.push({ sn, material: item.material, qty: 1, homebase: d.homebase, site: d.site, requester: d.requester, deliveryId: d.id, date: d.date, status });
+            // If this unit's been confirmed Installed, the site recorded at
+            // confirmation time is the accurate one — falls back to the
+            // delivery's own site when that wasn't specified either way.
+            const site = item.serialInstallInfo?.[sn]?.installSite || d.site;
+            rows.push({ sn, material: item.material, qty: 1, homebase: d.homebase, site, requester: d.requester, deliveryId: d.id, date: d.date, status });
           });
         } else {
           rows.push({ sn: "-", material: item.material, qty: item.qty, homebase: d.homebase, site: d.site, requester: d.requester, deliveryId: d.id, date: d.date, status: "Delivered" });
