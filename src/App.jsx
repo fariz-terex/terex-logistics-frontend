@@ -2345,7 +2345,7 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
     initialData?.items?.length
       ? initialData.items.map((it) => ({ material: it.material, serials: it.serials.map((s) => ({ ...s })) }))
       : prefillItems?.length
-      ? prefillItems.map((it) => ({ material: it.material, serials: [{ sn: it.sn, photo: "" }] }))
+      ? prefillItems.map((it) => ({ material: it.material, serials: [{ sn: it.sn, photo: it.photo || "" }] }))
       : [{ material: "", serials: [{ sn: "", photo: "" }] }]
   );
   const [docs, setDocs] = useState(initialData?.docs ? { ...initialData.docs } : { beforePacking: "", afterPacking: "", weighing: "" });
@@ -2402,7 +2402,7 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
       {!isEdit && prefillItems?.length > 0 && (
         <Card className="p-4 border-emerald-200 bg-emerald-50/50 flex items-start gap-3">
           <Check size={18} className="text-emerald-600 mt-0.5 shrink-0" />
-          <div className="text-sm text-emerald-800">Material & Serial Number sudah terisi otomatis dari Penggantian Material — lengkapi foto per SN dan dokumentasi di bawah untuk mengirim.</div>
+          <div className="text-sm text-emerald-800">Material, Serial Number, dan foto sudah terisi otomatis dari Penggantian Material — lengkapi dokumentasi lain di bawah untuk mengirim.</div>
         </Card>
       )}
 
@@ -2967,6 +2967,7 @@ function MaterialSwapPage({ swaps, api, materials, onSubmit, showToast, setPage,
   const [oldMaterial, setOldMaterial] = useState("");
   const [note, setNote] = useState("");
   const [photo, setPhoto] = useState("");
+  const [oldPhoto, setOldPhoto] = useState("");
   const [newInfo, setNewInfo] = useState(undefined); // undefined = not checked, null = invalid, object = valid
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -3004,7 +3005,26 @@ function MaterialSwapPage({ swaps, api, materials, onSubmit, showToast, setPage,
     return () => clearTimeout(t);
   }, [newSn]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const valid = newInfo?.ok && site.trim() && photo && (!oldSn.trim() || oldMaterial.trim());
+  // Old material choices are narrowed to the SAME category as the unit
+  // being installed (e.g. installing a Modem should only offer other modem
+  // variants as the possible old unit) — falls back to the full list until
+  // a valid new unit (and therefore a known category) is picked.
+  const newMaterialCategory = useMemo(() => {
+    if (!newInfo?.ok) return null;
+    return materials.find((m) => m.name === newInfo.material)?.category || null;
+  }, [newInfo, materials]);
+  const oldMaterialOptions = useMemo(() => (
+    newMaterialCategory ? materials.filter((m) => m.category === newMaterialCategory) : materials
+  ), [newMaterialCategory, materials]);
+
+  React.useEffect(() => {
+    // If the category changes (new unit swapped for a different one) and
+    // the previously-picked old material no longer fits, clear it so a
+    // stale/incompatible choice can't slip through.
+    if (oldMaterial && !oldMaterialOptions.some((m) => m.name === oldMaterial)) setOldMaterial("");
+  }, [oldMaterialOptions]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const valid = newInfo?.ok && site.trim() && photo && (!oldSn.trim() || (oldMaterial.trim() && oldPhoto));
 
   const submit = async () => {
     setSaving(true); setError("");
@@ -3012,11 +3032,11 @@ function MaterialSwapPage({ swaps, api, materials, onSubmit, showToast, setPage,
       const created = await onSubmit({
         newSn: newSn.trim(), site: site.trim(), homebase: homebase.trim() || undefined,
         oldSn: oldSn.trim() || undefined, oldMaterial: oldSn.trim() ? oldMaterial.trim() : undefined,
-        photo, note: note || undefined,
+        photo, oldPhoto: oldSn.trim() ? oldPhoto : undefined, note: note || undefined,
       });
       showToast(oldSn.trim() ? `Penggantian ${created.id} berhasil dicatat` : `Instalasi ${created.id} berhasil dicatat`);
       setLastSwap(created);
-      setNewSn(""); setSite(""); setHomebase(""); setOldSn(""); setOldMaterial(""); setNote(""); setPhoto(""); setNewInfo(undefined);
+      setNewSn(""); setSite(""); setHomebase(""); setOldSn(""); setOldMaterial(""); setNote(""); setPhoto(""); setOldPhoto(""); setNewInfo(undefined);
       loadDeliveredOptions();
     } catch (err) {
       setError(err.message || "Gagal menyimpan");
@@ -3055,7 +3075,7 @@ function MaterialSwapPage({ swaps, api, materials, onSubmit, showToast, setPage,
           <div className="text-sm text-emerald-800">
             <span className="font-semibold">{lastSwap.id}</span> — unit lama ({lastSwap.oldSn}) sudah dicatat. Lanjutkan buat laporan Return Material Faulty untuk unit ini?
           </div>
-          <PrimaryButton onClick={() => { setReturnPrefill({ material: lastSwap.oldMaterial, sn: lastSwap.oldSn }); setPage("returnFaultyCreate"); }}>
+          <PrimaryButton onClick={() => { setReturnPrefill({ material: lastSwap.oldMaterial, sn: lastSwap.oldSn, photo: lastSwap.oldPhoto }); setPage("returnFaultyCreate"); }}>
             Buat Return Faulty
           </PrimaryButton>
         </Card>
@@ -3066,7 +3086,7 @@ function MaterialSwapPage({ swaps, api, materials, onSubmit, showToast, setPage,
           <div className="text-sm font-semibold text-gray-800 mb-3">Unit yang Dipasang</div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="relative">
-              <label className="text-sm font-medium text-gray-700">Serial Number (Delivered) <span className="text-red-500">*</span></label>
+              <label className="text-sm font-medium text-gray-700">Serial Number (Installed) <span className="text-red-500">*</span></label>
               <input
                 value={newSn}
                 onChange={(e) => setNewSn(e.target.value)}
@@ -3089,6 +3109,9 @@ function MaterialSwapPage({ swaps, api, materials, onSubmit, showToast, setPage,
             <label className="text-sm font-medium text-gray-700">Homebase <span className="text-gray-400 font-normal">(opsional)</span></label>
             <input value={homebase} onChange={(e) => setHomebase(e.target.value)} className="mt-1.5 w-full max-w-xs border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
           </div>
+          <div className="mt-4">
+            <PhotoUpload label="Foto Bukti Material Terpasang" value={photo} onChange={setPhoto} />
+          </div>
         </div>
 
         <div className="pt-4 border-t border-gray-100">
@@ -3102,18 +3125,23 @@ function MaterialSwapPage({ swaps, api, materials, onSubmit, showToast, setPage,
             <div>
               <label className="text-sm font-medium text-gray-700">Jenis Material Lama {oldSn.trim() && <span className="text-red-500">*</span>}</label>
               <select value={oldMaterial} onChange={(e) => setOldMaterial(e.target.value)} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600">
-                <option value="">Pilih jenis material...</option>
-                {materials.map((m) => <option key={m.id} value={m.name}>{m.name}</option>)}
+                <option value="">{newMaterialCategory ? `Pilih jenis material (${newMaterialCategory})...` : "Pilih jenis material..."}</option>
+                {oldMaterialOptions.map((m) => <option key={m.id} value={m.name}>{m.name}</option>)}
               </select>
+              {!newMaterialCategory && <div className="text-xs text-gray-400 mt-1">Pilih unit yang dipasang terlebih dahulu untuk menyaring pilihan sesuai kategorinya.</div>}
             </div>
           </div>
+          {oldSn.trim() && (
+            <div className="mt-4">
+              <PhotoUpload label="Foto Bukti Material Faulty / Dicabut" value={oldPhoto} onChange={setOldPhoto} />
+            </div>
+          )}
         </div>
 
         <div>
           <label className="text-sm font-medium text-gray-700">Catatan <span className="text-gray-400 font-normal">(opsional)</span></label>
           <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="mis. alasan penggantian" className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
         </div>
-        <PhotoUpload label="Foto Bukti Pemasangan" value={photo} onChange={setPhoto} />
         {error && <div className="bg-red-50 border border-red-100 text-red-700 text-sm rounded-lg px-3 py-2">{error}</div>}
         <div className="flex justify-end pt-2 border-t border-gray-50">
           <PrimaryButton onClick={submit} disabled={!valid || saving}>{saving ? "Menyimpan..." : "Simpan"}</PrimaryButton>
