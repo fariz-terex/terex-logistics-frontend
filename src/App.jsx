@@ -3082,62 +3082,58 @@ function MaterialSwapPage({ swaps, api, materials, onSubmit, showToast, setPage,
       )}
 
       <Card className="p-6 space-y-4 max-w-2xl">
+        <div className="text-sm font-semibold text-gray-800">Unit yang Dipasang</div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="relative">
+            <label className="text-sm font-medium text-gray-700">Serial Number (Installed) <span className="text-red-500">*</span></label>
+            <input
+              value={newSn}
+              onChange={(e) => setNewSn(e.target.value)}
+              onFocus={() => setNewFocused(true)}
+              onBlur={() => setTimeout(() => setNewFocused(false), 150)}
+              placeholder="Cari atau pilih unit yang sudah Delivered..."
+              className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600"
+            />
+            {newFocused && <SnDropdown options={deliveredOptions} query={newSn} onPick={(sn) => { setNewSn(sn); setNewFocused(false); }} />}
+            {newInfo === null && <div className="text-xs text-red-600 mt-1">Serial Number tidak ditemukan di sistem.</div>}
+            {newInfo && !newInfo.ok && <div className="text-xs text-red-600 mt-1">{newInfo.material} — status saat ini <span className="font-medium">{newInfo.status}</span>, harus Delivered.</div>}
+            {newInfo?.ok && <div className="text-xs text-emerald-700 mt-1">✓ {newInfo.material} — Delivered</div>}
+          </div>
+          <div>
+            <label className="text-sm font-medium text-gray-700">Site <span className="text-red-500">*</span></label>
+            <input value={site} onChange={(e) => setSite(e.target.value)} placeholder="Nama site tempat dipasang" className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+          </div>
+        </div>
         <div>
-          <div className="text-sm font-semibold text-gray-800 mb-3">Unit yang Dipasang</div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="relative">
-              <label className="text-sm font-medium text-gray-700">Serial Number (Installed) <span className="text-red-500">*</span></label>
-              <input
-                value={newSn}
-                onChange={(e) => setNewSn(e.target.value)}
-                onFocus={() => setNewFocused(true)}
-                onBlur={() => setTimeout(() => setNewFocused(false), 150)}
-                placeholder="Cari atau pilih unit yang sudah Delivered..."
-                className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600"
-              />
-              {newFocused && <SnDropdown options={deliveredOptions} query={newSn} onPick={(sn) => { setNewSn(sn); setNewFocused(false); }} />}
-              {newInfo === null && <div className="text-xs text-red-600 mt-1">Serial Number tidak ditemukan di sistem.</div>}
-              {newInfo && !newInfo.ok && <div className="text-xs text-red-600 mt-1">{newInfo.material} — status saat ini <span className="font-medium">{newInfo.status}</span>, harus Delivered.</div>}
-              {newInfo?.ok && <div className="text-xs text-emerald-700 mt-1">✓ {newInfo.material} — Delivered</div>}
-            </div>
-            <div>
-              <label className="text-sm font-medium text-gray-700">Site <span className="text-red-500">*</span></label>
-              <input value={site} onChange={(e) => setSite(e.target.value)} placeholder="Nama site tempat dipasang" className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
-            </div>
-          </div>
-          <div className="mt-4">
-            <label className="text-sm font-medium text-gray-700">Homebase <span className="text-gray-400 font-normal">(opsional)</span></label>
-            <input value={homebase} onChange={(e) => setHomebase(e.target.value)} className="mt-1.5 w-full max-w-xs border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
-          </div>
-          <div className="mt-4">
-            <PhotoUpload label="Foto Bukti Material Terpasang" value={photo} onChange={setPhoto} />
-          </div>
+          <label className="text-sm font-medium text-gray-700">Homebase <span className="text-gray-400 font-normal">(opsional)</span></label>
+          <input value={homebase} onChange={(e) => setHomebase(e.target.value)} className="mt-1.5 w-full max-w-xs border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
         </div>
+        <PhotoUpload label="Foto Bukti Material Terpasang" value={photo} onChange={setPhoto} />
+      </Card>
 
-        <div className="pt-4 border-t border-gray-100">
+      <Card className="p-6 space-y-4 max-w-2xl">
+        <div>
           <div className="text-sm font-semibold text-gray-800 mb-1">Unit Lama / Faulty yang Dicabut</div>
-          <div className="text-xs text-gray-400 mb-3">Isi hanya jika ini penggantian — unit ini boleh belum pernah tercatat di sistem, cukup tulis manual.</div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="text-sm font-medium text-gray-700">Serial Number Lama</label>
-              <input value={oldSn} onChange={(e) => setOldSn(e.target.value)} placeholder="SN unit yang dicabut (tulis manual)" className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
-            </div>
-            <div>
-              <label className="text-sm font-medium text-gray-700">Jenis Material Lama {oldSn.trim() && <span className="text-red-500">*</span>}</label>
-              <select value={oldMaterial} onChange={(e) => setOldMaterial(e.target.value)} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600">
-                <option value="">{newMaterialCategory ? `Pilih jenis material (${newMaterialCategory})...` : "Pilih jenis material..."}</option>
-                {oldMaterialOptions.map((m) => <option key={m.id} value={m.name}>{m.name}</option>)}
-              </select>
-              {!newMaterialCategory && <div className="text-xs text-gray-400 mt-1">Pilih unit yang dipasang terlebih dahulu untuk menyaring pilihan sesuai kategorinya.</div>}
-            </div>
-          </div>
-          {oldSn.trim() && (
-            <div className="mt-4">
-              <PhotoUpload label="Foto Bukti Material Faulty / Dicabut" value={oldPhoto} onChange={setOldPhoto} />
-            </div>
-          )}
+          <div className="text-xs text-gray-400">Isi hanya jika ini penggantian — unit ini boleh belum pernah tercatat di sistem, cukup tulis manual.</div>
         </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className="text-sm font-medium text-gray-700">Serial Number Lama</label>
+            <input value={oldSn} onChange={(e) => setOldSn(e.target.value)} placeholder="SN unit yang dicabut (tulis manual)" className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+          </div>
+          <div>
+            <label className="text-sm font-medium text-gray-700">Jenis Material Lama {oldSn.trim() && <span className="text-red-500">*</span>}</label>
+            <select value={oldMaterial} onChange={(e) => setOldMaterial(e.target.value)} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600">
+              <option value="">{newMaterialCategory ? `Pilih jenis material (${newMaterialCategory})...` : "Pilih jenis material..."}</option>
+              {oldMaterialOptions.map((m) => <option key={m.id} value={m.name}>{m.name}</option>)}
+            </select>
+            {!newMaterialCategory && <div className="text-xs text-gray-400 mt-1">Pilih unit yang dipasang terlebih dahulu untuk menyaring pilihan sesuai kategorinya.</div>}
+          </div>
+        </div>
+        <PhotoUpload label="Foto Bukti Material Faulty / Dicabut" value={oldPhoto} onChange={setOldPhoto} />
+      </Card>
 
+      <Card className="p-6 space-y-4 max-w-2xl">
         <div>
           <label className="text-sm font-medium text-gray-700">Catatan <span className="text-gray-400 font-normal">(opsional)</span></label>
           <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="mis. alasan penggantian" className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
