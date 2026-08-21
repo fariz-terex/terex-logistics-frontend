@@ -1078,7 +1078,7 @@ function DeliveryCreate({ onSubmit, onCancel, materials, tools, sites, homebases
   );
 }
 
-function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, onShip, onAddResi, onAddBast, onAddBkbLink, onAdvance, onReturnTools, onInstall, role, materials, tools, api }) {
+function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, onShip, onAddResi, onAddBast, onAddBkbLink, onAdvance, onReturnTools, role, materials, tools, api }) {
   // Stage 1 — Manager reviews qty only, no SN involved.
   const canApprove = role === ROLES.MANAGER && delivery.status === "Waiting Logistics Approval";
   // Stage 2 — Logistics Staff (or Manager) picks the actual units to fulfill it.
@@ -1226,36 +1226,6 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, 
       setSelectedReturns(new Set()); setReturnNote(""); setReturnPhoto(""); setReturnCondition("Baik");
     } finally {
       setReturningTools(false);
-    }
-  };
-
-  // ---- Konfirmasi Instalasi — materials only, independent of the
-  // delivery's own status; Logistics confirms specific Delivered units are
-  // physically installed at site, based on a field report. Photo required.
-  // Partial confirmation supported (confirm some units now, more later). ----
-  const canInstall = (role === ROLES.LOGISTICS || role === ROLES.MANAGER) && (delivery.outstandingInstalls?.length || 0) > 0;
-  const [selectedInstalls, setSelectedInstalls] = useState(new Set());
-  const [installSite, setInstallSite] = useState(delivery.site || "");
-  const [installNote, setInstallNote] = useState("");
-  const [installPhoto, setInstallPhoto] = useState("");
-  const [installing, setInstalling] = useState(false);
-  const [confirmInstall, setConfirmInstall] = useState(false);
-
-  const toggleInstallSn = (sn) => {
-    setSelectedInstalls((prev) => {
-      const next = new Set(prev);
-      if (next.has(sn)) next.delete(sn); else next.add(sn);
-      return next;
-    });
-  };
-
-  const handleInstall = async () => {
-    setInstalling(true);
-    try {
-      await onInstall(delivery.id, { serials: Array.from(selectedInstalls), photo: installPhoto, site: installSite.trim() || undefined, note: installNote || undefined });
-      setSelectedInstalls(new Set()); setInstallNote(""); setInstallPhoto("");
-    } finally {
-      setInstalling(false);
     }
   };
 
@@ -1727,46 +1697,6 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, 
         confirmLabel="Ya, Kembalikan"
         onConfirm={() => { setConfirmReturnTools(false); handleReturnTools(); }}
         onCancel={() => setConfirmReturnTools(false)}
-      />
-
-      {canInstall && (
-        <Card className="p-5 space-y-4 border-emerald-100 bg-emerald-50/20">
-          <SectionTitle title="Konfirmasi Instalasi" subtitle="Material berikut sudah Delivered — tandai unit mana yang sudah terpasang di site berdasarkan laporan lapangan" />
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-            {delivery.outstandingInstalls.map(({ material, sn }) => {
-              const checked = selectedInstalls.has(sn);
-              return (
-                <label key={sn} className={`flex items-center gap-2 text-xs border rounded-lg px-2.5 py-2 cursor-pointer ${checked ? "border-emerald-300 bg-emerald-50" : "border-gray-200 bg-white"}`}>
-                  <input type="checkbox" checked={checked} onChange={() => toggleInstallSn(sn)} className="accent-emerald-800" />
-                  <span className="truncate"><span className="font-medium">{sn}</span> <span className="text-gray-400">({material})</span></span>
-                </label>
-              );
-            })}
-          </div>
-          <div>
-            <label className="text-xs font-medium text-gray-500">Site <span className="text-gray-400 font-normal">(opsional — default ke site pada request ini)</span></label>
-            <input value={installSite} onChange={(e) => setInstallSite(e.target.value)} placeholder="Nama site tempat terpasang" className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
-          </div>
-          <div>
-            <label className="text-xs font-medium text-gray-500">Catatan <span className="text-gray-400 font-normal">(opsional)</span></label>
-            <input value={installNote} onChange={(e) => setInstallNote(e.target.value)} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
-          </div>
-          <PhotoUpload label="Foto Bukti Terpasang" value={installPhoto} onChange={setInstallPhoto} />
-          <div className="flex justify-end pt-2 border-t border-emerald-100">
-            <PrimaryButton onClick={() => setConfirmInstall(true)} disabled={selectedInstalls.size === 0 || !installPhoto || installing}>
-              {installing ? "Memproses..." : `Tandai ${selectedInstalls.size || ""} Unit Ter-install`}
-            </PrimaryButton>
-          </div>
-        </Card>
-      )}
-
-      <ConfirmDialog
-        open={confirmInstall}
-        title="Konfirmasi Instalasi"
-        message={`Tandai ${selectedInstalls.size} unit sebagai sudah ter-install di site${installSite.trim() ? ` "${installSite.trim()}"` : ""}?`}
-        confirmLabel="Ya, Konfirmasi"
-        onConfirm={() => { setConfirmInstall(false); handleInstall(); }}
-        onCancel={() => setConfirmInstall(false)}
       />
 
       <Card className="p-5">
@@ -3029,33 +2959,29 @@ function ReconciliationDetail({ r, onBack, onApprove, onRevise, onEdit, role }) 
    replace that flow — it just feeds into it).
    ============================================================ */
 
-function MaterialSwapPage({ swaps, api, onSubmit, showToast, setPage, setReturnPrefill }) {
-  const [oldSn, setOldSn] = useState("");
+function MaterialSwapPage({ swaps, api, materials, onSubmit, showToast, setPage, setReturnPrefill }) {
   const [newSn, setNewSn] = useState("");
   const [site, setSite] = useState("");
   const [homebase, setHomebase] = useState("");
+  const [oldSn, setOldSn] = useState("");
+  const [oldMaterial, setOldMaterial] = useState("");
   const [note, setNote] = useState("");
   const [photo, setPhoto] = useState("");
-  const [oldInfo, setOldInfo] = useState(undefined); // undefined = not checked, null = invalid, object = valid
-  const [newInfo, setNewInfo] = useState(undefined);
+  const [newInfo, setNewInfo] = useState(undefined); // undefined = not checked, null = invalid, object = valid
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [lastSwap, setLastSwap] = useState(null);
 
-  // Full candidate lists, fetched once — Installed units (for the unit
-  // currently at the site) and Delivered-not-yet-installed units (for the
-  // replacement) — so the picker can show "what's available" instead of
-  // making the user know/type an exact SN from memory.
-  const [installedOptions, setInstalledOptions] = useState([]);
+  // Only the unit being INSTALLED needs to be a known, tracked unit — it
+  // must already exist in the system with status Delivered, so this is a
+  // real browsable list. The old/faulty unit being removed is NOT looked
+  // up here — it may never have been tracked at all (predates the system,
+  // or was never a proper Delivery Request), so it's free text instead.
   const [deliveredOptions, setDeliveredOptions] = useState([]);
-  const [oldFocused, setOldFocused] = useState(false);
   const [newFocused, setNewFocused] = useState(false);
 
-  React.useEffect(() => {
-    api.getSerials(undefined, "Installed").then(setInstalledOptions).catch(() => {});
-    api.getSerials(undefined, "Delivered").then(setDeliveredOptions).catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const loadDeliveredOptions = () => api.getSerials(undefined, "Delivered").then(setDeliveredOptions).catch(() => {});
+  React.useEffect(() => { loadDeliveredOptions(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const filterOptions = (list, query) => {
     const q = query.trim().toLowerCase();
@@ -3063,64 +2989,46 @@ function MaterialSwapPage({ swaps, api, onSubmit, showToast, setPage, setReturnP
     return matches.slice(0, 8);
   };
 
-  const checkSn = async (sn, expectedStatus, setInfo) => {
-    const trimmed = sn.trim();
-    if (!trimmed) { setInfo(undefined); return; }
-    try {
-      const results = await api.searchSerials(trimmed);
-      const exact = results.find((r) => r.sn === trimmed);
-      if (!exact) { setInfo(null); return; }
-      setInfo({ ...exact, ok: exact.status === expectedStatus });
-    } catch {
-      setInfo(null);
-    }
-  };
-
   React.useEffect(() => {
-    const t = setTimeout(() => checkSn(oldSn, "Installed", setOldInfo), 400);
+    const trimmed = newSn.trim();
+    if (!trimmed) { setNewInfo(undefined); return; }
+    const t = setTimeout(async () => {
+      try {
+        const results = await api.searchSerials(trimmed);
+        const exact = results.find((r) => r.sn === trimmed);
+        setNewInfo(exact ? { ...exact, ok: exact.status === "Delivered" } : null);
+      } catch {
+        setNewInfo(null);
+      }
+    }, 400);
     return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [oldSn]);
+  }, [newSn]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  React.useEffect(() => {
-    const t = setTimeout(() => checkSn(newSn, "Delivered", setNewInfo), 400);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [newSn]);
-
-  React.useEffect(() => {
-    if (oldInfo?.ok && !site) setSite(oldInfo.install_site || "");
-  }, [oldInfo]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const valid = oldInfo?.ok && newInfo?.ok && photo;
+  const valid = newInfo?.ok && site.trim() && photo && (!oldSn.trim() || oldMaterial.trim());
 
   const submit = async () => {
     setSaving(true); setError("");
     try {
-      const created = await onSubmit({ oldSn: oldSn.trim(), newSn: newSn.trim(), site: site.trim() || undefined, homebase: homebase.trim() || undefined, photo, note: note || undefined });
-      showToast(`Penggantian ${created.id} berhasil dicatat`);
+      const created = await onSubmit({
+        newSn: newSn.trim(), site: site.trim(), homebase: homebase.trim() || undefined,
+        oldSn: oldSn.trim() || undefined, oldMaterial: oldSn.trim() ? oldMaterial.trim() : undefined,
+        photo, note: note || undefined,
+      });
+      showToast(oldSn.trim() ? `Penggantian ${created.id} berhasil dicatat` : `Instalasi ${created.id} berhasil dicatat`);
       setLastSwap(created);
-      setOldSn(""); setNewSn(""); setSite(""); setHomebase(""); setNote(""); setPhoto(""); setOldInfo(undefined); setNewInfo(undefined);
-      api.getSerials(undefined, "Installed").then(setInstalledOptions).catch(() => {});
-      api.getSerials(undefined, "Delivered").then(setDeliveredOptions).catch(() => {});
+      setNewSn(""); setSite(""); setHomebase(""); setOldSn(""); setOldMaterial(""); setNote(""); setPhoto(""); setNewInfo(undefined);
+      loadDeliveredOptions();
     } catch (err) {
-      setError(err.message || "Gagal mencatat penggantian");
+      setError(err.message || "Gagal menyimpan");
     } finally {
       setSaving(false);
     }
   };
 
-  const SnStatusLine = ({ info, label }) => {
-    if (info === undefined) return null;
-    if (info === null) return <div className="text-xs text-red-600 mt-1">Serial Number tidak ditemukan di sistem.</div>;
-    if (!info.ok) return <div className="text-xs text-red-600 mt-1">{info.material} — status saat ini <span className="font-medium">{info.status}</span>, harus {label}.</div>;
-    return <div className="text-xs text-emerald-700 mt-1">✓ {info.material} — {info.status}{info.install_site ? ` di ${info.install_site}` : ""}</div>;
-  };
-
   const SnDropdown = ({ options, query, onPick }) => {
     const filtered = filterOptions(options, query);
     if (filtered.length === 0) {
-      return <div className="absolute z-10 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg px-3 py-2 text-xs text-gray-400">Tidak ada unit yang cocok.</div>;
+      return <div className="absolute z-10 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg px-3 py-2 text-xs text-gray-400">Tidak ada unit Delivered yang cocok.</div>;
     }
     return (
       <div className="absolute z-10 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-56 overflow-y-auto">
@@ -3131,7 +3039,7 @@ function MaterialSwapPage({ swaps, api, onSubmit, showToast, setPage, setReturnP
             className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 flex items-center justify-between gap-2 border-b border-gray-50 last:border-0"
           >
             <span className="font-medium text-gray-800">{opt.sn}</span>
-            <span className="text-xs text-gray-400 truncate">{opt.material}{opt.install_site ? ` · ${opt.install_site}` : ""}</span>
+            <span className="text-xs text-gray-400 truncate">{opt.material}</span>
           </button>
         ))}
       </div>
@@ -3140,78 +3048,89 @@ function MaterialSwapPage({ swaps, api, onSubmit, showToast, setPage, setReturnP
 
   return (
     <div className="p-4 sm:p-8 space-y-5">
-      <SectionTitle title="Penggantian Material" subtitle="Cabut unit rusak dari site, pasang unit pengganti — unit lama otomatis siap dilaporkan lewat Return Material Faulty" />
+      <SectionTitle title="Penggantian Material" subtitle="Konfirmasi unit yang dipasang di site — isi unit lama hanya jika ini penggantian karena rusak" />
 
-      {lastSwap && (
+      {lastSwap && lastSwap.oldSn && (
         <Card className="p-4 border-emerald-200 bg-emerald-50/50 flex items-center justify-between">
           <div className="text-sm text-emerald-800">
-            <span className="font-semibold">{lastSwap.id}</span> — {lastSwap.oldSn} sudah ditandai Faulty. Lanjutkan buat laporan Return Material Faulty untuk unit ini?
+            <span className="font-semibold">{lastSwap.id}</span> — unit lama ({lastSwap.oldSn}) sudah dicatat. Lanjutkan buat laporan Return Material Faulty untuk unit ini?
           </div>
-          <PrimaryButton onClick={() => { setReturnPrefill({ material: lastSwap.oldMaterial, sn: lastSwap.oldSn, site: lastSwap.site, homebase: lastSwap.homebase }); setPage("returnFaultyCreate"); }}>
+          <PrimaryButton onClick={() => { setReturnPrefill({ material: lastSwap.oldMaterial, sn: lastSwap.oldSn }); setPage("returnFaultyCreate"); }}>
             Buat Return Faulty
           </PrimaryButton>
         </Card>
       )}
 
       <Card className="p-6 space-y-4 max-w-2xl">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div className="relative">
-            <label className="text-sm font-medium text-gray-700">Serial Number Baru (Installed) <span className="text-red-500">*</span></label>
-            <input
-              value={oldSn}
-              onChange={(e) => setOldSn(e.target.value)}
-              onFocus={() => setOldFocused(true)}
-              onBlur={() => setTimeout(() => setOldFocused(false), 150)}
-              placeholder="Cari atau pilih unit yang sedang terpasang..."
-              className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600"
-            />
-            {oldFocused && <SnDropdown options={installedOptions} query={oldSn} onPick={(sn) => { setOldSn(sn); setOldFocused(false); }} />}
-            <SnStatusLine info={oldInfo} label="Installed" />
+        <div>
+          <div className="text-sm font-semibold text-gray-800 mb-3">Unit yang Dipasang</div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="relative">
+              <label className="text-sm font-medium text-gray-700">Serial Number (Delivered) <span className="text-red-500">*</span></label>
+              <input
+                value={newSn}
+                onChange={(e) => setNewSn(e.target.value)}
+                onFocus={() => setNewFocused(true)}
+                onBlur={() => setTimeout(() => setNewFocused(false), 150)}
+                placeholder="Cari atau pilih unit yang sudah Delivered..."
+                className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600"
+              />
+              {newFocused && <SnDropdown options={deliveredOptions} query={newSn} onPick={(sn) => { setNewSn(sn); setNewFocused(false); }} />}
+              {newInfo === null && <div className="text-xs text-red-600 mt-1">Serial Number tidak ditemukan di sistem.</div>}
+              {newInfo && !newInfo.ok && <div className="text-xs text-red-600 mt-1">{newInfo.material} — status saat ini <span className="font-medium">{newInfo.status}</span>, harus Delivered.</div>}
+              {newInfo?.ok && <div className="text-xs text-emerald-700 mt-1">✓ {newInfo.material} — Delivered</div>}
+            </div>
+            <div>
+              <label className="text-sm font-medium text-gray-700">Site <span className="text-red-500">*</span></label>
+              <input value={site} onChange={(e) => setSite(e.target.value)} placeholder="Nama site tempat dipasang" className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+            </div>
           </div>
-          <div className="relative">
-            <label className="text-sm font-medium text-gray-700">Serial Number Pengganti (Delivered) <span className="text-red-500">*</span></label>
-            <input
-              value={newSn}
-              onChange={(e) => setNewSn(e.target.value)}
-              onFocus={() => setNewFocused(true)}
-              onBlur={() => setTimeout(() => setNewFocused(false), 150)}
-              placeholder="Cari atau pilih unit pengganti..."
-              className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600"
-            />
-            {newFocused && <SnDropdown options={deliveredOptions} query={newSn} onPick={(sn) => { setNewSn(sn); setNewFocused(false); }} />}
-            <SnStatusLine info={newInfo} label="Delivered" />
-          </div>
-          <div>
-            <label className="text-sm font-medium text-gray-700">Site <span className="text-gray-400 font-normal">(otomatis dari unit lama)</span></label>
-            <input value={site} onChange={(e) => setSite(e.target.value)} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
-          </div>
-          <div>
+          <div className="mt-4">
             <label className="text-sm font-medium text-gray-700">Homebase <span className="text-gray-400 font-normal">(opsional)</span></label>
-            <input value={homebase} onChange={(e) => setHomebase(e.target.value)} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+            <input value={homebase} onChange={(e) => setHomebase(e.target.value)} className="mt-1.5 w-full max-w-xs border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
           </div>
         </div>
+
+        <div className="pt-4 border-t border-gray-100">
+          <div className="text-sm font-semibold text-gray-800 mb-1">Unit Lama / Faulty yang Dicabut</div>
+          <div className="text-xs text-gray-400 mb-3">Isi hanya jika ini penggantian — unit ini boleh belum pernah tercatat di sistem, cukup tulis manual.</div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="text-sm font-medium text-gray-700">Serial Number Lama</label>
+              <input value={oldSn} onChange={(e) => setOldSn(e.target.value)} placeholder="SN unit yang dicabut (tulis manual)" className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-gray-700">Jenis Material Lama {oldSn.trim() && <span className="text-red-500">*</span>}</label>
+              <select value={oldMaterial} onChange={(e) => setOldMaterial(e.target.value)} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600">
+                <option value="">Pilih jenis material...</option>
+                {materials.map((m) => <option key={m.id} value={m.name}>{m.name}</option>)}
+              </select>
+            </div>
+          </div>
+        </div>
+
         <div>
           <label className="text-sm font-medium text-gray-700">Catatan <span className="text-gray-400 font-normal">(opsional)</span></label>
           <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="mis. alasan penggantian" className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
         </div>
-        <PhotoUpload label="Foto Bukti Penggantian" value={photo} onChange={setPhoto} />
+        <PhotoUpload label="Foto Bukti Pemasangan" value={photo} onChange={setPhoto} />
         {error && <div className="bg-red-50 border border-red-100 text-red-700 text-sm rounded-lg px-3 py-2">{error}</div>}
         <div className="flex justify-end pt-2 border-t border-gray-50">
-          <PrimaryButton onClick={submit} disabled={!valid || saving}>{saving ? "Menyimpan..." : "Catat Penggantian"}</PrimaryButton>
+          <PrimaryButton onClick={submit} disabled={!valid || saving}>{saving ? "Menyimpan..." : "Simpan"}</PrimaryButton>
         </div>
       </Card>
 
       <Card className="overflow-hidden">
-        <div className="px-5 py-4 border-b border-gray-50 text-sm font-semibold text-gray-800">Riwayat Penggantian</div>
+        <div className="px-5 py-4 border-b border-gray-50 text-sm font-semibold text-gray-800">Riwayat Instalasi & Penggantian</div>
         <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
               <th className="px-5 py-3 font-medium">No.</th>
               <th className="px-5 py-3 font-medium">Site</th>
-              <th className="px-5 py-3 font-medium">SN Lama</th>
-              <th className="px-5 py-3 font-medium">SN Baru</th>
+              <th className="px-5 py-3 font-medium">SN Terpasang</th>
               <th className="px-5 py-3 font-medium">Material</th>
+              <th className="px-5 py-3 font-medium">SN Lama (jika ada)</th>
               <th className="px-5 py-3 font-medium">Oleh</th>
               <th className="px-5 py-3 font-medium">Tgl</th>
             </tr>
@@ -3221,14 +3140,14 @@ function MaterialSwapPage({ swaps, api, onSubmit, showToast, setPage, setReturnP
               <tr key={s.id} className="border-b border-gray-50 last:border-0">
                 <td className="px-5 py-3 font-medium text-gray-800">{s.id}</td>
                 <td className="px-5 py-3 text-gray-600">{s.site || "-"}</td>
-                <td className="px-5 py-3 text-red-600">{s.oldSn}</td>
                 <td className="px-5 py-3 text-emerald-700">{s.newSn}</td>
                 <td className="px-5 py-3 text-gray-600">{s.newMaterial}</td>
+                <td className="px-5 py-3 text-red-600">{s.oldSn || "-"}</td>
                 <td className="px-5 py-3 text-gray-500">{s.performedBy}</td>
                 <td className="px-5 py-3 text-gray-500">{s.date}</td>
               </tr>
             ))}
-            {swaps.length === 0 && <tr><td colSpan={7}><EmptyState text="Belum ada riwayat penggantian material." /></td></tr>}
+            {swaps.length === 0 && <tr><td colSpan={7}><EmptyState text="Belum ada riwayat instalasi/penggantian material." /></td></tr>}
           </tbody>
         </table>
         </div>
@@ -4339,9 +4258,8 @@ function createApiClient(baseUrl, getToken) {
     addDeliveryBast: (id, payload) => request(`/deliveries/${id}/bast`, { method: "POST", body: payload }),
     addDeliveryBkbLink: (id, bkbLink) => request(`/deliveries/${id}/bkb-link`, { method: "POST", body: { bkbLink } }),
     returnDeliveryTools: (id, payload) => request(`/deliveries/${id}/return-tools`, { method: "POST", body: payload }),
-    installDeliveryItems: (id, payload) => request(`/deliveries/${id}/install`, { method: "POST", body: payload }),
 
-    // ---- Penggantian Material (swap a faulty Installed unit for a new one) ----
+    // ---- Penggantian Material (install & swap a faulty unit for a new one) ----
     getMaterialSwaps: () => request("/material-swaps"),
     createMaterialSwap: (payload) => request("/material-swaps", { method: "POST", body: payload }),
     advanceDelivery: (id, payload) => request(`/deliveries/${id}/advance`, { method: "POST", body: payload }),
@@ -4587,13 +4505,6 @@ export default function App() {
 
   // Confirming installed units doesn't touch stock (they already left the
   // warehouse when Delivered) — just update the delivery's SN statuses.
-  const installDeliveryItems = async (id, payload) => {
-    try {
-      const updated = await api.installDeliveryItems(id, payload);
-      setDeliveries((prev) => prev.map((d) => (d.id === id ? updated : d)));
-    } catch (err) { setApiError(err.message); }
-  };
-
   const submitMaterialSwap = async (payload) => {
     const created = await api.createMaterialSwap(payload);
     setMaterialSwaps((prev) => [created, ...prev]);
@@ -5061,7 +4972,7 @@ export default function App() {
   else if (page === "delivery") {
     if (selectedDelivery) {
       const d = deliveries.find((x) => x.id === selectedDelivery);
-      content = <DeliveryDetail delivery={d} onBack={() => setSelectedDelivery(null)} onApprove={approveDelivery} onReject={rejectDelivery} onAssignStock={assignDeliveryStock} onShip={shipDelivery} onAddResi={addDeliveryResi} onAddBast={addDeliveryBast} onAddBkbLink={addDeliveryBkbLink} onAdvance={advanceDelivery} onReturnTools={returnDeliveryTools} onInstall={installDeliveryItems} role={role} materials={materials} tools={tools} api={api} />;
+      content = <DeliveryDetail delivery={d} onBack={() => setSelectedDelivery(null)} onApprove={approveDelivery} onReject={rejectDelivery} onAssignStock={assignDeliveryStock} onShip={shipDelivery} onAddResi={addDeliveryResi} onAddBast={addDeliveryBast} onAddBkbLink={addDeliveryBkbLink} onAdvance={advanceDelivery} onReturnTools={returnDeliveryTools} role={role} materials={materials} tools={tools} api={api} />;
     } else content = <DeliveryList deliveries={deliveries} setSelected={setSelectedDelivery} setPage={goto} role={role} />;
   } else if (page === "deliveryCreate") content = <DeliveryCreate onSubmit={submitDelivery} onCancel={() => goto("delivery")} materials={materials} tools={tools} sites={sites} homebases={homebases} currentUser={currentUser} customers={customers} />;
   else if (page === "returnFaulty") {
@@ -5107,7 +5018,7 @@ export default function App() {
       customers={customers}
     />;
   }
-  else if (page === "materialSwap") content = <MaterialSwapPage swaps={materialSwaps} api={api} onSubmit={submitMaterialSwap} showToast={showToast} setPage={goto} setReturnPrefill={setReturnPrefill} />;
+  else if (page === "materialSwap") content = <MaterialSwapPage swaps={materialSwaps} api={api} materials={materials} onSubmit={submitMaterialSwap} showToast={showToast} setPage={goto} setReturnPrefill={setReturnPrefill} />;
   else if (page === "stock") content = <WarehouseStock materials={materials} setPage={goto} setMovementFilter={setMovementFilter} setSerialMaterial={setSerialMaterial} onSubmitReceipt={createReceipt} showToast={showToast} clearSerialHighlight={() => setHighlightSerial("")} currentUser={currentUser} customers={customers} />;
   else if (page === "movement") content = <StockMovement movements={movements} filter={movementFilter} setFilter={setMovementFilter} deliveries={deliveries} />;
   else if (page === "serialDetail") content = <MaterialSerialDetail material={serialMaterial} api={api} onBack={() => goto("stock")} highlightSerial={highlightSerial} highlightToken={highlightToken} deliveries={deliveries} />;
