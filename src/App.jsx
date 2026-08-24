@@ -2959,10 +2959,11 @@ function ReconciliationDetail({ r, onBack, onApprove, onRevise, onEdit, role }) 
    replace that flow — it just feeds into it).
    ============================================================ */
 
-function MaterialSwapPage({ swaps, api, materials, onSubmit, showToast, setPage, setReturnPrefill }) {
+function MaterialSwapPage({ swaps, api, materials, sites, homebases, onSubmit, showToast, setPage, setReturnPrefill }) {
   const [newSn, setNewSn] = useState("");
-  const [site, setSite] = useState("");
   const [homebase, setHomebase] = useState("");
+  const [site, setSite] = useState(""); // stores the site CODE, resolved to a name on submit — same pattern as Delivery Request
+  const [siteSearch, setSiteSearch] = useState("");
   const [oldSn, setOldSn] = useState("");
   const [oldMaterial, setOldMaterial] = useState("");
   const [note, setNote] = useState("");
@@ -2972,6 +2973,13 @@ function MaterialSwapPage({ swaps, api, materials, onSubmit, showToast, setPage,
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [lastSwap, setLastSwap] = useState(null);
+  const [confirmSubmit, setConfirmSubmit] = useState(false);
+
+  const hb = homebases.find((h) => h.name === homebase);
+  const siteOptions = sites.filter((s) =>
+    s.homebase === homebase && s.status === "Active" &&
+    (s.name.toLowerCase().includes(siteSearch.toLowerCase()) || s.code.toLowerCase().includes(siteSearch.toLowerCase()) || s.terminalId.toLowerCase().includes(siteSearch.toLowerCase()))
+  );
 
   // Only the unit being INSTALLED needs to be a known, tracked unit — it
   // must already exist in the system with status Delivered, so this is a
@@ -3024,19 +3032,20 @@ function MaterialSwapPage({ swaps, api, materials, onSubmit, showToast, setPage,
     if (oldMaterial && !oldMaterialOptions.some((m) => m.name === oldMaterial)) setOldMaterial("");
   }, [oldMaterialOptions]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const valid = newInfo?.ok && site.trim() && photo && (!oldSn.trim() || (oldMaterial.trim() && oldPhoto));
+  const selectedSiteName = sites.find((s) => s.code === site)?.name || "";
+  const valid = newInfo?.ok && homebase && site && photo && (!oldSn.trim() || (oldMaterial.trim() && oldPhoto));
 
   const submit = async () => {
     setSaving(true); setError("");
     try {
       const created = await onSubmit({
-        newSn: newSn.trim(), site: site.trim(), homebase: homebase.trim() || undefined,
+        newSn: newSn.trim(), site: selectedSiteName, homebase: homebase || undefined,
         oldSn: oldSn.trim() || undefined, oldMaterial: oldSn.trim() ? oldMaterial.trim() : undefined,
         photo, oldPhoto: oldSn.trim() ? oldPhoto : undefined, note: note || undefined,
       });
       showToast(oldSn.trim() ? `Penggantian ${created.id} berhasil dicatat` : `Instalasi ${created.id} berhasil dicatat`);
       setLastSwap(created);
-      setNewSn(""); setSite(""); setHomebase(""); setOldSn(""); setOldMaterial(""); setNote(""); setPhoto(""); setOldPhoto(""); setNewInfo(undefined);
+      setNewSn(""); setSite(""); setSiteSearch(""); setHomebase(""); setOldSn(""); setOldMaterial(""); setNote(""); setPhoto(""); setOldPhoto(""); setNewInfo(undefined);
       loadDeliveredOptions();
     } catch (err) {
       setError(err.message || "Gagal menyimpan");
@@ -3100,13 +3109,33 @@ function MaterialSwapPage({ swaps, api, materials, onSubmit, showToast, setPage,
             {newInfo?.ok && <div className="text-xs text-emerald-700 mt-1">✓ {newInfo.material} — Delivered</div>}
           </div>
           <div>
-            <label className="text-sm font-medium text-gray-700">Site <span className="text-red-500">*</span></label>
-            <input value={site} onChange={(e) => setSite(e.target.value)} placeholder="Nama site tempat dipasang" className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+            <label className="text-sm font-medium text-gray-700">Homebase <span className="text-red-500">*</span></label>
+            <select value={homebase} onChange={(e) => { setHomebase(e.target.value); setSite(""); setSiteSearch(""); }} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600">
+              <option value="">Pilih homebase...</option>
+              {homebases.filter((h) => h.status === "Active").map((h) => <option key={h.code} value={h.name}>{h.name} — {h.area}</option>)}
+            </select>
           </div>
         </div>
         <div>
-          <label className="text-sm font-medium text-gray-700">Homebase <span className="text-gray-400 font-normal">(opsional)</span></label>
-          <input value={homebase} onChange={(e) => setHomebase(e.target.value)} className="mt-1.5 w-full max-w-xs border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+          <label className="text-sm font-medium text-gray-700">Site <span className="text-red-500">*</span></label>
+          <div className="relative mt-1.5">
+            <input
+              disabled={!homebase}
+              value={site ? selectedSiteName : siteSearch}
+              onChange={(e) => { setSiteSearch(e.target.value); setSite(""); }}
+              placeholder={homebase ? "Cari nama site..." : "Pilih homebase terlebih dahulu"}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600 disabled:bg-gray-50"
+            />
+            {siteSearch && !site && siteOptions.length > 0 && (
+              <div className="absolute z-10 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                {siteOptions.map((s) => (
+                  <button key={s.code} onClick={() => { setSite(s.code); setSiteSearch(""); }} className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50">
+                    {s.name} <span className="text-xs text-gray-400 ml-1">{s.code}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
         <PhotoUpload label="Foto Bukti Material Terpasang" value={photo} onChange={setPhoto} />
       </Card>
@@ -3140,9 +3169,22 @@ function MaterialSwapPage({ swaps, api, materials, onSubmit, showToast, setPage,
         </div>
         {error && <div className="bg-red-50 border border-red-100 text-red-700 text-sm rounded-lg px-3 py-2">{error}</div>}
         <div className="flex justify-end pt-2 border-t border-gray-50">
-          <PrimaryButton onClick={submit} disabled={!valid || saving}>{saving ? "Menyimpan..." : "Simpan"}</PrimaryButton>
+          <PrimaryButton onClick={() => setConfirmSubmit(true)} disabled={!valid || saving}>{saving ? "Menyimpan..." : "Simpan"}</PrimaryButton>
         </div>
       </Card>
+
+      <ConfirmDialog
+        open={confirmSubmit}
+        title={oldSn.trim() ? "Konfirmasi Penggantian Material" : "Konfirmasi Instalasi Material"}
+        message={
+          oldSn.trim()
+            ? `${newSn.trim()} akan ditandai Installed di ${selectedSiteName}, dan ${oldSn.trim()} akan ditandai Faulty. Lanjutkan?`
+            : `${newSn.trim()} akan ditandai Installed di ${selectedSiteName}. Lanjutkan?`
+        }
+        confirmLabel="Ya, Simpan"
+        onConfirm={() => { setConfirmSubmit(false); submit(); }}
+        onCancel={() => setConfirmSubmit(false)}
+      />
 
       <Card className="overflow-hidden">
         <div className="px-5 py-4 border-b border-gray-50 text-sm font-semibold text-gray-800">Riwayat Instalasi & Penggantian</div>
@@ -5042,7 +5084,7 @@ export default function App() {
       customers={customers}
     />;
   }
-  else if (page === "materialSwap") content = <MaterialSwapPage swaps={materialSwaps} api={api} materials={materials} onSubmit={submitMaterialSwap} showToast={showToast} setPage={goto} setReturnPrefill={setReturnPrefill} />;
+  else if (page === "materialSwap") content = <MaterialSwapPage swaps={materialSwaps} api={api} materials={materials} sites={sites} homebases={homebases} onSubmit={submitMaterialSwap} showToast={showToast} setPage={goto} setReturnPrefill={setReturnPrefill} />;
   else if (page === "stock") content = <WarehouseStock materials={materials} setPage={goto} setMovementFilter={setMovementFilter} setSerialMaterial={setSerialMaterial} onSubmitReceipt={createReceipt} showToast={showToast} clearSerialHighlight={() => setHighlightSerial("")} currentUser={currentUser} customers={customers} />;
   else if (page === "movement") content = <StockMovement movements={movements} filter={movementFilter} setFilter={setMovementFilter} deliveries={deliveries} />;
   else if (page === "serialDetail") content = <MaterialSerialDetail material={serialMaterial} api={api} onBack={() => goto("stock")} highlightSerial={highlightSerial} highlightToken={highlightToken} deliveries={deliveries} />;
