@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Package, Truck, Undo2, ClipboardList, Boxes, ArrowLeftRight,
   FileBarChart, Database, Users, Settings as SettingsIcon, ChevronDown, ChevronRight,
   Search, Bell, LogOut, Plus, Minus, X, Check, AlertTriangle, Camera, ChevronLeft,
-  Filter, Download, Upload, Eye, MapPin, Phone, User as UserIcon, Menu, FileText, Wrench
+  Filter, Download, Upload, Eye, MapPin, Phone, User as UserIcon, Menu, FileText, Wrench, HelpCircle
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
@@ -399,6 +399,7 @@ const NAV_TREE = [
     ],
   },
   { key: "users", label: "User Management", icon: Users },
+  { key: "help", label: "Panduan Penggunaan", icon: HelpCircle },
   { key: "settings", label: "Settings", icon: SettingsIcon },
 ];
 
@@ -799,6 +800,86 @@ function Dashboard({ role, userName, setPage, deliveries, returns, reconciliatio
           </div>
         </Card>
       </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   PANDUAN PENGGUNAAN
+   ============================================================ */
+
+function HelpSection({ icon: Icon, color, title, children }) {
+  return (
+    <Card className="p-5">
+      <div className="flex items-center gap-3 mb-3">
+        <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${color}`}><Icon size={18} /></div>
+        <div className="text-sm font-semibold text-gray-800">{title}</div>
+      </div>
+      <div className="space-y-2 text-sm text-gray-600 pl-12">{children}</div>
+    </Card>
+  );
+}
+
+function HelpStep({ n, children }) {
+  return (
+    <div className="flex gap-2.5">
+      <span className="shrink-0 w-5 h-5 rounded-full bg-gray-100 text-gray-500 text-xs font-medium flex items-center justify-center mt-0.5">{n}</span>
+      <span>{children}</span>
+    </div>
+  );
+}
+
+function HelpPage({ role }) {
+  return (
+    <div className="p-4 sm:p-8 max-w-3xl space-y-5">
+      <SectionTitle title="Panduan Penggunaan" subtitle="Ringkasan alur kerja utama di TEREX Logistics" />
+
+      <Card className="p-5 bg-emerald-50/50 border-emerald-100">
+        <div className="text-sm text-emerald-900">
+          Anda login sebagai <span className="font-semibold">{role}</span>. Halaman yang muncul di sidebar sudah disesuaikan dengan akses peran Anda — kalau ada menu yang menurut Anda seharusnya bisa diakses tapi tidak muncul, hubungi Manager Logistics.
+        </div>
+      </Card>
+
+      <HelpSection icon={Truck} color="bg-emerald-50 text-emerald-700" title="Delivery Request — Pengiriman Material & Alat">
+        <HelpStep n={1}>SPV mengajukan kebutuhan material dan/atau alat (pilih dari katalog gabungan, alat ditandai "Alat · Pinjam").</HelpStep>
+        <HelpStep n={2}>Manager Logistics menyetujui dari sisi jumlah (belum tentukan unit fisik).</HelpStep>
+        <HelpStep n={3}>Logistics Staff menentukan Serial Number spesifik yang dikirim, lalu dokumentasikan sebelum status "Shipped".</HelpStep>
+        <HelpStep n={4}>Setelah barang sampai, status diubah ke "Delivered". Untuk alat, sekali diserahkan langsung berstatus "Checked Out" — wajib dikembalikan lewat panel "Kembalikan Alat" di halaman detail, kapan saja.</HelpStep>
+        <div className="pt-1 text-xs text-gray-400">Catatan: konfirmasi bahwa material sudah benar-benar terpasang di site dilakukan lewat menu terpisah "Penggantian Material", bukan di sini.</div>
+      </HelpSection>
+
+      <HelpSection icon={ArrowLeftRight} color="bg-teal-50 text-teal-700" title="Penggantian Material — Instalasi & Ganti Unit Rusak">
+        <HelpStep n={1}>Pilih unit yang mau dipasang — harus unit yang sudah berstatus "Delivered" di sistem.</HelpStep>
+        <HelpStep n={2}>Isi Homebase dan Site tempat pemasangan, lalu upload foto bukti terpasang.</HelpStep>
+        <HelpStep n={3}>Kalau ini penggantian (bukan instalasi baru), isi juga Serial Number unit lama beserta foto buktinya — unit ini boleh belum pernah tercatat di sistem, cukup ditulis manual.</HelpStep>
+        <HelpStep n={4}>Setelah tersimpan, unit baru otomatis berstatus "Installed", dan unit lama (jika ada) otomatis berstatus "Faulty" — tinggal klik "Buat Return Faulty" untuk melaporkannya balik ke gudang.</HelpStep>
+      </HelpSection>
+
+      <HelpSection icon={Undo2} color="bg-amber-50 text-amber-700" title="Return Material Faulty — Lapor Barang Rusak">
+        <HelpStep n={1}>Technician input Serial Number material rusak secara manual, lengkap dengan foto per unit.</HelpStep>
+        <HelpStep n={2}>Upload dokumentasi: foto sebelum packing, setelah packing, dan foto timbangan.</HelpStep>
+        <HelpStep n={3}>Logistics Staff meninjau — bisa disetujui atau diminta revisi dengan catatan.</HelpStep>
+        <HelpStep n={4}>Setelah dikirim dan diterima gudang, Logistics melakukan QC lalu menyelesaikan laporan — stock Faulty otomatis bertambah.</HelpStep>
+      </HelpSection>
+
+      <HelpSection icon={ClipboardList} color="bg-blue-50 text-blue-700" title="Reconciliation — Verifikasi Stock Fisik">
+        <HelpStep n={1}>Technician menghitung fisik material di lapangan, input jumlah aktual dan foto bukti.</HelpStep>
+        <HelpStep n={2}>Kalau ada selisih dengan catatan sistem, wajib isi alasan (reason).</HelpStep>
+        <HelpStep n={3}>Logistics Staff meninjau dan menyetujui — begitu disetujui, stock sistem otomatis disesuaikan mengikuti hasil hitung fisik.</HelpStep>
+      </HelpSection>
+
+      <HelpSection icon={Wrench} color="bg-indigo-50 text-indigo-700" title="Peralatan — Stock & Peminjaman Alat">
+        <HelpStep n={1}>Alat kerja (OTDR, tang crimping, dll.) dikelola terpisah dari material — dipinjam dan wajib dikembalikan, bukan dikirim permanen.</HelpStep>
+        <HelpStep n={2}>Terima alat baru lewat menu "Stock Alat", sama seperti Terima Barang material.</HelpStep>
+        <HelpStep n={3}>Peminjaman alat diajukan lewat Delivery Request (dicampur dengan material dalam satu pengajuan yang sama).</HelpStep>
+        <HelpStep n={4}>Pengembalian dilakukan lewat panel "Kembalikan Alat" di halaman detail Delivery Request terkait — catat kondisi Baik atau Rusak.</HelpStep>
+      </HelpSection>
+
+      <HelpSection icon={Search} color="bg-gray-100 text-gray-600" title="Pencarian Global">
+        Gunakan kolom pencarian di pojok kanan atas untuk mencari cepat berdasarkan nomor request/laporan, nama site, nama material/alat, atau Serial Number — hasilnya langsung mengarahkan ke halaman detail yang relevan.
+      </HelpSection>
+
+      <div className="text-xs text-gray-400 text-center pt-2">Ada pertanyaan lain? Hubungi Admin / Manager Logistics.</div>
     </div>
   );
 }
@@ -5371,6 +5452,7 @@ export default function App() {
       { key: "assignment", label: "Homebase / Area", placeholder: "mis. Merauke, atau Semua Area" },
     ]}
   />;
+  else if (page === "help") content = <HelpPage role={role} />;
   else if (page === "settings") content = (
     <div className="p-4 sm:p-8 max-w-xl space-y-5">
       <SectionTitle title="Settings" subtitle="Preferensi umum aplikasi" />
