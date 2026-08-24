@@ -2963,7 +2963,7 @@ function ReconciliationDetail({ r, onBack, onApprove, onRevise, onEdit, role }) 
    replace that flow — it just feeds into it).
    ============================================================ */
 
-function MaterialSwapPage({ swaps, api, materials, sites, homebases, onSubmit, showToast, setPage, setReturnPrefill }) {
+function MaterialSwapPage({ swaps, api, materials, sites, homebases, onSubmit, showToast, setPage, setReturnPrefill, setSelectedSwap }) {
   const [newSn, setNewSn] = useState("");
   const [homebase, setHomebase] = useState("");
   const [site, setSite] = useState(""); // stores the site CODE, resolved to a name on submit — same pattern as Delivery Request
@@ -3203,6 +3203,7 @@ function MaterialSwapPage({ swaps, api, materials, sites, homebases, onSubmit, s
               <th className="px-5 py-3 font-medium">SN Lama (jika ada)</th>
               <th className="px-5 py-3 font-medium">Oleh</th>
               <th className="px-5 py-3 font-medium">Tgl</th>
+              <th className="px-5 py-3 font-medium"></th>
             </tr>
           </thead>
           <tbody>
@@ -3215,13 +3216,77 @@ function MaterialSwapPage({ swaps, api, materials, sites, homebases, onSubmit, s
                 <td className="px-5 py-3 text-red-600">{s.oldSn || "-"}</td>
                 <td className="px-5 py-3 text-gray-500">{s.performedBy}</td>
                 <td className="px-5 py-3 text-gray-500">{s.date}</td>
+                <td className="px-5 py-3"><button onClick={() => setSelectedSwap(s.id)} className="text-emerald-800 text-xs font-medium flex items-center gap-1"><Eye size={13} /> Detail</button></td>
               </tr>
             ))}
-            {swaps.length === 0 && <tr><td colSpan={7}><EmptyState text="Belum ada riwayat instalasi/penggantian material." /></td></tr>}
+            {swaps.length === 0 && <tr><td colSpan={8}><EmptyState text="Belum ada riwayat instalasi/penggantian material." /></td></tr>}
           </tbody>
         </table>
         </div>
       </Card>
+    </div>
+  );
+}
+
+function MaterialSwapDetail({ swap, onBack, setPage, setReturnPrefill }) {
+  const [lightboxSrc, setLightboxSrc] = useState(null);
+
+  return (
+    <div className="p-4 sm:p-8 max-w-3xl mx-auto space-y-5">
+      <button onClick={onBack} className="text-sm text-gray-500 flex items-center gap-1 hover:text-gray-800"><ChevronLeft size={16} /> Kembali ke daftar</button>
+      <div>
+        <div className="text-xl font-bold text-gray-900">{swap.id}</div>
+        <div className="text-sm text-gray-500 mt-1">Oleh {swap.performedBy} · {swap.date}</div>
+      </div>
+
+      <Card className="p-5 grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+        <div><div className="text-gray-400 text-xs">Site</div><div className="font-medium text-gray-800">{swap.site || "-"}</div></div>
+        <div><div className="text-gray-400 text-xs">Homebase</div><div className="font-medium text-gray-800">{swap.homebase || "-"}</div></div>
+        <div className="col-span-2"><div className="text-gray-400 text-xs">Catatan</div><div className="font-medium text-gray-800">{swap.note || "-"}</div></div>
+      </Card>
+
+      <Card className="p-5 space-y-3">
+        <SectionTitle title="Unit yang Dipasang" />
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
+          <div className="text-sm space-y-1.5">
+            <div><span className="text-gray-400">Serial Number:</span> <span className="font-medium text-emerald-700">{swap.newSn}</span></div>
+            <div><span className="text-gray-400">Material:</span> <span className="font-medium text-gray-800">{swap.newMaterial}</span></div>
+            <div><StatusBadge status="Installed" /></div>
+          </div>
+          {swap.photo && (
+            <div className="w-40">
+              <PhotoThumb src={swap.photo} alt="Foto material terpasang" className="w-full h-28 object-cover rounded-lg border border-gray-100" onOpen={setLightboxSrc} />
+              <div className="text-xs text-gray-400 mt-1">Foto bukti terpasang</div>
+            </div>
+          )}
+        </div>
+      </Card>
+
+      {swap.oldSn && (
+        <Card className="p-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <SectionTitle title="Unit Lama / Faulty yang Dicabut" />
+            <GhostButton onClick={() => { setReturnPrefill({ material: swap.oldMaterial, sn: swap.oldSn, photo: swap.oldPhoto }); setPage("returnFaultyCreate"); }}>
+              Buat Return Faulty
+            </GhostButton>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
+            <div className="text-sm space-y-1.5">
+              <div><span className="text-gray-400">Serial Number:</span> <span className="font-medium text-red-600">{swap.oldSn}</span></div>
+              <div><span className="text-gray-400">Material:</span> <span className="font-medium text-gray-800">{swap.oldMaterial}</span></div>
+              <div><StatusBadge status="Faulty" /></div>
+            </div>
+            {swap.oldPhoto && (
+              <div className="w-40">
+                <PhotoThumb src={swap.oldPhoto} alt="Foto material faulty" className="w-full h-28 object-cover rounded-lg border border-gray-100" onOpen={setLightboxSrc} />
+                <div className="text-xs text-gray-400 mt-1">Foto bukti dicabut</div>
+              </div>
+            )}
+          </div>
+        </Card>
+      )}
+
+      <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
     </div>
   );
 }
@@ -4459,6 +4524,7 @@ export default function App() {
   const [toolSerialName, setToolSerialName] = useState("");
   const [materialSwaps, setMaterialSwaps] = useState([]);
   const [returnPrefill, setReturnPrefill] = useState(null);
+  const [selectedSwap, setSelectedSwap] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
 
   const role = currentUser?.role;
@@ -4584,7 +4650,7 @@ export default function App() {
 
   const goto = (p) => {
     setPage(p);
-    setSelectedDelivery(null); setSelectedReturn(null); setSelectedRecon(null);
+    setSelectedDelivery(null); setSelectedReturn(null); setSelectedRecon(null); setSelectedSwap(null);
     if (p !== "returnFaultyCreate") setReturnPrefill(null); // only meant for the one navigation right after a swap
   };
 
@@ -5137,7 +5203,12 @@ export default function App() {
       customers={customers}
     />;
   }
-  else if (page === "materialSwap") content = <MaterialSwapPage swaps={materialSwaps} api={api} materials={materials} sites={sites} homebases={homebases} onSubmit={submitMaterialSwap} showToast={showToast} setPage={goto} setReturnPrefill={setReturnPrefill} />;
+  else if (page === "materialSwap") {
+    if (selectedSwap) {
+      const s = materialSwaps.find((x) => x.id === selectedSwap);
+      content = <MaterialSwapDetail swap={s} onBack={() => setSelectedSwap(null)} setPage={goto} setReturnPrefill={setReturnPrefill} />;
+    } else content = <MaterialSwapPage swaps={materialSwaps} api={api} materials={materials} sites={sites} homebases={homebases} onSubmit={submitMaterialSwap} showToast={showToast} setPage={goto} setReturnPrefill={setReturnPrefill} setSelectedSwap={setSelectedSwap} />;
+  }
   else if (page === "stock") content = <WarehouseStock materials={materials} setPage={goto} setMovementFilter={setMovementFilter} setSerialMaterial={setSerialMaterial} onSubmitReceipt={createReceipt} showToast={showToast} clearSerialHighlight={() => setHighlightSerial("")} currentUser={currentUser} customers={customers} />;
   else if (page === "movement") content = <StockMovement movements={movements} filter={movementFilter} setFilter={setMovementFilter} deliveries={deliveries} />;
   else if (page === "serialDetail") content = <MaterialSerialDetail material={serialMaterial} api={api} onBack={() => goto("stock")} highlightSerial={highlightSerial} highlightToken={highlightToken} deliveries={deliveries} />;
