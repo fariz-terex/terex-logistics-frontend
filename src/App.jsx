@@ -658,13 +658,15 @@ function TopBar({ user, onLogout, title, subtitle, searchQuery, setSearchQuery, 
    DASHBOARD
    ============================================================ */
 
-function Dashboard({ role, userName, setPage, deliveries, returns, reconciliations, materials }) {
+function Dashboard({ role, userName, setPage, deliveries, returns, reconciliations, materials, tools, materialSwaps }) {
   const pendingApproval = deliveries.filter((d) => d.status === "Waiting Logistics Approval").length;
   const inProgress = deliveries.filter((d) => ["In Progress", "Waiting Stock Assignment", "Preparing", "Shipped"].includes(d.status)).length;
   const waitingReview = returns.filter((r) => r.status === "Waiting Logistics Review").length;
   const reconReview = reconciliations.filter((r) => r.status === "Waiting Logistics Review").length;
   const lowStock = materials.filter((m) => m.ready <= m.minStock).length;
   const totalMaterial = materials.reduce((s, m) => s + m.ready + m.faulty + m.reserved + m.transit, 0);
+  const toolsCheckedOut = tools.reduce((s, t) => s + (t.checked_out || 0), 0);
+  const swapsToday = materialSwaps.filter((s) => s.date === new Date().toISOString().slice(0, 10)).length;
 
   const now = new Date();
   const hour = now.getHours();
@@ -692,6 +694,8 @@ function Dashboard({ role, userName, setPage, deliveries, returns, reconciliatio
           { label: "Return Material Faulty", value: waitingReview, sub: "Menunggu Review", icon: Undo2, color: "bg-amber-50 text-amber-600", page: "returnFaulty" },
           { label: "Rekonsiliasi Material", value: reconReview, sub: "Menunggu Review", icon: ClipboardList, color: "bg-blue-50 text-blue-600", page: "reconciliation" },
           { label: "Material On Hand", value: totalMaterial.toLocaleString("id-ID"), sub: "Total Material", icon: Boxes, color: "bg-emerald-50 text-emerald-700", page: "stock" },
+          { label: "Alat Sedang Dipinjam", value: toolsCheckedOut, sub: "Checked Out", icon: Wrench, color: "bg-indigo-50 text-indigo-700", page: "toolStock" },
+          { label: "Penggantian Material", value: swapsToday, sub: "Hari Ini", icon: ArrowLeftRight, color: "bg-teal-50 text-teal-700", page: "materialSwap" },
         ].map((c) => (
           <Card key={c.label} className="p-5">
             <div className="flex items-start gap-3">
@@ -4313,6 +4317,7 @@ function createApiClient(baseUrl, getToken) {
     },
     createToolReceipt: (payload) => request("/tools/receipts", { method: "POST", body: payload }),
     getToolReceipts: () => request("/tools/receipts"),
+    searchToolSerials: (q) => request(`/tools/serials?q=${encodeURIComponent(q)}`),
 
     getDeliveries: () => request("/deliveries"),
     createDelivery: (payload) => request("/deliveries", { method: "POST", body: payload }),
@@ -4639,8 +4644,27 @@ export default function App() {
       }
     });
 
+    tools.forEach((t) => {
+      if (t.name.toLowerCase().includes(q) || t.category.toLowerCase().includes(q) || t.id.toLowerCase().includes(q)) {
+        results.push({ type: "Alat", icon: Wrench, label: t.name, sub: `Available: ${t.available} · Checked Out: ${t.checked_out}`, onSelect: () => goto("toolStock") });
+      }
+    });
+
+    materialSwaps.forEach((s) => {
+      const matches = s.id.toLowerCase().includes(q) || (s.site || "").toLowerCase().includes(q)
+        || s.newSn.toLowerCase().includes(q) || s.newMaterial.toLowerCase().includes(q)
+        || (s.oldSn || "").toLowerCase().includes(q) || (s.oldMaterial || "").toLowerCase().includes(q);
+      if (matches) {
+        results.push({
+          type: "Penggantian Material", icon: ArrowLeftRight, label: s.id,
+          sub: s.oldSn ? `${s.oldSn} → ${s.newSn} · ${s.site}` : `${s.newSn} · ${s.site}`,
+          onSelect: () => goto("materialSwap"),
+        });
+      }
+    });
+
     return results.slice(0, 8);
-  }, [searchQuery, deliveries, returns, reconciliations, materials, sites]);
+  }, [searchQuery, deliveries, returns, reconciliations, materials, sites, tools, materialSwaps]);
 
   // Serial Numbers live in the warehouse SN registry, not in any locally
   // loaded list — so unlike the rest of global search (computed instantly
@@ -4676,7 +4700,36 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchQuery]);
 
-  const searchResults = useMemo(() => [...snSearchResults, ...localSearchResults].slice(0, 8), [snSearchResults, localSearchResults]);
+  // Same idea, but for the tool Serial Number registry — a separate table
+  // (tool_serials) from the material one above, so it needs its own search.
+  const [toolSnSearchResults, setToolSnSearchResults] = useState([]);
+  React.useEffect(() => {
+    const q = searchQuery.trim();
+    if (q.length < 3) { setToolSnSearchResults([]); return; }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      api.searchToolSerials(q).then((rows) => {
+        if (cancelled) return;
+        setToolSnSearchResults(rows.map((r) => {
+          let sub, onSelect;
+          if (r.current_ref?.startsWith("DR-")) {
+            const d = deliveries.find((x) => x.id === r.current_ref);
+            const location = d ? `${d.homebase}${d.site ? ` · ${d.site}` : ""}` : r.current_ref;
+            sub = `${r.tool} · ${r.status} · ${location}`;
+            onSelect = () => gotoDetail("delivery", "delivery", r.current_ref);
+          } else {
+            sub = `${r.tool} · ${r.status} · di Warehouse`;
+            onSelect = () => { setToolSerialName(r.tool); goto("toolSerialDetail"); };
+          }
+          return { type: "Serial Number Alat", icon: Wrench, label: r.sn, sub, onSelect };
+        }));
+      }).catch(() => { if (!cancelled) setToolSnSearchResults([]); });
+    }, 300);
+    return () => { cancelled = true; clearTimeout(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchQuery]);
+
+  const searchResults = useMemo(() => [...snSearchResults, ...toolSnSearchResults, ...localSearchResults].slice(0, 8), [snSearchResults, toolSnSearchResults, localSearchResults]);
 
   // Where is each delivered unit right now? Flatten every Delivered
   // delivery's items into one row per Serial Number (or per material line
@@ -5034,7 +5087,7 @@ export default function App() {
     content = (
       <div className="p-8 flex items-center justify-center h-full text-gray-400 text-sm">Memuat data dari server...</div>
     );
-  } else if (page === "dashboard") content = <Dashboard role={role} userName={currentUser?.name} setPage={goto} deliveries={deliveries} returns={returns} reconciliations={reconciliations} materials={materials} />;
+  } else if (page === "dashboard") content = <Dashboard role={role} userName={currentUser?.name} setPage={goto} deliveries={deliveries} returns={returns} reconciliations={reconciliations} materials={materials} tools={tools} materialSwaps={materialSwaps} />;
   else if (page === "delivery") {
     if (selectedDelivery) {
       const d = deliveries.find((x) => x.id === selectedDelivery);
