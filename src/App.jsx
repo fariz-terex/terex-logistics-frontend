@@ -9,6 +9,7 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
 } from "recharts";
 import Papa from "papaparse";
+import * as XLSX from "xlsx";
 
 /* ============================================================
    MOCK DATA LAYER (stand-in for backend/database)
@@ -3862,9 +3863,7 @@ function ImportExcelPanel({ templateFilename, description, columns, sampleRow, v
   const handleFile = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    Papa.parse(file, {
-      header: true,
-      skipEmptyLines: true,
+    parseSpreadsheetFile(file, {
       complete: (res) => {
         const rows = res.data.map((raw) => {
           const values = {};
@@ -3896,9 +3895,9 @@ function ImportExcelPanel({ templateFilename, description, columns, sampleRow, v
       <div className="flex gap-2 flex-wrap">
         <GhostButton onClick={downloadTemplate}><Download size={14} /> Download Template</GhostButton>
         <PrimaryButton onClick={() => fileInputRef.current?.click()}><Upload size={14} /> Upload File</PrimaryButton>
-        <input ref={fileInputRef} type="file" accept=".csv" className="hidden" onChange={handleFile} />
+        <input ref={fileInputRef} type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={handleFile} />
       </div>
-      <div className="text-xs text-gray-400">Terima file .csv (export dari Excel sebagai CSV). Preview & validasi ditampilkan sebelum konfirmasi.</div>
+      <div className="text-xs text-gray-400">Terima file .csv atau .xlsx/.xls — bisa langsung upload dari Excel tanpa perlu convert dulu. Preview & validasi ditampilkan sebelum konfirmasi.</div>
 
       {preview && (
         <div className="space-y-3 pt-2">
@@ -3933,6 +3932,26 @@ function ImportExcelPanel({ templateFilename, description, columns, sampleRow, v
       )}
     </Card>
   );
+}
+
+// Reads a CSV or Excel (.xlsx/.xls) file and calls back with `{ data }` —
+// an array of row objects keyed by header, same shape Papa.parse's
+// `header:true` mode returns. Lets every "Import Excel" panel accept
+// either format without changing how it consumes the parsed rows.
+function parseSpreadsheetFile(file, { complete }) {
+  const isExcel = /\.xlsx?$/i.test(file.name);
+  if (!isExcel) {
+    Papa.parse(file, { header: true, skipEmptyLines: true, complete });
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const wb = XLSX.read(e.target.result, { type: "array" });
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    const data = XLSX.utils.sheet_to_json(sheet, { defval: "", raw: false });
+    complete({ data });
+  };
+  reader.readAsArrayBuffer(file);
 }
 
 const SITE_TEMPLATE_HEADERS = ["Site Code", "Terminal ID", "Nama Site", "Customer", "Area", "Homebase", "Status"];
@@ -3975,9 +3994,7 @@ function MasterSite({ sites, homebases, customers, onImport, onCreate, showToast
   const handleFile = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    Papa.parse(file, {
-      header: true,
-      skipEmptyLines: true,
+    parseSpreadsheetFile(file, {
       complete: (res) => {
         const rows = res.data.map((row) => {
           const code = (row["Site Code"] || "").trim();
@@ -4073,9 +4090,9 @@ function MasterSite({ sites, homebases, customers, onImport, onCreate, showToast
           <div className="flex gap-2">
             <GhostButton onClick={downloadTemplate}><Download size={14} /> Download Template</GhostButton>
             <PrimaryButton onClick={() => fileInputRef.current?.click()}><Upload size={14} /> Upload File</PrimaryButton>
-            <input ref={fileInputRef} type="file" accept=".csv" className="hidden" onChange={handleFile} />
+            <input ref={fileInputRef} type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={handleFile} />
           </div>
-          <div className="text-xs text-gray-400">Terima file .csv (export dari Excel sebagai CSV). Sistem akan menampilkan preview, validasi duplikasi Site Code, dan verifikasi Homebase sebelum konfirmasi import.</div>
+          <div className="text-xs text-gray-400">Terima file .csv atau .xlsx/.xls — bisa langsung upload dari Excel tanpa perlu convert dulu. Sistem akan menampilkan preview, validasi duplikasi Site Code, dan verifikasi Homebase sebelum konfirmasi import.</div>
 
           {preview && (
             <div className="space-y-3 pt-2">
