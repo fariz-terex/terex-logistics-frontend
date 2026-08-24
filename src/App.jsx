@@ -1181,6 +1181,9 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, 
     try { await onApprove(delivery.id); } finally { setApproving(false); }
   };
 
+  const [showRejectInput, setShowRejectInput] = useState(false);
+  const [rejectReason, setRejectReason] = useState("");
+
   // Serialized items needing a Serial Number pick at assign-stock time —
   // works for both sparepart (materials) and alat (tools), just checking a
   // different master list depending on the item's type.
@@ -1342,6 +1345,13 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, 
         <StatusBadge status={delivery.status} />
       </div>
 
+      {delivery.status === "Rejected" && delivery.rejectionReason && (
+        <Card className="p-4 border-red-200 bg-red-50/50 flex items-start gap-3">
+          <AlertTriangle size={18} className="text-red-500 mt-0.5 shrink-0" />
+          <div className="text-sm text-red-700"><span className="font-semibold">Alasan penolakan: </span>{delivery.rejectionReason}</div>
+        </Card>
+      )}
+
       <Card className="p-5 grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
         <div><div className="text-gray-400 text-xs">Homebase</div><div className="font-medium text-gray-800">{delivery.homebase}</div></div>
         <div><div className="text-gray-400 text-xs">Site</div><div className="font-medium text-gray-800">{delivery.site || "-"}</div></div>
@@ -1455,14 +1465,26 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, 
       )}
 
       {canApprove && (
-        <Card className="p-5 flex items-center justify-between">
-          <div className="text-sm text-gray-600">Tinjau permintaan ini berdasarkan jumlah yang diajukan dan tentukan persetujuan.</div>
-          <div className="flex gap-2">
-            <DangerButton onClick={() => onReject(delivery.id)}><X size={15} /> Reject</DangerButton>
-            <PrimaryButton onClick={handleApprove} disabled={approving}>
-              <Check size={15} /> {approving ? "Memproses..." : "Approve"}
-            </PrimaryButton>
-          </div>
+        <Card className="p-5">
+          {showRejectInput ? (
+            <div className="space-y-3">
+              <textarea value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} placeholder="Jelaskan alasan penolakan..." rows={2} className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+              <div className="flex justify-end gap-2">
+                <GhostButton onClick={() => { setShowRejectInput(false); setRejectReason(""); }}>Batal</GhostButton>
+                <DangerButton onClick={() => rejectReason.trim() && onReject(delivery.id, rejectReason)}>Kirim Penolakan</DangerButton>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between">
+              <div className="text-sm text-gray-600">Tinjau permintaan ini berdasarkan jumlah yang diajukan dan tentukan persetujuan.</div>
+              <div className="flex gap-2">
+                <DangerButton onClick={() => setShowRejectInput(true)}><X size={15} /> Reject</DangerButton>
+                <PrimaryButton onClick={handleApprove} disabled={approving}>
+                  <Check size={15} /> {approving ? "Memproses..." : "Approve"}
+                </PrimaryButton>
+              </div>
+            </div>
+          )}
         </Card>
       )}
 
@@ -4468,7 +4490,7 @@ function createApiClient(baseUrl, getToken) {
     getDeliveries: () => request("/deliveries"),
     createDelivery: (payload) => request("/deliveries", { method: "POST", body: payload }),
     approveDelivery: (id) => request(`/deliveries/${id}/approve`, { method: "POST" }),
-    rejectDelivery: (id) => request(`/deliveries/${id}/reject`, { method: "POST" }),
+    rejectDelivery: (id, reason) => request(`/deliveries/${id}/reject`, { method: "POST", body: { reason } }),
     assignDeliveryStock: (id, serialSelections) => request(`/deliveries/${id}/assign-stock`, { method: "POST", body: serialSelections ? { serialSelections } : {} }),
     shipDelivery: (id, payload) => request(`/deliveries/${id}/ship`, { method: "POST", body: payload }),
     addDeliveryResi: (id, payload) => request(`/deliveries/${id}/resi`, { method: "POST", body: payload }),
@@ -5010,9 +5032,9 @@ export default function App() {
     } catch (err) { setApiError(err.message); }
   };
 
-  const rejectDelivery = async (id) => {
+  const rejectDelivery = async (id, reason) => {
     try {
-      const updated = await api.rejectDelivery(id);
+      const updated = await api.rejectDelivery(id, reason);
       setDeliveries((prev) => prev.map((d) => (d.id === id ? updated : d)));
     } catch (err) { setApiError(err.message); }
   };
