@@ -4448,7 +4448,14 @@ function createApiClient(baseUrl, getToken) {
     });
     let data = null;
     try { data = await res.json(); } catch (e) { /* empty body */ }
-    if (!res.ok) throw new Error((data && data.error) || res.statusText || "Request failed");
+    if (!res.ok) {
+      // For 500s the top-level "error" is a deliberately generic message —
+      // the actual cause is in "detail" (e.g. the raw DB error). Surface it
+      // so it's visible in the UI instead of only in server logs.
+      const message = (data && data.error) || res.statusText || "Request failed";
+      const detail = data && data.detail && data.detail !== message ? ` (${data.detail})` : "";
+      throw new Error(message + detail);
+    }
     return data;
   }
 
