@@ -3644,14 +3644,53 @@ function ToolReceiptForm({ tools, onSubmit, onCancel, showToast }) {
    MASTER DATA
    ============================================================ */
 
-function MasterMaterial({ materials, onCreate, onToggle, onImport, showToast }) {
+function MasterMaterial({ materials, onCreate, onToggle, onImport, onDelete, onBulkDelete, showToast }) {
   const [search, setSearch] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [form, setForm] = useState({ id: "", name: "", category: "", unit: "Unit", serialized: true, minStock: 1 });
   const [saving, setSaving] = useState(false);
+  const [selected, setSelected] = useState(new Set());
+  const [confirmDelete, setConfirmDelete] = useState(null); // { type: "one"|"bulk", id? }
 
   const filtered = materials.filter((m) => m.name.toLowerCase().includes(search.toLowerCase()));
+
+  const toggleOne = (id) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const toggleAllVisible = () => {
+    const visibleIds = filtered.map((m) => m.id);
+    const allSelected = visibleIds.every((id) => selected.has(id));
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allSelected) visibleIds.forEach((id) => next.delete(id));
+      else visibleIds.forEach((id) => next.add(id));
+      return next;
+    });
+  };
+  const handleDeleteOne = async (id) => {
+    try {
+      await onDelete(id);
+      showToast("Material berhasil dihapus");
+    } catch (err) {
+      showToast(err.message || "Gagal menghapus material");
+    }
+  };
+  const handleBulkDelete = async () => {
+    const ids = Array.from(selected);
+    try {
+      const result = await onBulkDelete(ids);
+      const blockedCount = result?.blocked?.length || 0;
+      showToast(blockedCount > 0 ? `${result.deleted} dihapus, ${blockedCount} gagal karena masih dipakai` : `${result.deleted} material berhasil dihapus`);
+      setSelected(new Set());
+    } catch (err) {
+      showToast(err.message || "Gagal menghapus material");
+    }
+  };
 
   const addMaterial = async () => {
     if (!form.name || !form.category) return;
@@ -3724,9 +3763,14 @@ function MasterMaterial({ materials, onCreate, onToggle, onImport, showToast }) 
         />
       )}
 
-      <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2.5 w-80">
-        <Search size={16} className="text-gray-400" />
-        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari material..." className="bg-transparent text-sm outline-none w-full" />
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2.5 w-80">
+          <Search size={16} className="text-gray-400" />
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari material..." className="bg-transparent text-sm outline-none w-full" />
+        </div>
+        {selected.size > 0 && (
+          <DangerButton onClick={() => setConfirmDelete({ type: "bulk" })}><X size={14} /> Hapus Terpilih ({selected.size})</DangerButton>
+        )}
       </div>
 
       <Card className="overflow-hidden">
@@ -3734,6 +3778,9 @@ function MasterMaterial({ materials, onCreate, onToggle, onImport, showToast }) 
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
+              <th className="px-5 py-3 font-medium w-8">
+                <input type="checkbox" checked={filtered.length > 0 && filtered.every((m) => selected.has(m.id))} onChange={toggleAllVisible} className="accent-emerald-800" />
+              </th>
               <th className="px-5 py-3 font-medium">Material ID</th>
               <th className="px-5 py-3 font-medium">Nama</th>
               <th className="px-5 py-3 font-medium">Category</th>
@@ -3742,11 +3789,13 @@ function MasterMaterial({ materials, onCreate, onToggle, onImport, showToast }) 
               <th className="px-5 py-3 font-medium">Min Stock</th>
               <th className="px-5 py-3 font-medium">Status</th>
               <th className="px-5 py-3 font-medium"></th>
+              <th className="px-5 py-3 font-medium"></th>
             </tr>
           </thead>
           <tbody>
             {filtered.map((m) => (
               <tr key={m.id} className="border-b border-gray-50 last:border-0">
+                <td className="px-5 py-3"><input type="checkbox" checked={selected.has(m.id)} onChange={() => toggleOne(m.id)} className="accent-emerald-800" /></td>
                 <td className="px-5 py-3 text-gray-500">{m.id}</td>
                 <td className="px-5 py-3 font-medium text-gray-800">{m.name}</td>
                 <td className="px-5 py-3 text-gray-600">{m.category}</td>
@@ -3755,23 +3804,83 @@ function MasterMaterial({ materials, onCreate, onToggle, onImport, showToast }) 
                 <td className="px-5 py-3 text-gray-500">{m.minStock}</td>
                 <td className="px-5 py-3"><StatusBadge status={m.status} /></td>
                 <td className="px-5 py-3"><button onClick={() => onToggle(m.id)} className="text-xs font-medium text-emerald-800">{m.status === "Active" ? "Deactivate" : "Activate"}</button></td>
+                <td className="px-5 py-3"><button onClick={() => setConfirmDelete({ type: "one", id: m.id })} className="text-red-500 hover:text-red-700"><X size={14} /></button></td>
               </tr>
             ))}
+            {filtered.length === 0 && <tr><td colSpan={9}><EmptyState text="Belum ada data material." /></td></tr>}
           </tbody>
         </table>
         </div>
       </Card>
+
+      <ConfirmDialog
+        open={!!confirmDelete}
+        title="Hapus Material"
+        message={
+          confirmDelete?.type === "bulk"
+            ? `${selected.size} material terpilih akan dihapus permanen. Tindakan ini tidak bisa dibatalkan. Lanjutkan?`
+            : `Material ini akan dihapus permanen. Tindakan ini tidak bisa dibatalkan. Lanjutkan?`
+        }
+        confirmLabel="Ya, Hapus"
+        danger
+        onConfirm={() => {
+          const target = confirmDelete;
+          setConfirmDelete(null);
+          if (target.type === "bulk") handleBulkDelete();
+          else handleDeleteOne(target.id);
+        }}
+        onCancel={() => setConfirmDelete(null)}
+      />
     </div>
   );
 }
 
-function MasterTools({ tools, onCreate, onToggle, showToast }) {
+function MasterTools({ tools, onCreate, onToggle, onDelete, onBulkDelete, showToast }) {
   const [search, setSearch] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ name: "", category: "", unit: "Unit", serialized: true, minStock: 1 });
   const [saving, setSaving] = useState(false);
+  const [selected, setSelected] = useState(new Set());
+  const [confirmDelete, setConfirmDelete] = useState(null); // { type: "one"|"bulk", id? }
 
   const filtered = tools.filter((t) => t.name.toLowerCase().includes(search.toLowerCase()));
+
+  const toggleOne = (id) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const toggleAllVisible = () => {
+    const visibleIds = filtered.map((t) => t.id);
+    const allSelected = visibleIds.every((id) => selected.has(id));
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allSelected) visibleIds.forEach((id) => next.delete(id));
+      else visibleIds.forEach((id) => next.add(id));
+      return next;
+    });
+  };
+  const handleDeleteOne = async (id) => {
+    try {
+      await onDelete(id);
+      showToast("Alat berhasil dihapus");
+    } catch (err) {
+      showToast(err.message || "Gagal menghapus alat");
+    }
+  };
+  const handleBulkDelete = async () => {
+    const ids = Array.from(selected);
+    try {
+      const result = await onBulkDelete(ids);
+      const blockedCount = result?.blocked?.length || 0;
+      showToast(blockedCount > 0 ? `${result.deleted} dihapus, ${blockedCount} gagal karena masih dipakai` : `${result.deleted} alat berhasil dihapus`);
+      setSelected(new Set());
+    } catch (err) {
+      showToast(err.message || "Gagal menghapus alat");
+    }
+  };
 
   const addTool = async () => {
     if (!form.name || !form.category) return;
@@ -3809,9 +3918,14 @@ function MasterTools({ tools, onCreate, onToggle, showToast }) {
         </Card>
       )}
 
-      <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2.5 w-80">
-        <Search size={16} className="text-gray-400" />
-        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari alat..." className="bg-transparent text-sm outline-none w-full" />
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2.5 w-80">
+          <Search size={16} className="text-gray-400" />
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari alat..." className="bg-transparent text-sm outline-none w-full" />
+        </div>
+        {selected.size > 0 && (
+          <DangerButton onClick={() => setConfirmDelete({ type: "bulk" })}><X size={14} /> Hapus Terpilih ({selected.size})</DangerButton>
+        )}
       </div>
 
       <Card className="overflow-hidden">
@@ -3819,6 +3933,9 @@ function MasterTools({ tools, onCreate, onToggle, showToast }) {
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
+              <th className="px-5 py-3 font-medium w-8">
+                <input type="checkbox" checked={filtered.length > 0 && filtered.every((t) => selected.has(t.id))} onChange={toggleAllVisible} className="accent-emerald-800" />
+              </th>
               <th className="px-5 py-3 font-medium">Alat ID</th>
               <th className="px-5 py-3 font-medium">Nama</th>
               <th className="px-5 py-3 font-medium">Category</th>
@@ -3827,11 +3944,13 @@ function MasterTools({ tools, onCreate, onToggle, showToast }) {
               <th className="px-5 py-3 font-medium">Min Stock</th>
               <th className="px-5 py-3 font-medium">Status</th>
               <th className="px-5 py-3 font-medium"></th>
+              <th className="px-5 py-3 font-medium"></th>
             </tr>
           </thead>
           <tbody>
             {filtered.map((t) => (
               <tr key={t.id} className="border-b border-gray-50 last:border-0">
+                <td className="px-5 py-3"><input type="checkbox" checked={selected.has(t.id)} onChange={() => toggleOne(t.id)} className="accent-emerald-800" /></td>
                 <td className="px-5 py-3 text-gray-500">{t.id}</td>
                 <td className="px-5 py-3 font-medium text-gray-800">{t.name}</td>
                 <td className="px-5 py-3 text-gray-600">{t.category}</td>
@@ -3840,13 +3959,33 @@ function MasterTools({ tools, onCreate, onToggle, showToast }) {
                 <td className="px-5 py-3 text-gray-500">{t.min_stock}</td>
                 <td className="px-5 py-3"><StatusBadge status={t.status} /></td>
                 <td className="px-5 py-3"><button onClick={() => onToggle(t.id)} className="text-xs font-medium text-emerald-800">{t.status === "Active" ? "Deactivate" : "Activate"}</button></td>
+                <td className="px-5 py-3"><button onClick={() => setConfirmDelete({ type: "one", id: t.id })} className="text-red-500 hover:text-red-700"><X size={14} /></button></td>
               </tr>
             ))}
-            {filtered.length === 0 && <tr><td colSpan={8}><EmptyState text="Belum ada data alat." /></td></tr>}
+            {filtered.length === 0 && <tr><td colSpan={10}><EmptyState text="Belum ada data alat." /></td></tr>}
           </tbody>
         </table>
         </div>
       </Card>
+
+      <ConfirmDialog
+        open={!!confirmDelete}
+        title="Hapus Alat"
+        message={
+          confirmDelete?.type === "bulk"
+            ? `${selected.size} alat terpilih akan dihapus permanen. Tindakan ini tidak bisa dibatalkan. Lanjutkan?`
+            : `Alat ini akan dihapus permanen. Tindakan ini tidak bisa dibatalkan. Lanjutkan?`
+        }
+        confirmLabel="Ya, Hapus"
+        danger
+        onConfirm={() => {
+          const target = confirmDelete;
+          setConfirmDelete(null);
+          if (target.type === "bulk") handleBulkDelete();
+          else handleDeleteOne(target.id);
+        }}
+        onCancel={() => setConfirmDelete(null)}
+      />
     </div>
   );
 }
@@ -4254,11 +4393,13 @@ function MasterSite({ sites, homebases, customers, onImport, onCreate, onDelete,
 /* Generic, schema-driven Master Data CRUD table: used for Homebase, Area,
    Customer, and Users so each master gets a real Add form + Activate/Deactivate
    toggle without duplicating table/form boilerplate per module. */
-function MasterCrudTable({ title, subtitle, entityLabel, fields, items, idField = "id", buildLabel, onCreate, onToggle, onUpdate, importConfig, showToast }) {
+function MasterCrudTable({ title, subtitle, entityLabel, fields, items, idField = "id", buildLabel, onCreate, onToggle, onUpdate, onDelete, onBulkDelete, importConfig, showToast }) {
   const [showForm, setShowForm] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [search, setSearch] = useState("");
   const [editingId, setEditingId] = useState(null); // null = adding new, otherwise editing this id
+  const [selected, setSelected] = useState(new Set());
+  const [confirmDelete, setConfirmDelete] = useState(null); // { type: "one"|"bulk", id? }
   const emptyForm = Object.fromEntries(fields.map((f) => [f.key, f.default ?? (f.type === "multiselect" ? [] : "")]));
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
@@ -4304,6 +4445,43 @@ function MasterCrudTable({ title, subtitle, entityLabel, fields, items, idField 
   };
 
   const filtered = search ? items.filter((it) => buildLabel(it).toLowerCase().includes(search.toLowerCase())) : items;
+
+  const toggleOne = (id) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const toggleAllVisible = () => {
+    const visibleIds = filtered.map((it) => it[idField]);
+    const allSelected = visibleIds.every((id) => selected.has(id));
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allSelected) visibleIds.forEach((id) => next.delete(id));
+      else visibleIds.forEach((id) => next.add(id));
+      return next;
+    });
+  };
+  const handleDeleteOne = async (id) => {
+    try {
+      await onDelete(id);
+      showToast(`${label} berhasil dihapus`);
+    } catch (err) {
+      showToast(err.message || "Gagal menghapus");
+    }
+  };
+  const handleBulkDelete = async () => {
+    const ids = Array.from(selected);
+    try {
+      const result = await onBulkDelete(ids);
+      const blockedCount = result?.blocked?.length || 0;
+      showToast(blockedCount > 0 ? `${result.deleted} dihapus, ${blockedCount} gagal karena masih dipakai` : `${result.deleted} ${label} berhasil dihapus`);
+      setSelected(new Set());
+    } catch (err) {
+      showToast(err.message || "Gagal menghapus");
+    }
+  };
 
   return (
     <div className="p-4 sm:p-8 space-y-5">
@@ -4394,12 +4572,20 @@ function MasterCrudTable({ title, subtitle, entityLabel, fields, items, idField 
         <Search size={16} className="text-gray-400" />
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari..." className="bg-transparent text-sm outline-none w-full" />
       </div>
+      {onBulkDelete && selected.size > 0 && (
+        <div><DangerButton onClick={() => setConfirmDelete({ type: "bulk" })}><X size={14} /> Hapus Terpilih ({selected.size})</DangerButton></div>
+      )}
 
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
+              {onDelete && (
+                <th className="px-5 py-3 font-medium w-8">
+                  <input type="checkbox" checked={filtered.length > 0 && filtered.every((it) => selected.has(it[idField]))} onChange={toggleAllVisible} className="accent-emerald-800" />
+                </th>
+              )}
               <th className="px-5 py-3 font-medium">{idField === "id" ? "ID" : "Code"}</th>
               {fields.filter((f) => f.key !== "status" && f.key !== "password").map((f) => <th key={f.key} className="px-5 py-3 font-medium">{f.label}</th>)}
               <th className="px-5 py-3 font-medium">Status</th>
@@ -4409,6 +4595,9 @@ function MasterCrudTable({ title, subtitle, entityLabel, fields, items, idField 
           <tbody>
             {filtered.map((it) => (
               <tr key={it[idField]} className="border-b border-gray-50 last:border-0">
+                {onDelete && (
+                  <td className="px-5 py-3"><input type="checkbox" checked={selected.has(it[idField])} onChange={() => toggleOne(it[idField])} className="accent-emerald-800" /></td>
+                )}
                 <td className="px-5 py-3 text-gray-400 text-xs">{it[idField]}</td>
                 {fields.filter((f) => f.key !== "status" && f.key !== "password").map((f) => <td key={f.key} className="px-5 py-3 text-gray-700">{Array.isArray(it[f.key]) ? it[f.key].join(", ") : it[f.key]}</td>)}
                 <td className="px-5 py-3"><StatusBadge status={it.status} /></td>
@@ -4416,15 +4605,37 @@ function MasterCrudTable({ title, subtitle, entityLabel, fields, items, idField 
                   <div className="flex items-center gap-3">
                     {onUpdate && <button onClick={() => startEdit(it)} className="text-xs font-medium text-emerald-800">Edit</button>}
                     <button onClick={() => onToggle(it[idField])} className="text-xs font-medium text-gray-500">{it.status === "Active" ? "Deactivate" : "Activate"}</button>
+                    {onDelete && <button onClick={() => setConfirmDelete({ type: "one", id: it[idField] })} className="text-red-500 hover:text-red-700"><X size={14} /></button>}
                   </div>
                 </td>
               </tr>
             ))}
-            {filtered.length === 0 && <tr><td colSpan={fields.length + 2}><EmptyState text="Belum ada data." /></td></tr>}
+            {filtered.length === 0 && <tr><td colSpan={fields.length + (onDelete ? 3 : 2)}><EmptyState text="Belum ada data." /></td></tr>}
           </tbody>
         </table>
         </div>
       </Card>
+
+      {onDelete && (
+        <ConfirmDialog
+          open={!!confirmDelete}
+          title={`Hapus ${label}`}
+          message={
+            confirmDelete?.type === "bulk"
+              ? `${selected.size} ${label} terpilih akan dihapus permanen. Tindakan ini tidak bisa dibatalkan. Lanjutkan?`
+              : `${label} "${confirmDelete?.id}" akan dihapus permanen. Tindakan ini tidak bisa dibatalkan. Lanjutkan?`
+          }
+          confirmLabel="Ya, Hapus"
+          danger
+          onConfirm={() => {
+            const target = confirmDelete;
+            setConfirmDelete(null);
+            if (target.type === "bulk") handleBulkDelete();
+            else handleDeleteOne(target.id);
+          }}
+          onCancel={() => setConfirmDelete(null)}
+        />
+      )}
     </div>
   );
 }
@@ -4548,21 +4759,29 @@ function createApiClient(baseUrl, getToken) {
     createMaterial: (payload) => request("/materials", { method: "POST", body: payload }),
     toggleMaterialStatus: (id) => request(`/materials/${id}/toggle-status`, { method: "PATCH" }),
     importMaterials: (rows) => request("/materials/import", { method: "POST", body: { rows } }),
+    deleteMaterial: (id) => request(`/materials/${id}`, { method: "DELETE" }),
+    bulkDeleteMaterials: (ids) => request("/materials/bulk-delete", { method: "POST", body: { ids } }),
 
     getAreas: () => request("/areas"),
     createArea: (payload) => request("/areas", { method: "POST", body: payload }),
     toggleAreaStatus: (code) => request(`/areas/${code}/toggle-status`, { method: "PATCH" }),
     importAreas: (rows) => request("/areas/import", { method: "POST", body: { rows } }),
+    deleteArea: (code) => request(`/areas/${code}`, { method: "DELETE" }),
+    bulkDeleteAreas: (codes) => request("/areas/bulk-delete", { method: "POST", body: { codes } }),
 
     getHomebases: () => request("/homebases"),
     createHomebase: (payload) => request("/homebases", { method: "POST", body: payload }),
     toggleHomebaseStatus: (code) => request(`/homebases/${code}/toggle-status`, { method: "PATCH" }),
     importHomebases: (rows) => request("/homebases/import", { method: "POST", body: { rows } }),
+    deleteHomebase: (code) => request(`/homebases/${code}`, { method: "DELETE" }),
+    bulkDeleteHomebases: (codes) => request("/homebases/bulk-delete", { method: "POST", body: { codes } }),
 
     getCustomers: () => request("/customers"),
     createCustomer: (payload) => request("/customers", { method: "POST", body: payload }),
     toggleCustomerStatus: (id) => request(`/customers/${id}/toggle-status`, { method: "PATCH" }),
     importCustomers: (rows) => request("/customers/import", { method: "POST", body: { rows } }),
+    deleteCustomer: (id) => request(`/customers/${id}`, { method: "DELETE" }),
+    bulkDeleteCustomers: (codes) => request("/customers/bulk-delete", { method: "POST", body: { codes } }),
 
     getSites: () => request("/sites"),
     createSite: (payload) => request("/sites", { method: "POST", body: payload }),
@@ -4593,6 +4812,8 @@ function createApiClient(baseUrl, getToken) {
     getTools: () => request("/tools"),
     createTool: (payload) => request("/tools", { method: "POST", body: payload }),
     toggleToolStatus: (id) => request(`/tools/${id}/toggle-status`, { method: "PATCH" }),
+    deleteTool: (id) => request(`/tools/${id}`, { method: "DELETE" }),
+    bulkDeleteTools: (ids) => request("/tools/bulk-delete", { method: "POST", body: { ids } }),
     getToolSerials: (tool, status) => {
       const params = new URLSearchParams();
       if (tool) params.set("tool", tool);
@@ -4847,6 +5068,15 @@ export default function App() {
   const toggleTool = async (id) => {
     const updated = await api.toggleToolStatus(id);
     setTools((prev) => prev.map((t) => (t.id === id ? updated : t)));
+  };
+  const deleteToolFromServer = async (id) => {
+    await api.deleteTool(id);
+    setTools((prev) => prev.filter((t) => t.id !== id));
+  };
+  const bulkDeleteToolsFromServer = async (ids) => {
+    const result = await api.bulkDeleteTools(ids);
+    setTools((prev) => prev.filter((t) => !ids.includes(t.id)));
+    return result;
   };
 
   // Tools attached to a Delivery Request come back independently of that
@@ -5278,6 +5508,15 @@ export default function App() {
     setMaterials(list.map(normalizeMaterial));
     return result;
   };
+  const deleteMaterialFromServer = async (id) => {
+    await api.deleteMaterial(id);
+    setMaterials((prev) => prev.filter((m) => m.id !== id));
+  };
+  const bulkDeleteMaterialsFromServer = async (ids) => {
+    const result = await api.bulkDeleteMaterials(ids);
+    setMaterials((prev) => prev.filter((m) => !ids.includes(m.id)));
+    return result;
+  };
 
   const createSiteToServer = async (payload) => {
     const created = await api.createSite(payload);
@@ -5313,6 +5552,15 @@ export default function App() {
     setHomebases(list);
     return result;
   };
+  const deleteHomebaseFromServer = async (code) => {
+    await api.deleteHomebase(code);
+    setHomebases((prev) => prev.filter((h) => h.code !== code));
+  };
+  const bulkDeleteHomebasesFromServer = async (codes) => {
+    const result = await api.bulkDeleteHomebases(codes);
+    setHomebases((prev) => prev.filter((h) => !codes.includes(h.code)));
+    return result;
+  };
 
   const createArea = async (payload) => {
     const created = await api.createArea(payload);
@@ -5328,6 +5576,15 @@ export default function App() {
     setAreas(list);
     return result;
   };
+  const deleteAreaFromServer = async (code) => {
+    await api.deleteArea(code);
+    setAreas((prev) => prev.filter((a) => a.code !== code));
+  };
+  const bulkDeleteAreasFromServer = async (codes) => {
+    const result = await api.bulkDeleteAreas(codes);
+    setAreas((prev) => prev.filter((a) => !codes.includes(a.code)));
+    return result;
+  };
 
   const createCustomer = async (payload) => {
     const created = await api.createCustomer(payload);
@@ -5341,6 +5598,15 @@ export default function App() {
     const result = await api.importCustomers(rows);
     const list = await api.getCustomers();
     setCustomers(list);
+    return result;
+  };
+  const deleteCustomerFromServer = async (id) => {
+    await api.deleteCustomer(id);
+    setCustomers((prev) => prev.filter((c) => c.id !== id));
+  };
+  const bulkDeleteCustomersFromServer = async (ids) => {
+    const result = await api.bulkDeleteCustomers(ids);
+    setCustomers((prev) => prev.filter((c) => !ids.includes(c.id)));
     return result;
   };
 
@@ -5507,14 +5773,14 @@ export default function App() {
       { label: "Tgl Dikirim", render: (r) => r.date, exportValue: (r) => r.date },
     ]}
   />;
-  else if (page === "masterMaterial") content = <MasterMaterial materials={materials} onCreate={createMaterial} onToggle={toggleMaterial} onImport={importMaterialsToServer} showToast={showToast} />;
+  else if (page === "masterMaterial") content = <MasterMaterial materials={materials} onCreate={createMaterial} onToggle={toggleMaterial} onImport={importMaterialsToServer} onDelete={deleteMaterialFromServer} onBulkDelete={bulkDeleteMaterialsFromServer} showToast={showToast} />;
   else if (page === "masterSite") content = <MasterSite sites={sites} homebases={homebases} customers={customers} onImport={importSitesToServer} onCreate={createSiteToServer} onDelete={deleteSiteFromServer} onBulkDelete={bulkDeleteSitesFromServer} showToast={showToast} />;
   else if (page === "masterHomebase") content = <MasterCrudTable
     title="Master Homebase" subtitle="Data homebase & PIC tim lapangan"
     entityLabel="Homebase" showToast={showToast}
     items={homebases} idField="code"
     buildLabel={(h) => `${h.name} ${h.area} ${h.pic}`}
-    onCreate={createHomebase} onToggle={toggleHomebase}
+    onCreate={createHomebase} onToggle={toggleHomebase} onDelete={deleteHomebaseFromServer} onBulkDelete={bulkDeleteHomebasesFromServer}
     fields={[
       { key: "name", label: "Nama Homebase", required: true },
       { key: "area", label: "Area", type: "select", options: areas.filter((a) => a.status === "Active").map((a) => a.name), required: true },
@@ -5549,7 +5815,7 @@ export default function App() {
     entityLabel="Area" showToast={showToast}
     items={areas} idField="code"
     buildLabel={(a) => a.name}
-    onCreate={createArea} onToggle={toggleArea}
+    onCreate={createArea} onToggle={toggleArea} onDelete={deleteAreaFromServer} onBulkDelete={bulkDeleteAreasFromServer}
     fields={[{ key: "name", label: "Area Name", required: true }]}
     importConfig={{
       templateFilename: "template_master_area.csv",
@@ -5569,7 +5835,7 @@ export default function App() {
     entityLabel="Customer" showToast={showToast}
     items={customers} idField="id"
     buildLabel={(c) => c.name}
-    onCreate={createCustomer} onToggle={toggleCustomer}
+    onCreate={createCustomer} onToggle={toggleCustomer} onDelete={deleteCustomerFromServer} onBulkDelete={bulkDeleteCustomersFromServer}
     fields={[{ key: "name", label: "Customer Name", required: true }]}
     importConfig={{
       templateFilename: "template_master_customer.csv",
@@ -5584,7 +5850,7 @@ export default function App() {
       onImport: importCustomersToServer,
     }}
   />;
-  else if (page === "masterTools") content = <MasterTools tools={tools} onCreate={createToolMaster} onToggle={toggleTool} showToast={showToast} />;
+  else if (page === "masterTools") content = <MasterTools tools={tools} onCreate={createToolMaster} onToggle={toggleTool} onDelete={deleteToolFromServer} onBulkDelete={bulkDeleteToolsFromServer} showToast={showToast} />;
   else if (page === "users") content = <MasterCrudTable
     title="User Management" subtitle="Kelola akses pengguna sistem"
     entityLabel="User" showToast={showToast}
