@@ -3965,16 +3965,63 @@ function parseSpreadsheetFile(file, { complete }) {
 
 const SITE_TEMPLATE_HEADERS = ["Site Code", "Terminal ID", "Nama Site", "Customer", "Area", "Homebase", "Status"];
 
-function MasterSite({ sites, homebases, customers, onImport, onCreate, showToast }) {
+function MasterSite({ sites, homebases, customers, onImport, onCreate, onDelete, onBulkDelete, showToast }) {
   const [showImport, setShowImport] = useState(false);
   const [preview, setPreview] = useState(null); // { rows: [...], errors: [...] }
   const [importing, setImporting] = useState(false);
   const [showAddForm, setShowAddForm] = useState(false);
   const [saving, setSaving] = useState(false);
   const [addError, setAddError] = useState("");
+  const [search, setSearch] = useState("");
+  const [selected, setSelected] = useState(new Set());
+  const [confirmDelete, setConfirmDelete] = useState(null); // { type: "one"|"bulk", code? }
   const emptyForm = { code: "", terminalId: "", name: "", customer: "", area: "", homebase: "", status: "Active" };
   const [form, setForm] = useState(emptyForm);
   const fileInputRef = React.useRef(null);
+
+  const filteredSites = sites.filter((s) =>
+    !search.trim() ||
+    s.name.toLowerCase().includes(search.toLowerCase()) ||
+    s.code.toLowerCase().includes(search.toLowerCase()) ||
+    (s.terminalId || "").toLowerCase().includes(search.toLowerCase())
+  );
+
+  const toggleOne = (code) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(code)) next.delete(code); else next.add(code);
+      return next;
+    });
+  };
+  const toggleAllVisible = () => {
+    const visibleCodes = filteredSites.map((s) => s.code);
+    const allSelected = visibleCodes.every((c) => selected.has(c));
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allSelected) visibleCodes.forEach((c) => next.delete(c));
+      else visibleCodes.forEach((c) => next.add(c));
+      return next;
+    });
+  };
+
+  const handleDeleteOne = async (code) => {
+    try {
+      await onDelete(code);
+      showToast(`Site "${code}" berhasil dihapus`);
+    } catch (err) {
+      showToast(err.message || "Gagal menghapus site");
+    }
+  };
+  const handleBulkDelete = async () => {
+    const codes = Array.from(selected);
+    try {
+      const result = await onBulkDelete(codes);
+      showToast(`${result.deleted} site berhasil dihapus`);
+      setSelected(new Set());
+    } catch (err) {
+      showToast(err.message || "Gagal menghapus site");
+    }
+  };
 
   const addSite = async () => {
     if (!form.code.trim() || !form.name.trim() || !form.homebase) return;
@@ -4135,11 +4182,23 @@ function MasterSite({ sites, homebases, customers, onImport, onCreate, showToast
           )}
         </Card>
       )}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2.5 w-80">
+          <Search size={16} className="text-gray-400" />
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari nama, Site Code, atau Terminal ID..." className="bg-transparent text-sm outline-none w-full" />
+        </div>
+        {selected.size > 0 && (
+          <DangerButton onClick={() => setConfirmDelete({ type: "bulk" })}><X size={14} /> Hapus Terpilih ({selected.size})</DangerButton>
+        )}
+      </div>
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
+              <th className="px-5 py-3 font-medium w-8">
+                <input type="checkbox" checked={filteredSites.length > 0 && filteredSites.every((s) => selected.has(s.code))} onChange={toggleAllVisible} className="accent-emerald-800" />
+              </th>
               <th className="px-5 py-3 font-medium">Nama Site</th>
               <th className="px-5 py-3 font-medium">Site Code</th>
               <th className="px-5 py-3 font-medium">Terminal ID</th>
@@ -4147,11 +4206,13 @@ function MasterSite({ sites, homebases, customers, onImport, onCreate, showToast
               <th className="px-5 py-3 font-medium">Area</th>
               <th className="px-5 py-3 font-medium">Homebase</th>
               <th className="px-5 py-3 font-medium">Status</th>
+              <th className="px-5 py-3 font-medium"></th>
             </tr>
           </thead>
           <tbody>
-            {sites.map((s) => (
+            {filteredSites.map((s) => (
               <tr key={s.code} className="border-b border-gray-50 last:border-0">
+                <td className="px-5 py-3"><input type="checkbox" checked={selected.has(s.code)} onChange={() => toggleOne(s.code)} className="accent-emerald-800" /></td>
                 <td className="px-5 py-3 font-medium text-gray-800">{s.name}</td>
                 <td className="px-5 py-3 text-gray-400 text-xs">{s.code}</td>
                 <td className="px-5 py-3 text-gray-400 text-xs">{s.terminalId}</td>
@@ -4159,12 +4220,33 @@ function MasterSite({ sites, homebases, customers, onImport, onCreate, showToast
                 <td className="px-5 py-3 text-gray-600">{s.area}</td>
                 <td className="px-5 py-3 text-gray-600">{s.homebase}</td>
                 <td className="px-5 py-3"><StatusBadge status={s.status} /></td>
+                <td className="px-5 py-3"><button onClick={() => setConfirmDelete({ type: "one", code: s.code })} className="text-red-500 hover:text-red-700"><X size={14} /></button></td>
               </tr>
             ))}
+            {filteredSites.length === 0 && <tr><td colSpan={9}><EmptyState text="Tidak ada site yang cocok." /></td></tr>}
           </tbody>
         </table>
         </div>
       </Card>
+
+      <ConfirmDialog
+        open={!!confirmDelete}
+        title="Hapus Site"
+        message={
+          confirmDelete?.type === "bulk"
+            ? `${selected.size} site terpilih akan dihapus permanen. Tindakan ini tidak bisa dibatalkan. Lanjutkan?`
+            : `Site "${confirmDelete?.code}" akan dihapus permanen. Tindakan ini tidak bisa dibatalkan. Lanjutkan?`
+        }
+        confirmLabel="Ya, Hapus"
+        danger
+        onConfirm={() => {
+          const target = confirmDelete;
+          setConfirmDelete(null);
+          if (target.type === "bulk") handleBulkDelete();
+          else handleDeleteOne(target.code);
+        }}
+        onCancel={() => setConfirmDelete(null)}
+      />
     </div>
   );
 }
@@ -4485,6 +4567,8 @@ function createApiClient(baseUrl, getToken) {
     getSites: () => request("/sites"),
     createSite: (payload) => request("/sites", { method: "POST", body: payload }),
     importSites: (rows) => request("/sites/import", { method: "POST", body: { rows } }),
+    deleteSite: (code) => request(`/sites/${encodeURIComponent(code)}`, { method: "DELETE" }),
+    bulkDeleteSites: (codes) => request("/sites/bulk-delete", { method: "POST", body: { codes } }),
 
     getUsers: () => request("/users"),
     createUser: (payload) => request("/users", { method: "POST", body: payload }),
@@ -5205,6 +5289,15 @@ export default function App() {
     setSites(sitesList.map(normalizeSite));
     return result;
   };
+  const deleteSiteFromServer = async (code) => {
+    await api.deleteSite(code);
+    setSites((prev) => prev.filter((s) => s.code !== code));
+  };
+  const bulkDeleteSitesFromServer = async (codes) => {
+    const result = await api.bulkDeleteSites(codes);
+    setSites((prev) => prev.filter((s) => !codes.includes(s.code)));
+    return result;
+  };
 
   const createHomebase = async (payload) => {
     const created = await api.createHomebase(payload);
@@ -5415,7 +5508,7 @@ export default function App() {
     ]}
   />;
   else if (page === "masterMaterial") content = <MasterMaterial materials={materials} onCreate={createMaterial} onToggle={toggleMaterial} onImport={importMaterialsToServer} showToast={showToast} />;
-  else if (page === "masterSite") content = <MasterSite sites={sites} homebases={homebases} customers={customers} onImport={importSitesToServer} onCreate={createSiteToServer} showToast={showToast} />;
+  else if (page === "masterSite") content = <MasterSite sites={sites} homebases={homebases} customers={customers} onImport={importSitesToServer} onCreate={createSiteToServer} onDelete={deleteSiteFromServer} onBulkDelete={bulkDeleteSitesFromServer} showToast={showToast} />;
   else if (page === "masterHomebase") content = <MasterCrudTable
     title="Master Homebase" subtitle="Data homebase & PIC tim lapangan"
     entityLabel="Homebase" showToast={showToast}
