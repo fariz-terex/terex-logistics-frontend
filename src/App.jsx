@@ -177,23 +177,24 @@ const ROLES = {
   LOGISTICS: "Logistics Staff",
   SPV: "SPV",
   TECH: "Technician",
+  DIVISION_MANAGER: "Manager Divisi",
 };
 
 const NAV_ACCESS = {
-  dashboard: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV, ROLES.TECH],
-  delivery: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV],
-  returnFaulty: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.TECH],
-  reconciliation: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.TECH],
-  materialSwap: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.TECH],
-  stock: [ROLES.MANAGER, ROLES.LOGISTICS],
-  movement: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV],
+  dashboard: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV, ROLES.TECH, ROLES.DIVISION_MANAGER],
+  delivery: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV, ROLES.DIVISION_MANAGER],
+  returnFaulty: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.TECH, ROLES.DIVISION_MANAGER],
+  reconciliation: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.TECH, ROLES.DIVISION_MANAGER],
+  materialSwap: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.TECH, ROLES.DIVISION_MANAGER],
+  stock: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.DIVISION_MANAGER],
+  movement: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV, ROLES.DIVISION_MANAGER],
   receipts: [ROLES.MANAGER, ROLES.LOGISTICS],
-  reports: [ROLES.MANAGER, ROLES.LOGISTICS],
-  reportsDeviceLocation: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV],
-  toolStock: [ROLES.MANAGER, ROLES.LOGISTICS],
+  reports: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.DIVISION_MANAGER],
+  reportsDeviceLocation: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV, ROLES.DIVISION_MANAGER],
+  toolStock: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.DIVISION_MANAGER],
   master: [ROLES.MANAGER],
   users: [ROLES.MANAGER],
-  settings: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV, ROLES.TECH],
+  settings: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV, ROLES.TECH, ROLES.DIVISION_MANAGER],
 };
 
 const USERS_SEED = [
@@ -1967,19 +1968,20 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast, currentUse
   );
 }
 
-function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMaterial, onSubmitReceipt, showToast, clearSerialHighlight, currentUser, customers }) {
+function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMaterial, onSubmitReceipt, showToast, clearSerialHighlight, currentUser, customers, role }) {
   const [search, setSearch] = useState("");
   const [showReceiptForm, setShowReceiptForm] = useState(false);
+  const canReceive = role === ROLES.MANAGER || role === ROLES.LOGISTICS;
   const filtered = materials.filter((m) => m.name.toLowerCase().includes(search.toLowerCase()));
 
   return (
     <div className="p-4 sm:p-8 space-y-5">
       <SectionTitle
         title="Warehouse Stock" subtitle="Ketersediaan material di gudang pusat"
-        right={<PrimaryButton onClick={() => setShowReceiptForm(!showReceiptForm)}><Plus size={16} /> Terima Barang</PrimaryButton>}
+        right={canReceive ? <PrimaryButton onClick={() => setShowReceiptForm(!showReceiptForm)}><Plus size={16} /> Terima Barang</PrimaryButton> : null}
       />
 
-      {showReceiptForm && (
+      {showReceiptForm && canReceive && (
         <GoodsReceiptForm
           materials={materials}
           onCancel={() => setShowReceiptForm(false)}
@@ -3067,7 +3069,7 @@ function ReconciliationDetail({ r, onBack, onApprove, onRevise, onEdit, role }) 
    replace that flow — it just feeds into it).
    ============================================================ */
 
-function MaterialSwapPage({ swaps, api, materials, sites, homebases, onSubmit, showToast, setPage, setReturnPrefill, setSelectedSwap }) {
+function MaterialSwapPage({ swaps, api, materials, sites, homebases, onSubmit, showToast, setPage, setReturnPrefill, setSelectedSwap, role }) {
   const [newSn, setNewSn] = useState("");
   const [homebase, setHomebase] = useState("");
   const [site, setSite] = useState(""); // stores the site CODE, resolved to a name on submit — same pattern as Delivery Request
@@ -3183,11 +3185,13 @@ function MaterialSwapPage({ swaps, api, materials, sites, homebases, onSubmit, s
     );
   };
 
+  const canSubmit = role === ROLES.TECH || role === ROLES.LOGISTICS || role === ROLES.MANAGER;
+
   return (
     <div className="p-4 sm:p-8 space-y-5">
-      <SectionTitle title="Penggantian Material" subtitle="Konfirmasi unit yang dipasang di site — isi unit lama hanya jika ini penggantian karena rusak" />
+      <SectionTitle title="Penggantian Material" subtitle={canSubmit ? "Konfirmasi unit yang dipasang di site — isi unit lama hanya jika ini penggantian karena rusak" : "Riwayat instalasi & penggantian material"} />
 
-      {lastSwap && lastSwap.oldSn && (
+      {canSubmit && lastSwap && lastSwap.oldSn && (
         <Card className="p-4 border-emerald-200 bg-emerald-50/50 flex items-center justify-between">
           <div className="text-sm text-emerald-800">
             <span className="font-semibold">{lastSwap.id}</span> — unit lama ({lastSwap.oldSn}) sudah dicatat. Lanjutkan buat laporan Return Material Faulty untuk unit ini?
@@ -3198,6 +3202,8 @@ function MaterialSwapPage({ swaps, api, materials, sites, homebases, onSubmit, s
         </Card>
       )}
 
+      {canSubmit && (
+      <>
       <Card className="p-6 space-y-4 max-w-2xl">
         <div className="text-sm font-semibold text-gray-800">Unit yang Dipasang</div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -3293,6 +3299,8 @@ function MaterialSwapPage({ swaps, api, materials, sites, homebases, onSubmit, s
         onConfirm={() => { setConfirmSubmit(false); submit(); }}
         onCancel={() => setConfirmSubmit(false)}
       />
+      </>
+      )}
 
       <Card className="overflow-hidden">
         <div className="px-5 py-4 border-b border-gray-50 text-sm font-semibold text-gray-800">Riwayat Instalasi & Penggantian</div>
@@ -3404,19 +3412,20 @@ function MaterialSwapDetail({ swap, onBack, setPage, setReturnPrefill }) {
    over in one step), and returns come back as a whole transaction.
    ============================================================ */
 
-function ToolStockPage({ tools, setPage, setToolSerialName, onSubmitReceipt, showToast }) {
+function ToolStockPage({ tools, setPage, setToolSerialName, onSubmitReceipt, showToast, role }) {
   const [search, setSearch] = useState("");
   const [showReceiptForm, setShowReceiptForm] = useState(false);
+  const canReceive = role === ROLES.MANAGER || role === ROLES.LOGISTICS;
   const filtered = tools.filter((t) => t.name.toLowerCase().includes(search.toLowerCase()));
 
   return (
     <div className="p-4 sm:p-8 space-y-5">
       <SectionTitle
         title="Stock Alat" subtitle="Ketersediaan peralatan kerja — dipinjam & dikembalikan, tanpa pembagian divisi"
-        right={<PrimaryButton onClick={() => setShowReceiptForm(!showReceiptForm)}><Plus size={16} /> Terima Alat</PrimaryButton>}
+        right={canReceive ? <PrimaryButton onClick={() => setShowReceiptForm(!showReceiptForm)}><Plus size={16} /> Terima Alat</PrimaryButton> : null}
       />
 
-      {showReceiptForm && (
+      {showReceiptForm && canReceive && (
         <ToolReceiptForm tools={tools} onCancel={() => setShowReceiptForm(false)} onSubmit={onSubmitReceipt} showToast={showToast} />
       )}
 
@@ -5327,12 +5336,12 @@ export default function App() {
     if (selectedSwap) {
       const s = materialSwaps.find((x) => x.id === selectedSwap);
       content = <MaterialSwapDetail swap={s} onBack={() => setSelectedSwap(null)} setPage={goto} setReturnPrefill={setReturnPrefill} />;
-    } else content = <MaterialSwapPage swaps={materialSwaps} api={api} materials={materials} sites={sites} homebases={homebases} onSubmit={submitMaterialSwap} showToast={showToast} setPage={goto} setReturnPrefill={setReturnPrefill} setSelectedSwap={setSelectedSwap} />;
+    } else content = <MaterialSwapPage swaps={materialSwaps} api={api} materials={materials} sites={sites} homebases={homebases} onSubmit={submitMaterialSwap} showToast={showToast} setPage={goto} setReturnPrefill={setReturnPrefill} setSelectedSwap={setSelectedSwap} role={role} />;
   }
-  else if (page === "stock") content = <WarehouseStock materials={materials} setPage={goto} setMovementFilter={setMovementFilter} setSerialMaterial={setSerialMaterial} onSubmitReceipt={createReceipt} showToast={showToast} clearSerialHighlight={() => setHighlightSerial("")} currentUser={currentUser} customers={customers} />;
+  else if (page === "stock") content = <WarehouseStock materials={materials} setPage={goto} setMovementFilter={setMovementFilter} setSerialMaterial={setSerialMaterial} onSubmitReceipt={createReceipt} showToast={showToast} clearSerialHighlight={() => setHighlightSerial("")} currentUser={currentUser} customers={customers} role={role} />;
   else if (page === "movement") content = <StockMovement movements={movements} filter={movementFilter} setFilter={setMovementFilter} deliveries={deliveries} />;
   else if (page === "serialDetail") content = <MaterialSerialDetail material={serialMaterial} api={api} onBack={() => goto("stock")} highlightSerial={highlightSerial} highlightToken={highlightToken} deliveries={deliveries} />;
-  else if (page === "toolStock") content = <ToolStockPage tools={tools} setPage={goto} setToolSerialName={setToolSerialName} onSubmitReceipt={createToolReceipt} showToast={showToast} />;
+  else if (page === "toolStock") content = <ToolStockPage tools={tools} setPage={goto} setToolSerialName={setToolSerialName} onSubmitReceipt={createToolReceipt} showToast={showToast} role={role} />;
   else if (page === "toolSerialDetail") content = <ToolSerialDetail toolName={toolSerialName} api={api} onBack={() => goto("toolStock")} />;
   else if (page === "reports") content = <ReportsPage
     title="Delivery Report" subtitle="Laporan seluruh pengajuan delivery"
