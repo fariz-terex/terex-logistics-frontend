@@ -4104,7 +4104,7 @@ function parseSpreadsheetFile(file, { complete }) {
 
 const SITE_TEMPLATE_HEADERS = ["Site Code", "Terminal ID", "Nama Site", "Customer", "Area", "Homebase", "Status"];
 
-function MasterSite({ sites, homebases, customers, onImport, onCreate, onDelete, onBulkDelete, showToast }) {
+function MasterSite({ sites, homebases, customers, onImport, onCreate, onDelete, onBulkDelete, onToggle, showToast }) {
   const [showImport, setShowImport] = useState(false);
   const [preview, setPreview] = useState(null); // { rows: [...], errors: [...] }
   const [importing, setImporting] = useState(false);
@@ -4359,7 +4359,12 @@ function MasterSite({ sites, homebases, customers, onImport, onCreate, onDelete,
                 <td className="px-5 py-3 text-gray-600">{s.area}</td>
                 <td className="px-5 py-3 text-gray-600">{s.homebase}</td>
                 <td className="px-5 py-3"><StatusBadge status={s.status} /></td>
-                <td className="px-5 py-3"><button onClick={() => setConfirmDelete({ type: "one", code: s.code })} className="text-red-500 hover:text-red-700"><X size={14} /></button></td>
+                <td className="px-5 py-3">
+                  <div className="flex items-center gap-3">
+                    <button onClick={() => onToggle(s.code)} className="text-xs font-medium text-gray-500">{s.status === "Active" ? "Deactivate" : "Activate"}</button>
+                    <button onClick={() => setConfirmDelete({ type: "one", code: s.code })} className="text-red-500 hover:text-red-700"><X size={14} /></button>
+                  </div>
+                </td>
               </tr>
             ))}
             {filteredSites.length === 0 && <tr><td colSpan={9}><EmptyState text="Tidak ada site yang cocok." /></td></tr>}
@@ -4788,6 +4793,7 @@ function createApiClient(baseUrl, getToken) {
     importSites: (rows) => request("/sites/import", { method: "POST", body: { rows } }),
     deleteSite: (code) => request(`/sites/${encodeURIComponent(code)}`, { method: "DELETE" }),
     bulkDeleteSites: (codes) => request("/sites/bulk-delete", { method: "POST", body: { codes } }),
+    toggleSiteStatus: (code) => request(`/sites/${encodeURIComponent(code)}/toggle-status`, { method: "PATCH" }),
 
     getUsers: () => request("/users"),
     createUser: (payload) => request("/users", { method: "POST", body: payload }),
@@ -5537,6 +5543,10 @@ export default function App() {
     setSites((prev) => prev.filter((s) => !codes.includes(s.code)));
     return result;
   };
+  const toggleSite = async (code) => {
+    const updated = await api.toggleSiteStatus(code);
+    setSites((prev) => prev.map((s) => (s.code === code ? normalizeSite(updated) : s)));
+  };
 
   const createHomebase = async (payload) => {
     const created = await api.createHomebase(payload);
@@ -5774,7 +5784,7 @@ export default function App() {
     ]}
   />;
   else if (page === "masterMaterial") content = <MasterMaterial materials={materials} onCreate={createMaterial} onToggle={toggleMaterial} onImport={importMaterialsToServer} onDelete={deleteMaterialFromServer} onBulkDelete={bulkDeleteMaterialsFromServer} showToast={showToast} />;
-  else if (page === "masterSite") content = <MasterSite sites={sites} homebases={homebases} customers={customers} onImport={importSitesToServer} onCreate={createSiteToServer} onDelete={deleteSiteFromServer} onBulkDelete={bulkDeleteSitesFromServer} showToast={showToast} />;
+  else if (page === "masterSite") content = <MasterSite sites={sites} homebases={homebases} customers={customers} onImport={importSitesToServer} onCreate={createSiteToServer} onDelete={deleteSiteFromServer} onBulkDelete={bulkDeleteSitesFromServer} onToggle={toggleSite} showToast={showToast} />;
   else if (page === "masterHomebase") content = <MasterCrudTable
     title="Master Homebase" subtitle="Data homebase & PIC tim lapangan"
     entityLabel="Homebase" showToast={showToast}
