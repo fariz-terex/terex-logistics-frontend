@@ -954,7 +954,7 @@ function DeliveryList({ deliveries, setSelected, setPage, role }) {
   );
 }
 
-function DeliveryCreate({ onSubmit, onCancel, materials, tools, sites, homebases, currentUser, customers }) {
+function DeliveryCreate({ onSubmit, onCancel, materials, tools, sites, homebases, currentUser, customers, api }) {
   const [step, setStep] = useState(1);
   const [homebase, setHomebase] = useState("");
   const [site, setSite] = useState("");
@@ -971,6 +971,23 @@ function DeliveryCreate({ onSubmit, onCancel, materials, tools, sites, homebases
   const needsDivisionPicker = isManager || myDivisions.length > 1;
   const divisionOptions = isManager ? customers.filter((c) => c.status === "Active").map((c) => c.name) : myDivisions;
 
+  // Someone who has to explicitly pick a division (Manager, or anyone
+  // covering more than one) sees stock via `materials`/`tools` props that
+  // are either global aggregates or summed across every division they
+  // cover — not the ONE division this request is actually being made for.
+  // Once that division is chosen, re-fetch real per-division numbers so
+  // "18 available" here always matches what assign-stock will actually see.
+  const [divisionStock, setDivisionStock] = useState(null); // null = not fetched / not needed
+  React.useEffect(() => {
+    if (!needsDivisionPicker || !customer) { setDivisionStock(null); return; }
+    let cancelled = false;
+    api.getStock(customer).then((rows) => { if (!cancelled) setDivisionStock(rows); }).catch(() => { if (!cancelled) setDivisionStock(null); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [needsDivisionPicker, customer]);
+
+  const effectiveMaterials = needsDivisionPicker && customer && divisionStock ? divisionStock : materials;
+
   const hb = homebases.find((h) => h.name === homebase);
   const siteOptions = sites.filter((s) =>
     s.homebase === homebase && s.status === "Active" &&
@@ -980,9 +997,10 @@ function DeliveryCreate({ onSubmit, onCancel, materials, tools, sites, homebases
   // Sparepart (dikirim, one-way) and alat (dipinjam, harus dikembalikan)
   // live in one combined catalog here so a single request can mix both —
   // `ready` is aliased onto tools (from `available`) so the rest of this
-  // component's qty-vs-stock logic works the same for either kind.
+  // component's qty-vs-stock logic works the same for either kind. Tools
+  // stay unscoped (shared pool, no division split) regardless.
   const catalogItems = [
-    ...materials.filter((m) => m.status === "Active").map((m) => ({ ...m, _type: "material" })),
+    ...effectiveMaterials.filter((m) => m.status === "Active").map((m) => ({ ...m, _type: "material" })),
     ...tools.filter((t) => t.status === "Active").map((t) => ({ ...t, _type: "tool", ready: t.available })),
   ];
   const filteredCatalog = catalogItems.filter((m) => m.name.toLowerCase().includes(matSearch.toLowerCase()));
@@ -996,7 +1014,7 @@ function DeliveryCreate({ onSubmit, onCancel, materials, tools, sites, homebases
   };
 
   const cartItems = Object.entries(cart).filter(([, q]) => q > 0).map(([id, q]) => ({ material: catalogItems.find((m) => m.id === id), qty: q }));
-  const step1Valid = homebase && keperluan && (keperluan !== "Other" || otherDesc.trim()) && (!needsDivisionPicker || customer);
+  const step1Valid = homebase && keperluan && (keperluan !== "Other" || otherDesc.trim()) && (!needsDivisionPicker || (customer && divisionStock !== null));
   const step2Valid = cartItems.length > 0 && cartItems.every((i) => i.qty <= i.material.ready);
 
   return (
@@ -1026,7 +1044,7 @@ function DeliveryCreate({ onSubmit, onCancel, materials, tools, sites, homebases
                 <option value="">Pilih divisi...</option>
                 {divisionOptions.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
-              <div className="text-xs text-gray-400 mt-1">Stock yang ditampilkan di langkah berikutnya adalah total semua divisi Anda — sistem akan cek ulang stock divisi terpilih saat submit.</div>
+              <div className="text-xs text-gray-400 mt-1">{divisionStock === null && customer ? "Memuat stock untuk divisi ini..." : "Stock yang ditampilkan di langkah berikutnya adalah stock nyata untuk divisi yang dipilih."}</div>
             </div>
           )}
 
@@ -4800,7 +4818,7 @@ function createApiClient(baseUrl, getToken) {
     updateUser: (id, payload) => request(`/users/${id}`, { method: "PATCH", body: payload }),
     toggleUserStatus: (id) => request(`/users/${id}/toggle-status`, { method: "PATCH" }),
 
-    getStock: () => request("/stock"),
+    getStock: (customer) => request(`/stock${customer ? `?customer=${encodeURIComponent(customer)}` : ""}`),
     getMovements: (material) => request(`/stock/movements${material ? `?material=${encodeURIComponent(material)}` : ""}`),
     getSerials: (material, status, customer) => {
       const params = new URLSearchParams();
@@ -4997,7 +5015,7 @@ export default function App() {
     setApiError("");
     try {
       const [mats, movs, dels, rets, recs, sts, hbs, ars, custs, usrs, tls, swaps] = await Promise.all([
-        api.getMaterials(), api.getMovements(), api.getDeliveries(), api.getReturns(),
+        api.getStock(), api.getMovements(), api.getDeliveries(), api.getReturns(),
         api.getReconciliations(), api.getSites(), api.getHomebases(), api.getAreas(),
         api.getCustomers(), api.getUsers().catch(() => []), // Users list is Manager-only; ignore 403 for other roles
         api.getTools(), api.getMaterialSwaps(),
@@ -5038,7 +5056,7 @@ export default function App() {
   // touches warehouse stock, instead of a full reload of every collection.
   const refreshStock = async () => {
     try {
-      const [mats, movs, tls] = await Promise.all([api.getMaterials(), api.getMovements(), api.getTools()]);
+      const [mats, movs, tls] = await Promise.all([api.getStock(), api.getMovements(), api.getTools()]);
       setMaterials(mats.map(normalizeMaterial));
       setMovements(movs);
       setTools(tls);
@@ -5506,11 +5524,15 @@ export default function App() {
   };
   const toggleMaterial = async (id) => {
     const updated = await api.toggleMaterialStatus(id);
-    setMaterials((prev) => prev.map((m) => (m.id === id ? normalizeMaterial(updated) : m)));
+    // /api/materials/:id/toggle-status isn't division-scoped (it's a pure
+    // Master Data endpoint) — only take its `status` field and keep the
+    // ready/faulty/reserved/in_transit numbers already in state, which came
+    // from the properly-scoped /api/stock instead.
+    setMaterials((prev) => prev.map((m) => (m.id === id ? { ...m, status: updated.status } : m)));
   };
   const importMaterialsToServer = async (rows) => {
     const result = await api.importMaterials(rows);
-    const list = await api.getMaterials();
+    const list = await api.getStock();
     setMaterials(list.map(normalizeMaterial));
     return result;
   };
@@ -5664,7 +5686,7 @@ export default function App() {
       const d = deliveries.find((x) => x.id === selectedDelivery);
       content = <DeliveryDetail delivery={d} onBack={() => setSelectedDelivery(null)} onApprove={approveDelivery} onReject={rejectDelivery} onAssignStock={assignDeliveryStock} onShip={shipDelivery} onAddResi={addDeliveryResi} onAddBast={addDeliveryBast} onAddBkbLink={addDeliveryBkbLink} onAdvance={advanceDelivery} onReturnTools={returnDeliveryTools} role={role} materials={materials} tools={tools} api={api} />;
     } else content = <DeliveryList deliveries={deliveries} setSelected={setSelectedDelivery} setPage={goto} role={role} />;
-  } else if (page === "deliveryCreate") content = <DeliveryCreate onSubmit={submitDelivery} onCancel={() => goto("delivery")} materials={materials} tools={tools} sites={sites} homebases={homebases} currentUser={currentUser} customers={customers} />;
+  } else if (page === "deliveryCreate") content = <DeliveryCreate onSubmit={submitDelivery} onCancel={() => goto("delivery")} materials={materials} tools={tools} sites={sites} homebases={homebases} currentUser={currentUser} customers={customers} api={api} />;
   else if (page === "returnFaulty") {
     if (selectedReturn) {
       const r = returns.find((x) => x.id === selectedReturn);
