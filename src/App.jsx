@@ -3662,7 +3662,7 @@ function ToolReceiptForm({ tools, onSubmit, onCancel, showToast }) {
    MASTER DATA
    ============================================================ */
 
-function MasterMaterial({ materials, onCreate, onToggle, onImport, onDelete, onBulkDelete, showToast }) {
+function MasterMaterial({ materials, onCreate, onToggle, onImport, onDelete, onBulkDelete, onGetCascadePreview, onForceDelete, showToast }) {
   const [search, setSearch] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [showImport, setShowImport] = useState(false);
@@ -3670,6 +3670,11 @@ function MasterMaterial({ materials, onCreate, onToggle, onImport, onDelete, onB
   const [saving, setSaving] = useState(false);
   const [selected, setSelected] = useState(new Set());
   const [confirmDelete, setConfirmDelete] = useState(null); // { type: "one"|"bulk", id? }
+  const [blockedMaterial, setBlockedMaterial] = useState(null); // id — normal delete was blocked, offer cascade wipe
+  const [cascadePreview, setCascadePreview] = useState(null); // { material, deliveries, returns, ... } once loaded
+  const [loadingPreview, setLoadingPreview] = useState(false);
+  const [confirmForceDelete, setConfirmForceDelete] = useState(false);
+  const [forceDeleting, setForceDeleting] = useState(false);
 
   const filtered = materials.filter((m) => m.name.toLowerCase().includes(search.toLowerCase()));
 
@@ -3695,7 +3700,14 @@ function MasterMaterial({ materials, onCreate, onToggle, onImport, onDelete, onB
       await onDelete(id);
       showToast("Material berhasil dihapus");
     } catch (err) {
-      showToast(err.message || "Gagal menghapus material");
+      // Blocked because it still has stock/transaction history — offer the
+      // cascade wipe path instead of just leaving the user stuck.
+      if (/masih punya riwayat/i.test(err.message || "")) {
+        setBlockedMaterial(id);
+        openCascadePreview(id);
+      } else {
+        showToast(err.message || "Gagal menghapus material");
+      }
     }
   };
   const handleBulkDelete = async () => {
@@ -3707,6 +3719,33 @@ function MasterMaterial({ materials, onCreate, onToggle, onImport, onDelete, onB
       setSelected(new Set());
     } catch (err) {
       showToast(err.message || "Gagal menghapus material");
+    }
+  };
+
+  const openCascadePreview = async (id) => {
+    setLoadingPreview(true);
+    try {
+      const preview = await onGetCascadePreview(id);
+      setCascadePreview(preview);
+    } catch (err) {
+      showToast(err.message || "Gagal memuat detail riwayat");
+      setBlockedMaterial(null);
+    } finally {
+      setLoadingPreview(false);
+    }
+  };
+
+  const handleForceDelete = async () => {
+    setForceDeleting(true);
+    try {
+      await onForceDelete(blockedMaterial);
+      showToast(`Material "${cascadePreview?.material}" beserta seluruh riwayatnya berhasil dihapus`);
+      setBlockedMaterial(null);
+      setCascadePreview(null);
+    } catch (err) {
+      showToast(err.message || "Gagal menghapus total");
+    } finally {
+      setForceDeleting(false);
     }
   };
 
@@ -3848,6 +3887,50 @@ function MasterMaterial({ materials, onCreate, onToggle, onImport, onDelete, onB
           else handleDeleteOne(target.id);
         }}
         onCancel={() => setConfirmDelete(null)}
+      />
+
+      {blockedMaterial && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => { setBlockedMaterial(null); setCascadePreview(null); }}>
+          <div className="bg-white rounded-xl shadow-xl p-6 max-w-md w-full mx-4 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start gap-3">
+              <AlertTriangle size={20} className="text-amber-500 mt-0.5 shrink-0" />
+              <div>
+                <div className="text-sm font-semibold text-gray-800">Material Ini Masih Punya Riwayat</div>
+                <div className="text-sm text-gray-500 mt-1">Tidak bisa dihapus biasa karena sudah punya data transaksi terkait. Anda bisa hapus material ini beserta <span className="font-medium text-red-600">SELURUH riwayatnya</span> — tindakan ini permanen dan tidak bisa dibatalkan.</div>
+              </div>
+            </div>
+
+            {loadingPreview ? (
+              <div className="text-sm text-gray-400 text-center py-4">Memuat rincian...</div>
+            ) : cascadePreview ? (
+              <div className="bg-red-50 border border-red-100 rounded-lg p-4 space-y-1.5 text-sm">
+                {cascadePreview.deliveries > 0 && <div className="flex justify-between"><span className="text-gray-600">Delivery Request</span><span className="font-medium text-red-700">{cascadePreview.deliveries}</span></div>}
+                {cascadePreview.returns > 0 && <div className="flex justify-between"><span className="text-gray-600">Return Material Faulty</span><span className="font-medium text-red-700">{cascadePreview.returns}</span></div>}
+                {cascadePreview.reconciliations > 0 && <div className="flex justify-between"><span className="text-gray-600">Reconciliation</span><span className="font-medium text-red-700">{cascadePreview.reconciliations}</span></div>}
+                {cascadePreview.serialNumbers > 0 && <div className="flex justify-between"><span className="text-gray-600">Serial Number</span><span className="font-medium text-red-700">{cascadePreview.serialNumbers}</span></div>}
+                {cascadePreview.receipts > 0 && <div className="flex justify-between"><span className="text-gray-600">Riwayat Terima Barang</span><span className="font-medium text-red-700">{cascadePreview.receipts}</span></div>}
+                {cascadePreview.stockMovements > 0 && <div className="flex justify-between"><span className="text-gray-600">Pergerakan Stock</span><span className="font-medium text-red-700">{cascadePreview.stockMovements}</span></div>}
+              </div>
+            ) : null}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <GhostButton onClick={() => { setBlockedMaterial(null); setCascadePreview(null); }}>Batal</GhostButton>
+              <DangerButton onClick={() => setConfirmForceDelete(true)} disabled={loadingPreview || forceDeleting}>
+                {forceDeleting ? "Menghapus..." : "Hapus Semua Ini"}
+              </DangerButton>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <ConfirmDialog
+        open={confirmForceDelete}
+        title="Konfirmasi Terakhir"
+        message={`Material "${cascadePreview?.material}" beserta SELURUH riwayat di atas akan dihapus PERMANEN. Ini tidak bisa dibatalkan. Yakin lanjutkan?`}
+        confirmLabel="Ya, Hapus Permanen"
+        danger
+        onConfirm={() => { setConfirmForceDelete(false); handleForceDelete(); }}
+        onCancel={() => setConfirmForceDelete(false)}
       />
     </div>
   );
@@ -4784,6 +4867,8 @@ function createApiClient(baseUrl, getToken) {
     importMaterials: (rows) => request("/materials/import", { method: "POST", body: { rows } }),
     deleteMaterial: (id) => request(`/materials/${id}`, { method: "DELETE" }),
     bulkDeleteMaterials: (ids) => request("/materials/bulk-delete", { method: "POST", body: { ids } }),
+    getMaterialCascadePreview: (id) => request(`/materials/${id}/cascade-preview`),
+    forceDeleteMaterial: (id) => request(`/materials/${id}/force`, { method: "DELETE" }),
 
     getAreas: () => request("/areas"),
     createArea: (payload) => request("/areas", { method: "POST", body: payload }),
@@ -5545,6 +5630,11 @@ export default function App() {
     setMaterials((prev) => prev.filter((m) => !ids.includes(m.id)));
     return result;
   };
+  const getMaterialCascadePreview = (id) => api.getMaterialCascadePreview(id);
+  const forceDeleteMaterialFromServer = async (id) => {
+    await api.forceDeleteMaterial(id);
+    setMaterials((prev) => prev.filter((m) => m.id !== id));
+  };
 
   const createSiteToServer = async (payload) => {
     const created = await api.createSite(payload);
@@ -5805,7 +5895,7 @@ export default function App() {
       { label: "Tgl Dikirim", render: (r) => r.date, exportValue: (r) => r.date },
     ]}
   />;
-  else if (page === "masterMaterial") content = <MasterMaterial materials={materials} onCreate={createMaterial} onToggle={toggleMaterial} onImport={importMaterialsToServer} onDelete={deleteMaterialFromServer} onBulkDelete={bulkDeleteMaterialsFromServer} showToast={showToast} />;
+  else if (page === "masterMaterial") content = <MasterMaterial materials={materials} onCreate={createMaterial} onToggle={toggleMaterial} onImport={importMaterialsToServer} onDelete={deleteMaterialFromServer} onBulkDelete={bulkDeleteMaterialsFromServer} onGetCascadePreview={getMaterialCascadePreview} onForceDelete={forceDeleteMaterialFromServer} showToast={showToast} />;
   else if (page === "masterSite") content = <MasterSite sites={sites} homebases={homebases} customers={customers} onImport={importSitesToServer} onCreate={createSiteToServer} onDelete={deleteSiteFromServer} onBulkDelete={bulkDeleteSitesFromServer} onToggle={toggleSite} showToast={showToast} />;
   else if (page === "masterHomebase") content = <MasterCrudTable
     title="Master Homebase" subtitle="Data homebase & PIC tim lapangan"
