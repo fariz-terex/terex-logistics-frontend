@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from "react";
 import {
   LayoutDashboard, Package, Truck, Undo2, ClipboardList, Boxes, ArrowLeftRight,
-  FileBarChart, Database, Users, Settings as SettingsIcon, ChevronDown, ChevronRight,
+  FileBarChart, Database, Users, Settings as SettingsIcon, ChevronDown, ChevronRight, ChevronUp, ArrowUpDown,
   Search, Bell, LogOut, Plus, Minus, X, Check, AlertTriangle, Camera, ChevronLeft,
   Filter, Download, Upload, Eye, MapPin, Phone, User as UserIcon, Menu, FileText, Wrench, HelpCircle
 } from "lucide-react";
@@ -355,6 +355,37 @@ function EmptyState({ text }) {
   return (
     <div className="py-16 text-center text-gray-400 text-sm">{text}</div>
   );
+}
+
+// Clickable column header for sortable tables — click cycles asc -> desc,
+// clicking a different column resets to asc on that column instead.
+function SortableHeader({ label, sortKey, sort, onSort, className = "" }) {
+  const isActive = sort.key === sortKey;
+  return (
+    <th className={`px-5 py-3 font-medium cursor-pointer select-none hover:text-gray-700 ${className}`} onClick={() => onSort(sortKey)}>
+      <span className="inline-flex items-center gap-1">
+        {label}
+        {isActive ? (sort.dir === "asc" ? <ChevronUp size={12} /> : <ChevronDown size={12} />) : <ArrowUpDown size={11} className="text-gray-300" />}
+      </span>
+    </th>
+  );
+}
+
+// Generic comparator for the sort state above — handles numbers, strings,
+// and null/undefined (always sorted last regardless of direction) the same
+// way across every Master Data table.
+function sortRows(rows, sort) {
+  if (!sort.key) return rows;
+  return [...rows].sort((a, b) => {
+    const av = a[sort.key], bv = b[sort.key];
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    let cmp;
+    if (typeof av === "number" && typeof bv === "number") cmp = av - bv;
+    else cmp = String(av).localeCompare(String(bv), "id", { numeric: true, sensitivity: "base" });
+    return sort.dir === "asc" ? cmp : -cmp;
+  });
 }
 
 /* ============================================================
@@ -3675,8 +3706,14 @@ function MasterMaterial({ materials, onCreate, onToggle, onImport, onDelete, onB
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [confirmForceDelete, setConfirmForceDelete] = useState(false);
   const [forceDeleting, setForceDeleting] = useState(false);
+  const [statusFilter, setStatusFilter] = useState("All");
+  const [sort, setSort] = useState({ key: null, dir: "asc" });
+  const handleSort = (key) => setSort((prev) => (prev.key === key ? { key, dir: prev.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" }));
 
-  const filtered = materials.filter((m) => m.name.toLowerCase().includes(search.toLowerCase()));
+  const filtered = sortRows(
+    materials.filter((m) => (statusFilter === "All" || m.status === statusFilter) && m.name.toLowerCase().includes(search.toLowerCase())),
+    sort
+  );
 
   const toggleOne = (id) => {
     setSelected((prev) => {
@@ -3821,9 +3858,16 @@ function MasterMaterial({ materials, onCreate, onToggle, onImport, onDelete, onB
       )}
 
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2.5 w-80">
-          <Search size={16} className="text-gray-400" />
-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari material..." className="bg-transparent text-sm outline-none w-full" />
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2.5 w-80">
+            <Search size={16} className="text-gray-400" />
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari material..." className="bg-transparent text-sm outline-none w-full" />
+          </div>
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none bg-white text-gray-600">
+            <option value="All">Semua Status</option>
+            <option value="Active">Active</option>
+            <option value="Inactive">Inactive</option>
+          </select>
         </div>
         {selected.size > 0 && (
           <DangerButton onClick={() => setConfirmDelete({ type: "bulk" })}><X size={14} /> Hapus Terpilih ({selected.size})</DangerButton>
@@ -3838,13 +3882,13 @@ function MasterMaterial({ materials, onCreate, onToggle, onImport, onDelete, onB
               <th className="px-5 py-3 font-medium w-8">
                 <input type="checkbox" checked={filtered.length > 0 && filtered.every((m) => selected.has(m.id))} onChange={toggleAllVisible} className="accent-emerald-800" />
               </th>
-              <th className="px-5 py-3 font-medium">Material ID</th>
-              <th className="px-5 py-3 font-medium">Nama</th>
-              <th className="px-5 py-3 font-medium">Category</th>
+              <SortableHeader label="Material ID" sortKey="id" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Nama" sortKey="name" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Category" sortKey="category" sort={sort} onSort={handleSort} />
               <th className="px-5 py-3 font-medium">Unit</th>
               <th className="px-5 py-3 font-medium">Serialized</th>
-              <th className="px-5 py-3 font-medium">Min Stock</th>
-              <th className="px-5 py-3 font-medium">Status</th>
+              <SortableHeader label="Min Stock" sortKey="minStock" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Status" sortKey="status" sort={sort} onSort={handleSort} />
               <th className="px-5 py-3 font-medium"></th>
               <th className="px-5 py-3 font-medium"></th>
             </tr>
@@ -3864,7 +3908,7 @@ function MasterMaterial({ materials, onCreate, onToggle, onImport, onDelete, onB
                 <td className="px-5 py-3"><button onClick={() => setConfirmDelete({ type: "one", id: m.id })} className="text-red-500 hover:text-red-700"><X size={14} /></button></td>
               </tr>
             ))}
-            {filtered.length === 0 && <tr><td colSpan={9}><EmptyState text="Belum ada data material." /></td></tr>}
+            {filtered.length === 0 && <tr><td colSpan={10}><EmptyState text="Belum ada data material." /></td></tr>}
           </tbody>
         </table>
         </div>
@@ -3943,8 +3987,14 @@ function MasterTools({ tools, onCreate, onToggle, onDelete, onBulkDelete, showTo
   const [saving, setSaving] = useState(false);
   const [selected, setSelected] = useState(new Set());
   const [confirmDelete, setConfirmDelete] = useState(null); // { type: "one"|"bulk", id? }
+  const [statusFilter, setStatusFilter] = useState("All");
+  const [sort, setSort] = useState({ key: null, dir: "asc" });
+  const handleSort = (key) => setSort((prev) => (prev.key === key ? { key, dir: prev.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" }));
 
-  const filtered = tools.filter((t) => t.name.toLowerCase().includes(search.toLowerCase()));
+  const filtered = sortRows(
+    tools.filter((t) => (statusFilter === "All" || t.status === statusFilter) && t.name.toLowerCase().includes(search.toLowerCase())),
+    sort
+  );
 
   const toggleOne = (id) => {
     setSelected((prev) => {
@@ -4020,9 +4070,16 @@ function MasterTools({ tools, onCreate, onToggle, onDelete, onBulkDelete, showTo
       )}
 
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2.5 w-80">
-          <Search size={16} className="text-gray-400" />
-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari alat..." className="bg-transparent text-sm outline-none w-full" />
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2.5 w-80">
+            <Search size={16} className="text-gray-400" />
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari alat..." className="bg-transparent text-sm outline-none w-full" />
+          </div>
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none bg-white text-gray-600">
+            <option value="All">Semua Status</option>
+            <option value="Active">Active</option>
+            <option value="Inactive">Inactive</option>
+          </select>
         </div>
         {selected.size > 0 && (
           <DangerButton onClick={() => setConfirmDelete({ type: "bulk" })}><X size={14} /> Hapus Terpilih ({selected.size})</DangerButton>
@@ -4037,13 +4094,13 @@ function MasterTools({ tools, onCreate, onToggle, onDelete, onBulkDelete, showTo
               <th className="px-5 py-3 font-medium w-8">
                 <input type="checkbox" checked={filtered.length > 0 && filtered.every((t) => selected.has(t.id))} onChange={toggleAllVisible} className="accent-emerald-800" />
               </th>
-              <th className="px-5 py-3 font-medium">Alat ID</th>
-              <th className="px-5 py-3 font-medium">Nama</th>
-              <th className="px-5 py-3 font-medium">Category</th>
+              <SortableHeader label="Alat ID" sortKey="id" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Nama" sortKey="name" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Category" sortKey="category" sort={sort} onSort={handleSort} />
               <th className="px-5 py-3 font-medium">Unit</th>
               <th className="px-5 py-3 font-medium">Serialized</th>
-              <th className="px-5 py-3 font-medium">Min Stock</th>
-              <th className="px-5 py-3 font-medium">Status</th>
+              <SortableHeader label="Min Stock" sortKey="min_stock" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Status" sortKey="status" sort={sort} onSort={handleSort} />
               <th className="px-5 py-3 font-medium"></th>
               <th className="px-5 py-3 font-medium"></th>
             </tr>
@@ -4218,12 +4275,21 @@ function MasterSite({ sites, homebases, customers, onImport, onCreate, onDelete,
   const emptyForm = { code: "", terminalId: "", name: "", customer: "", area: "", homebase: "", status: "Active" };
   const [form, setForm] = useState(emptyForm);
   const fileInputRef = React.useRef(null);
+  const [statusFilter, setStatusFilter] = useState("All");
+  const [homebaseFilter, setHomebaseFilter] = useState("All");
+  const [sort, setSort] = useState({ key: null, dir: "asc" });
+  const handleSort = (key) => setSort((prev) => (prev.key === key ? { key, dir: prev.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" }));
 
-  const filteredSites = sites.filter((s) =>
-    !search.trim() ||
-    s.name.toLowerCase().includes(search.toLowerCase()) ||
-    s.code.toLowerCase().includes(search.toLowerCase()) ||
-    (s.terminalId || "").toLowerCase().includes(search.toLowerCase())
+  const filteredSites = sortRows(
+    sites.filter((s) =>
+      (statusFilter === "All" || s.status === statusFilter) &&
+      (homebaseFilter === "All" || s.homebase === homebaseFilter) &&
+      (!search.trim() ||
+        s.name.toLowerCase().includes(search.toLowerCase()) ||
+        s.code.toLowerCase().includes(search.toLowerCase()) ||
+        (s.terminalId || "").toLowerCase().includes(search.toLowerCase()))
+    ),
+    sort
   );
 
   const toggleOne = (code) => {
@@ -4423,9 +4489,20 @@ function MasterSite({ sites, homebases, customers, onImport, onCreate, onDelete,
         </Card>
       )}
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2.5 w-80">
-          <Search size={16} className="text-gray-400" />
-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari nama, Site Code, atau Terminal ID..." className="bg-transparent text-sm outline-none w-full" />
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2.5 w-80">
+            <Search size={16} className="text-gray-400" />
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari nama, Site Code, atau Terminal ID..." className="bg-transparent text-sm outline-none w-full" />
+          </div>
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none bg-white text-gray-600">
+            <option value="All">Semua Status</option>
+            <option value="Active">Active</option>
+            <option value="Inactive">Inactive</option>
+          </select>
+          <select value={homebaseFilter} onChange={(e) => setHomebaseFilter(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none bg-white text-gray-600 max-w-[180px]">
+            <option value="All">Semua Homebase</option>
+            {homebases.map((h) => <option key={h.code} value={h.name}>{h.name}</option>)}
+          </select>
         </div>
         {selected.size > 0 && (
           <DangerButton onClick={() => setConfirmDelete({ type: "bulk" })}><X size={14} /> Hapus Terpilih ({selected.size})</DangerButton>
@@ -4439,13 +4516,13 @@ function MasterSite({ sites, homebases, customers, onImport, onCreate, onDelete,
               <th className="px-5 py-3 font-medium w-8">
                 <input type="checkbox" checked={filteredSites.length > 0 && filteredSites.every((s) => selected.has(s.code))} onChange={toggleAllVisible} className="accent-emerald-800" />
               </th>
-              <th className="px-5 py-3 font-medium">Nama Site</th>
-              <th className="px-5 py-3 font-medium">Site Code</th>
+              <SortableHeader label="Nama Site" sortKey="name" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Site Code" sortKey="code" sort={sort} onSort={handleSort} />
               <th className="px-5 py-3 font-medium">Terminal ID</th>
-              <th className="px-5 py-3 font-medium">Customer</th>
-              <th className="px-5 py-3 font-medium">Area</th>
-              <th className="px-5 py-3 font-medium">Homebase</th>
-              <th className="px-5 py-3 font-medium">Status</th>
+              <SortableHeader label="Customer" sortKey="customer" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Area" sortKey="area" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Homebase" sortKey="homebase" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Status" sortKey="status" sort={sort} onSort={handleSort} />
               <th className="px-5 py-3 font-medium"></th>
             </tr>
           </thead>
@@ -4506,6 +4583,9 @@ function MasterCrudTable({ title, subtitle, entityLabel, fields, items, idField 
   const [editingId, setEditingId] = useState(null); // null = adding new, otherwise editing this id
   const [selected, setSelected] = useState(new Set());
   const [confirmDelete, setConfirmDelete] = useState(null); // { type: "one"|"bulk", id? }
+  const [statusFilter, setStatusFilter] = useState("All");
+  const [sort, setSort] = useState({ key: null, dir: "asc" });
+  const handleSort = (key) => setSort((prev) => (prev.key === key ? { key, dir: prev.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" }));
   const emptyForm = Object.fromEntries(fields.map((f) => [f.key, f.default ?? (f.type === "multiselect" ? [] : "")]));
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
@@ -4550,7 +4630,11 @@ function MasterCrudTable({ title, subtitle, entityLabel, fields, items, idField 
     }
   };
 
-  const filtered = search ? items.filter((it) => buildLabel(it).toLowerCase().includes(search.toLowerCase())) : items;
+  const filtered = sortRows(
+    (search ? items.filter((it) => buildLabel(it).toLowerCase().includes(search.toLowerCase())) : items)
+      .filter((it) => statusFilter === "All" || it.status === statusFilter),
+    sort
+  );
 
   const toggleOne = (id) => {
     setSelected((prev) => {
@@ -4674,9 +4758,16 @@ function MasterCrudTable({ title, subtitle, entityLabel, fields, items, idField 
         />
       )}
 
-      <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2.5 w-80">
-        <Search size={16} className="text-gray-400" />
-        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari..." className="bg-transparent text-sm outline-none w-full" />
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2.5 w-80">
+          <Search size={16} className="text-gray-400" />
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari..." className="bg-transparent text-sm outline-none w-full" />
+        </div>
+        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none bg-white text-gray-600">
+          <option value="All">Semua Status</option>
+          <option value="Active">Active</option>
+          <option value="Inactive">Inactive</option>
+        </select>
       </div>
       {onBulkDelete && selected.size > 0 && (
         <div><DangerButton onClick={() => setConfirmDelete({ type: "bulk" })}><X size={14} /> Hapus Terpilih ({selected.size})</DangerButton></div>
@@ -4692,9 +4783,13 @@ function MasterCrudTable({ title, subtitle, entityLabel, fields, items, idField 
                   <input type="checkbox" checked={filtered.length > 0 && filtered.every((it) => selected.has(it[idField]))} onChange={toggleAllVisible} className="accent-emerald-800" />
                 </th>
               )}
-              <th className="px-5 py-3 font-medium">{idField === "id" ? "ID" : "Code"}</th>
-              {fields.filter((f) => f.key !== "status" && f.key !== "password").map((f) => <th key={f.key} className="px-5 py-3 font-medium">{f.label}</th>)}
-              <th className="px-5 py-3 font-medium">Status</th>
+              <SortableHeader label={idField === "id" ? "ID" : "Code"} sortKey={idField} sort={sort} onSort={handleSort} />
+              {fields.filter((f) => f.key !== "status" && f.key !== "password").map((f) => (
+                f.type === "multiselect"
+                  ? <th key={f.key} className="px-5 py-3 font-medium">{f.label}</th>
+                  : <SortableHeader key={f.key} label={f.label} sortKey={f.key} sort={sort} onSort={handleSort} />
+              ))}
+              <SortableHeader label="Status" sortKey="status" sort={sort} onSort={handleSort} />
               <th className="px-5 py-3 font-medium"></th>
             </tr>
           </thead>
