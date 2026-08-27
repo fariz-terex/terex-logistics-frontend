@@ -5184,7 +5184,11 @@ export default function App() {
   };
   const bulkDeleteToolsFromServer = async (ids) => {
     const result = await api.bulkDeleteTools(ids);
-    setTools((prev) => prev.filter((t) => !ids.includes(t.id)));
+    // Only remove from the visible list what the backend actually deleted —
+    // ids in `blocked` are still protected (still in use) and must stay
+    // visible, or the UI lies about what's really in the database.
+    const blockedSet = new Set(result.blocked || []);
+    setTools((prev) => prev.filter((t) => !ids.includes(t.id) || blockedSet.has(t.id)));
     return result;
   };
 
@@ -5627,7 +5631,8 @@ export default function App() {
   };
   const bulkDeleteMaterialsFromServer = async (ids) => {
     const result = await api.bulkDeleteMaterials(ids);
-    setMaterials((prev) => prev.filter((m) => !ids.includes(m.id)));
+    const blockedSet = new Set(result.blocked || []);
+    setMaterials((prev) => prev.filter((m) => !ids.includes(m.id) || blockedSet.has(m.id)));
     return result;
   };
   const getMaterialCascadePreview = (id) => api.getMaterialCascadePreview(id);
@@ -5652,7 +5657,8 @@ export default function App() {
   };
   const bulkDeleteSitesFromServer = async (codes) => {
     const result = await api.bulkDeleteSites(codes);
-    setSites((prev) => prev.filter((s) => !codes.includes(s.code)));
+    const blockedSet = new Set(result.blocked || []);
+    setSites((prev) => prev.filter((s) => !codes.includes(s.code) || blockedSet.has(s.code)));
     return result;
   };
   const toggleSite = async (code) => {
@@ -5680,7 +5686,8 @@ export default function App() {
   };
   const bulkDeleteHomebasesFromServer = async (codes) => {
     const result = await api.bulkDeleteHomebases(codes);
-    setHomebases((prev) => prev.filter((h) => !codes.includes(h.code)));
+    const blockedSet = new Set(result.blocked || []);
+    setHomebases((prev) => prev.filter((h) => !codes.includes(h.code) || blockedSet.has(h.code)));
     return result;
   };
 
@@ -5704,7 +5711,8 @@ export default function App() {
   };
   const bulkDeleteAreasFromServer = async (codes) => {
     const result = await api.bulkDeleteAreas(codes);
-    setAreas((prev) => prev.filter((a) => !codes.includes(a.code)));
+    const blockedSet = new Set(result.blocked || []);
+    setAreas((prev) => prev.filter((a) => !codes.includes(a.code) || blockedSet.has(a.code)));
     return result;
   };
 
@@ -5728,7 +5736,8 @@ export default function App() {
   };
   const bulkDeleteCustomersFromServer = async (ids) => {
     const result = await api.bulkDeleteCustomers(ids);
-    setCustomers((prev) => prev.filter((c) => !ids.includes(c.id)));
+    const blockedSet = new Set(result.blocked || []);
+    setCustomers((prev) => prev.filter((c) => !ids.includes(c.id) || blockedSet.has(c.id)));
     return result;
   };
 
