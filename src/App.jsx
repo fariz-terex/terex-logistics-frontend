@@ -188,6 +188,7 @@ const NAV_ACCESS = {
   materialSwap: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.TECH, ROLES.DIVISION_MANAGER],
   stock: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV, ROLES.DIVISION_MANAGER],
   movement: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV, ROLES.DIVISION_MANAGER],
+  stockTransfer: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.DIVISION_MANAGER],
   receipts: [ROLES.MANAGER, ROLES.LOGISTICS],
   reports: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.DIVISION_MANAGER],
   reportsDeviceLocation: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV, ROLES.DIVISION_MANAGER],
@@ -409,6 +410,7 @@ const NAV_TREE = [
       { key: "stock", label: "Warehouse Stock" },
       { key: "movement", label: "Stock Movement" },
       { key: "toolStock", label: "Stock Alat" },
+      { key: "stockTransfer", label: "Transfer Stock" },
     ],
   },
   {
@@ -441,7 +443,7 @@ function hasAccess(key, role) {
     delivery: NAV_ACCESS.delivery, returnFaulty: NAV_ACCESS.returnFaulty, reconciliation: NAV_ACCESS.reconciliation,
     materialSwap: NAV_ACCESS.materialSwap,
     stock: NAV_ACCESS.stock, movement: NAV_ACCESS.movement,
-    toolStock: NAV_ACCESS.toolStock,
+    toolStock: NAV_ACCESS.toolStock, stockTransfer: NAV_ACCESS.stockTransfer,
     reports: NAV_ACCESS.reports, reportsFaulty: NAV_ACCESS.reports, reportsRecon: NAV_ACCESS.reports, reportsDeviceLocation: NAV_ACCESS.reportsDeviceLocation,
     masterMaterial: NAV_ACCESS.master, masterSite: NAV_ACCESS.master, masterHomebase: NAV_ACCESS.master,
     masterArea: NAV_ACCESS.master, masterCustomer: NAV_ACCESS.master, masterTools: NAV_ACCESS.master,
@@ -3528,6 +3530,231 @@ function ToolStockPage({ tools, setPage, setToolSerialName, onSubmitReceipt, sho
   );
 }
 
+function TransferStockPage({ materials, homebases, customers, currentUser, role, api, showToast }) {
+  const isManager = role === ROLES.MANAGER;
+  const myDivisions = currentUser?.customers || [];
+  const needsDivisionPicker = isManager || myDivisions.length > 1;
+  const divisionOptions = isManager ? customers.filter((c) => c.status === "Active").map((c) => c.name) : myDivisions;
+  const canSubmit = role === ROLES.MANAGER || role === ROLES.LOGISTICS;
+
+  const [customer, setCustomer] = useState(needsDivisionPicker ? "" : (myDivisions[0] || ""));
+  const [material, setMaterial] = useState("");
+  const [homebaseFrom, setHomebaseFrom] = useState("");
+  const [homebaseTo, setHomebaseTo] = useState("");
+  const [transferOptions, setTransferOptions] = useState(null); // { serialized, breakdown: [{homebase, qty}] }
+  const [loadingOptions, setLoadingOptions] = useState(false);
+  const [availableSerials, setAvailableSerials] = useState([]);
+  const [selectedSerials, setSelectedSerials] = useState(new Set());
+  const [qty, setQty] = useState("");
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [transfers, setTransfers] = useState([]);
+  const [loadingTransfers, setLoadingTransfers] = useState(true);
+
+  const activeMaterials = materials.filter((m) => m.status === "Active");
+  const selectedMaterial = activeMaterials.find((m) => m.name === material);
+  const isSerialized = !!selectedMaterial?.serialized;
+
+  const loadTransfers = () => {
+    setLoadingTransfers(true);
+    api.getTransfers().then(setTransfers).catch(() => {}).finally(() => setLoadingTransfers(false));
+  };
+  React.useEffect(loadTransfers, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Every time material or division changes, the whole "where is it"
+  // picture is stale — reset the homebase choices along with it rather
+  // than leaving a source/destination selected that may no longer apply.
+  React.useEffect(() => {
+    setHomebaseFrom(""); setHomebaseTo(""); setSelectedSerials(new Set()); setQty(""); setTransferOptions(null); setError("");
+    if (!material || !customer) return;
+    setLoadingOptions(true);
+    api.getTransferOptions(material, customer).then(setTransferOptions).catch((err) => setError(err.message)).finally(() => setLoadingOptions(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [material, customer]);
+
+  // Once a source homebase is picked for a serialized material, fetch the
+  // actual units sitting there so specific ones can be checked off.
+  React.useEffect(() => {
+    setSelectedSerials(new Set());
+    if (!isSerialized || !homebaseFrom) { setAvailableSerials([]); return; }
+    api.getSerials(material, "Delivered", customer, homebaseFrom).then(setAvailableSerials).catch(() => setAvailableSerials([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSerialized, homebaseFrom, material, customer]);
+
+  const sourceQty = transferOptions?.breakdown.find((b) => b.homebase === homebaseFrom)?.qty || 0;
+  const destinationOptions = homebases.filter((h) => h.status === "Active" && h.name !== homebaseFrom);
+
+  const toggleSerial = (sn) => {
+    setSelectedSerials((prev) => {
+      const next = new Set(prev);
+      if (next.has(sn)) next.delete(sn); else next.add(sn);
+      return next;
+    });
+  };
+
+  const valid = customer && material && homebaseFrom && homebaseTo && homebaseFrom !== homebaseTo &&
+    (isSerialized ? selectedSerials.size > 0 : Number(qty) > 0 && Number(qty) <= sourceQty);
+
+  const submit = async () => {
+    setSaving(true); setError("");
+    try {
+      await api.createTransfer({
+        material, customer, homebaseFrom, homebaseTo,
+        serials: isSerialized ? Array.from(selectedSerials) : undefined,
+        qty: isSerialized ? undefined : Number(qty),
+        note: note || undefined,
+      });
+      showToast(`Transfer ${material} dari ${homebaseFrom} ke ${homebaseTo} berhasil dicatat`);
+      setHomebaseTo(""); setSelectedSerials(new Set()); setQty(""); setNote("");
+      api.getTransferOptions(material, customer).then(setTransferOptions).catch(() => {});
+      if (isSerialized) api.getSerials(material, "Delivered", customer, homebaseFrom).then(setAvailableSerials).catch(() => {});
+      loadTransfers();
+    } catch (err) {
+      setError(err.message || "Gagal memindahkan stock");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="p-4 sm:p-8 space-y-5">
+      <SectionTitle title="Transfer Stock" subtitle={canSubmit ? "Pindahkan stock material yang sudah Delivered dari satu homebase ke homebase lain" : "Riwayat transfer stock antar homebase"} />
+
+      {canSubmit && (
+      <Card className="p-6 space-y-4 max-w-2xl">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {needsDivisionPicker && (
+            <div>
+              <label className="text-sm font-medium text-gray-700">Divisi <span className="text-red-500">*</span></label>
+              <select value={customer} onChange={(e) => setCustomer(e.target.value)} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600">
+                <option value="">Pilih divisi...</option>
+                {divisionOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+          )}
+          <div>
+            <label className="text-sm font-medium text-gray-700">Material <span className="text-red-500">*</span></label>
+            <select value={material} onChange={(e) => setMaterial(e.target.value)} disabled={!customer} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600 disabled:bg-gray-50">
+              <option value="">Pilih material...</option>
+              {activeMaterials.map((m) => <option key={m.id} value={m.name}>{m.name}</option>)}
+            </select>
+          </div>
+        </div>
+
+        {loadingOptions && <div className="text-xs text-gray-400">Memuat ketersediaan stock...</div>}
+
+        {transferOptions && (
+          <div>
+            <div className="text-xs text-gray-500 mb-1.5">Stock {material} saat ini per homebase:</div>
+            {transferOptions.breakdown.length === 0 ? (
+              <div className="text-xs text-gray-400">Belum ada stock Delivered untuk material ini di divisi {customer}.</div>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {transferOptions.breakdown.map((b) => (
+                  <span key={b.homebase} className="text-xs bg-gray-100 text-gray-600 px-2.5 py-1 rounded-full">{b.homebase}: <span className="font-medium">{b.qty}</span></span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {transferOptions && transferOptions.breakdown.length > 0 && (
+          <>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="text-sm font-medium text-gray-700">Dari Homebase <span className="text-red-500">*</span></label>
+                <select value={homebaseFrom} onChange={(e) => setHomebaseFrom(e.target.value)} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600">
+                  <option value="">Pilih homebase asal...</option>
+                  {transferOptions.breakdown.map((b) => <option key={b.homebase} value={b.homebase}>{b.homebase} (tersedia: {b.qty})</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-sm font-medium text-gray-700">Ke Homebase <span className="text-red-500">*</span></label>
+                <select value={homebaseTo} onChange={(e) => setHomebaseTo(e.target.value)} disabled={!homebaseFrom} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600 disabled:bg-gray-50">
+                  <option value="">Pilih homebase tujuan...</option>
+                  {destinationOptions.map((h) => <option key={h.code} value={h.name}>{h.name}</option>)}
+                </select>
+              </div>
+            </div>
+
+            {homebaseFrom && isSerialized && (
+              <div>
+                <label className="text-sm font-medium text-gray-700">Pilih Serial Number <span className="text-red-500">*</span></label>
+                <div className="mt-1.5 border border-gray-200 rounded-lg max-h-48 overflow-y-auto divide-y divide-gray-50">
+                  {availableSerials.length === 0 ? (
+                    <div className="text-xs text-gray-400 p-3">Tidak ada unit tersedia di {homebaseFrom}.</div>
+                  ) : availableSerials.map((s) => (
+                    <label key={s.sn} className="flex items-center gap-2 px-3 py-2 text-sm cursor-pointer hover:bg-gray-50">
+                      <input type="checkbox" checked={selectedSerials.has(s.sn)} onChange={() => toggleSerial(s.sn)} className="accent-emerald-800" />
+                      <span className="font-mono text-xs">{s.sn}</span>
+                    </label>
+                  ))}
+                </div>
+                {selectedSerials.size > 0 && <div className="text-xs text-emerald-700 mt-1">{selectedSerials.size} unit dipilih</div>}
+              </div>
+            )}
+
+            {homebaseFrom && !isSerialized && (
+              <div>
+                <label className="text-sm font-medium text-gray-700">Qty <span className="text-red-500">*</span></label>
+                <input type="number" min="1" max={sourceQty} value={qty} onChange={(e) => setQty(e.target.value)} placeholder={`Maks. ${sourceQty}`} className="mt-1.5 w-full max-w-[160px] border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+              </div>
+            )}
+
+            <div>
+              <label className="text-sm font-medium text-gray-700">Catatan <span className="text-gray-400 font-normal">(opsional)</span></label>
+              <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="mis. alasan transfer" className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+            </div>
+          </>
+        )}
+
+        {error && <div className="bg-red-50 border border-red-100 text-red-700 text-sm rounded-lg px-3 py-2">{error}</div>}
+
+        <div className="flex justify-end pt-2 border-t border-gray-50">
+          <PrimaryButton onClick={submit} disabled={!valid || saving}>{saving ? "Memproses..." : "Transfer Stock"}</PrimaryButton>
+        </div>
+      </Card>
+      )}
+
+      <Card className="overflow-hidden">
+        <div className="px-5 py-4 border-b border-gray-50 text-sm font-semibold text-gray-800">Riwayat Transfer</div>
+        <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
+              <th className="px-5 py-3 font-medium">ID</th>
+              <th className="px-5 py-3 font-medium">Material</th>
+              <th className="px-5 py-3 font-medium">Divisi</th>
+              <th className="px-5 py-3 font-medium">Dari</th>
+              <th className="px-5 py-3 font-medium">Ke</th>
+              <th className="px-5 py-3 font-medium">Qty</th>
+              <th className="px-5 py-3 font-medium">Oleh</th>
+              <th className="px-5 py-3 font-medium">Tgl</th>
+            </tr>
+          </thead>
+          <tbody>
+            {transfers.map((t) => (
+              <tr key={t.id} className="border-b border-gray-50 last:border-0">
+                <td className="px-5 py-3 font-medium text-gray-800">{t.id}</td>
+                <td className="px-5 py-3 text-gray-700">{t.material}</td>
+                <td className="px-5 py-3 text-gray-600">{t.customer}</td>
+                <td className="px-5 py-3 text-gray-600">{t.homebase_from}</td>
+                <td className="px-5 py-3 text-emerald-700">{t.homebase_to}</td>
+                <td className="px-5 py-3 text-gray-600">{t.qty}{t.serials?.length > 0 ? ` (${t.serials.join(", ")})` : ""}</td>
+                <td className="px-5 py-3 text-gray-500">{t.performed_by}</td>
+                <td className="px-5 py-3 text-gray-500">{t.date}</td>
+              </tr>
+            ))}
+            {!loadingTransfers && transfers.length === 0 && <tr><td colSpan={8}><EmptyState text="Belum ada riwayat transfer." /></td></tr>}
+          </tbody>
+        </table>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 function ToolSerialDetail({ toolName, api, onBack }) {
   const [status, setStatus] = useState("All");
   const [serials, setSerials] = useState([]);
@@ -4999,12 +5226,16 @@ function createApiClient(baseUrl, getToken) {
     toggleUserStatus: (id) => request(`/users/${id}/toggle-status`, { method: "PATCH" }),
 
     getStock: (customer) => request(`/stock${customer ? `?customer=${encodeURIComponent(customer)}` : ""}`),
+    getTransferOptions: (material, customer) => request(`/stock/transfer-options?material=${encodeURIComponent(material)}&customer=${encodeURIComponent(customer)}`),
+    getTransfers: () => request("/stock/transfers"),
+    createTransfer: (payload) => request("/stock/transfers", { method: "POST", body: payload }),
     getMovements: (material) => request(`/stock/movements${material ? `?material=${encodeURIComponent(material)}` : ""}`),
-    getSerials: (material, status, customer) => {
+    getSerials: (material, status, customer, homebase) => {
       const params = new URLSearchParams();
       if (material) params.set("material", material);
       if (status) params.set("status", status);
       if (customer !== undefined) params.set("customer", customer || "");
+      if (homebase) params.set("homebase", homebase);
       const qs = params.toString();
       return request(`/stock/serials${qs ? `?${qs}` : ""}`);
     },
@@ -5858,6 +6089,7 @@ export default function App() {
     returnFaulty: ["Return Material Faulty", ""], returnFaultyCreate: ["Return Material Faulty", ""], returnFaultyEdit: ["Return Material Faulty", "Perbaiki & kirim ulang"],
     reconciliation: ["Reconciliation", ""], reconciliationCreate: ["Reconciliation", ""], reconciliationEdit: ["Reconciliation", "Perbaiki & kirim ulang"],
     stock: ["Warehouse Stock", ""], movement: ["Stock Movement", ""],
+    stockTransfer: ["Transfer Stock", "Pindahkan stock antar homebase"],
     serialDetail: ["Warehouse Stock", "Detail Serial Number"],
     reports: ["Reports", ""], reportsFaulty: ["Reports", ""], reportsRecon: ["Reports", ""],
     masterMaterial: ["Master Data", ""], masterSite: ["Master Data", ""], masterHomebase: ["Master Data", ""], masterArea: ["Master Data", ""], masterCustomer: ["Master Data", ""],
@@ -5934,6 +6166,7 @@ export default function App() {
   else if (page === "movement") content = <StockMovement movements={movements} filter={movementFilter} setFilter={setMovementFilter} deliveries={deliveries} />;
   else if (page === "serialDetail") content = <MaterialSerialDetail material={serialMaterial} api={api} onBack={() => goto("stock")} highlightSerial={highlightSerial} highlightToken={highlightToken} deliveries={deliveries} />;
   else if (page === "toolStock") content = <ToolStockPage tools={tools} setPage={goto} setToolSerialName={setToolSerialName} onSubmitReceipt={createToolReceipt} showToast={showToast} role={role} />;
+  else if (page === "stockTransfer") content = <TransferStockPage materials={materials} homebases={homebases} customers={customers} currentUser={currentUser} role={role} api={api} showToast={showToast} />;
   else if (page === "toolSerialDetail") content = <ToolSerialDetail toolName={toolSerialName} api={api} onBack={() => goto("toolStock")} />;
   else if (page === "reports") content = <ReportsPage
     title="Delivery Report" subtitle="Laporan seluruh pengajuan delivery"
