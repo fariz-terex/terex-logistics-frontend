@@ -2019,11 +2019,27 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast, currentUse
   );
 }
 
-function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMaterial, onSubmitReceipt, showToast, clearSerialHighlight, currentUser, customers, role }) {
+function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMaterial, onSubmitReceipt, showToast, clearSerialHighlight, currentUser, customers, role, api }) {
   const [search, setSearch] = useState("");
   const [showReceiptForm, setShowReceiptForm] = useState(false);
   const canReceive = role === ROLES.MANAGER || role === ROLES.LOGISTICS;
-  const filtered = materials.filter((m) => m.name.toLowerCase().includes(search.toLowerCase()));
+
+  // For anyone scoped to specific divisions, the shared `materials` prop
+  // (loaded once for the whole app) includes every material company-wide —
+  // fine for the Delivery Request picker where requesting something for
+  // the first time is normal, but on THIS page it's just noise: rows for
+  // materials their divisions have literally never touched. Fetch a
+  // narrower, page-local view instead. Manager keeps seeing everything, as
+  // before — they're meant to have the full picture here.
+  const [scopedMaterials, setScopedMaterials] = useState(null);
+  React.useEffect(() => {
+    if (role === ROLES.MANAGER) return;
+    api.getStock(undefined, true).then(setScopedMaterials).catch(() => setScopedMaterials(null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [role]);
+  const displayMaterials = role === ROLES.MANAGER ? materials : (scopedMaterials || materials);
+
+  const filtered = displayMaterials.filter((m) => m.name.toLowerCase().includes(search.toLowerCase()));
 
   return (
     <div className="p-4 sm:p-8 space-y-5">
@@ -5225,7 +5241,13 @@ function createApiClient(baseUrl, getToken) {
     updateUser: (id, payload) => request(`/users/${id}`, { method: "PATCH", body: payload }),
     toggleUserStatus: (id) => request(`/users/${id}/toggle-status`, { method: "PATCH" }),
 
-    getStock: (customer) => request(`/stock${customer ? `?customer=${encodeURIComponent(customer)}` : ""}`),
+    getStock: (customer, onlyWithHistory) => {
+      const params = new URLSearchParams();
+      if (customer) params.set("customer", customer);
+      if (onlyWithHistory) params.set("onlyWithHistory", "1");
+      const qs = params.toString();
+      return request(`/stock${qs ? `?${qs}` : ""}`);
+    },
     getTransferOptions: (material, customer) => request(`/stock/transfer-options?material=${encodeURIComponent(material)}&customer=${encodeURIComponent(customer)}`),
     getTransfers: () => request("/stock/transfers"),
     createTransfer: (payload) => request("/stock/transfers", { method: "POST", body: payload }),
@@ -6162,7 +6184,7 @@ export default function App() {
       content = <MaterialSwapDetail swap={s} onBack={() => setSelectedSwap(null)} setPage={goto} setReturnPrefill={setReturnPrefill} />;
     } else content = <MaterialSwapPage swaps={materialSwaps} api={api} materials={materials} sites={sites} homebases={homebases} onSubmit={submitMaterialSwap} showToast={showToast} setPage={goto} setReturnPrefill={setReturnPrefill} setSelectedSwap={setSelectedSwap} role={role} />;
   }
-  else if (page === "stock") content = <WarehouseStock materials={materials} setPage={goto} setMovementFilter={setMovementFilter} setSerialMaterial={setSerialMaterial} onSubmitReceipt={createReceipt} showToast={showToast} clearSerialHighlight={() => setHighlightSerial("")} currentUser={currentUser} customers={customers} role={role} />;
+  else if (page === "stock") content = <WarehouseStock materials={materials} setPage={goto} setMovementFilter={setMovementFilter} setSerialMaterial={setSerialMaterial} onSubmitReceipt={createReceipt} showToast={showToast} clearSerialHighlight={() => setHighlightSerial("")} currentUser={currentUser} customers={customers} role={role} api={api} />;
   else if (page === "movement") content = <StockMovement movements={movements} filter={movementFilter} setFilter={setMovementFilter} deliveries={deliveries} />;
   else if (page === "serialDetail") content = <MaterialSerialDetail material={serialMaterial} api={api} onBack={() => goto("stock")} highlightSerial={highlightSerial} highlightToken={highlightToken} deliveries={deliveries} />;
   else if (page === "toolStock") content = <ToolStockPage tools={tools} setPage={goto} setToolSerialName={setToolSerialName} onSubmitReceipt={createToolReceipt} showToast={showToast} role={role} />;
