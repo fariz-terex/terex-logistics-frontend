@@ -238,6 +238,7 @@ const STATUS_STYLES = {
   "Available": "bg-emerald-50 text-emerald-700",
   "Under Repair": "bg-red-50 text-red-700",
   "Installed": "bg-emerald-100 text-emerald-800",
+  "Sent to Customer": "bg-purple-50 text-purple-700",
 };
 
 function StatusBadge({ status }) {
@@ -2124,22 +2125,57 @@ function describeRef(ref, deliveries) {
   return ref;
 }
 
-function MaterialSerialDetail({ material, api, onBack, highlightSerial, highlightToken, deliveries }) {
+function SendToCustomerDialog({ open, mode, serialNumber, onSubmit, onCancel, saving, error }) {
+  const [ref, setRef] = useState("");
+  const [note, setNote] = useState("");
+  React.useEffect(() => { if (open) { setRef(""); setNote(""); } }, [open]);
+  if (!open) return null;
+  const isSend = mode === "send";
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onCancel}>
+      <div className="bg-white rounded-xl shadow-xl p-6 max-w-md w-full mx-4 space-y-4" onClick={(e) => e.stopPropagation()}>
+        <div className="text-sm font-semibold text-gray-800">
+          {isSend ? "Kirim ke Customer untuk Perbaikan" : "Terima Kembali dari Customer"}
+        </div>
+        <div className="text-xs text-gray-500">Serial Number: <span className="font-mono font-medium text-gray-700">{serialNumber}</span></div>
+        <div>
+          <label className="text-sm font-medium text-gray-700">Nomor Surat/BA <span className="text-red-500">*</span></label>
+          <input value={ref} onChange={(e) => setRef(e.target.value)} placeholder={isSend ? "mis. BA-OUT-001" : "Nomor surat baru, beda dari saat dikirim"} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+        </div>
+        <div>
+          <label className="text-sm font-medium text-gray-700">Catatan <span className="text-gray-400 font-normal">(opsional)</span></label>
+          <input value={note} onChange={(e) => setNote(e.target.value)} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+        </div>
+        {error && <div className="bg-red-50 border border-red-100 text-red-700 text-sm rounded-lg px-3 py-2">{error}</div>}
+        <div className="flex justify-end gap-2 pt-2">
+          <GhostButton onClick={onCancel}>Batal</GhostButton>
+          <PrimaryButton onClick={() => onSubmit({ ref, note })} disabled={!ref.trim() || saving}>{saving ? "Menyimpan..." : "Simpan"}</PrimaryButton>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MaterialSerialDetail({ material, api, onBack, highlightSerial, highlightToken, deliveries, role, showToast }) {
   const [status, setStatus] = useState("All");
   const [serials, setSerials] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [highlighted, setHighlighted] = useState(highlightSerial || null);
   const rowRefs = React.useRef({});
+  const canManage = role === ROLES.MANAGER || role === ROLES.LOGISTICS;
+  const [dialog, setDialog] = useState(null); // { mode: "send"|"receive", sn }
+  const [saving, setSaving] = useState(false);
+  const [dialogError, setDialogError] = useState("");
 
-  React.useEffect(() => {
-    let cancelled = false;
+  const reload = () => {
     setLoading(true);
     api.getSerials(material, status === "All" ? undefined : status)
-      .then((data) => { if (!cancelled) { setSerials(data); setLoading(false); } })
-      .catch(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [material, status]);
+      .then((data) => setSerials(data))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  };
+  React.useEffect(reload, [material, status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Re-sync from the prop on every new search selection — not just on first
   // mount. Without this, clicking a second SN result while already on this
@@ -2160,7 +2196,22 @@ function MaterialSerialDetail({ material, api, onBack, highlightSerial, highligh
   }, [loading, highlighted]);
 
   const filtered = search ? serials.filter((s) => s.sn.toLowerCase().includes(search.toLowerCase())) : serials;
-  const statusOptions = ["All", "Ready", "Reserved", "In Transit", "Delivered", "Faulty"];
+  const statusOptions = ["All", "Ready", "Reserved", "In Transit", "Delivered", "Installed", "Faulty", "Sent to Customer"];
+
+  const submitDialog = async ({ ref, note }) => {
+    setSaving(true); setDialogError("");
+    try {
+      if (dialog.mode === "send") await api.sendSerialToCustomer(dialog.sn, ref, note);
+      else await api.receiveSerialFromCustomer(dialog.sn, ref, note);
+      showToast(dialog.mode === "send" ? `${dialog.sn} dikirim ke customer` : `${dialog.sn} diterima kembali, status Ready`);
+      setDialog(null);
+      reload();
+    } catch (err) {
+      setDialogError(err.message || "Gagal menyimpan");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <div className="p-4 sm:p-8 space-y-5">
@@ -2188,13 +2239,14 @@ function MaterialSerialDetail({ material, api, onBack, highlightSerial, highligh
               <th className="px-5 py-3 font-medium">Serial Number</th>
               <th className="px-5 py-3 font-medium">Status</th>
               <th className="px-5 py-3 font-medium">Referensi</th>
+              {canManage && <th className="px-5 py-3 font-medium"></th>}
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={3}><div className="py-10 text-center text-sm text-gray-400">Memuat...</div></td></tr>
+              <tr><td colSpan={4}><div className="py-10 text-center text-sm text-gray-400">Memuat...</div></td></tr>
             ) : filtered.length === 0 ? (
-              <tr><td colSpan={3}><EmptyState text="Tidak ada Serial Number untuk filter ini." /></td></tr>
+              <tr><td colSpan={4}><EmptyState text="Tidak ada Serial Number untuk filter ini." /></td></tr>
             ) : (
               filtered.map((s) => (
                 <tr
@@ -2205,6 +2257,16 @@ function MaterialSerialDetail({ material, api, onBack, highlightSerial, highligh
                   <td className="px-5 py-3 font-medium text-gray-800">{s.sn}</td>
                   <td className="px-5 py-3"><StatusBadge status={s.status} /></td>
                   <td className="px-5 py-3 text-gray-500 text-xs">{s.current_ref ? describeRef(s.current_ref, deliveries) : (s.received_ref || "-")}</td>
+                  {canManage && (
+                    <td className="px-5 py-3">
+                      {s.status === "Faulty" && (
+                        <button onClick={() => setDialog({ mode: "send", sn: s.sn })} className="text-xs font-medium text-emerald-800">Kirim ke Customer</button>
+                      )}
+                      {s.status === "Sent to Customer" && (
+                        <button onClick={() => setDialog({ mode: "receive", sn: s.sn })} className="text-xs font-medium text-emerald-800">Terima Kembali</button>
+                      )}
+                    </td>
+                  )}
                 </tr>
               ))
             )}
@@ -2212,6 +2274,16 @@ function MaterialSerialDetail({ material, api, onBack, highlightSerial, highligh
         </table>
         </div>
       </Card>
+
+      <SendToCustomerDialog
+        open={!!dialog}
+        mode={dialog?.mode}
+        serialNumber={dialog?.sn}
+        onSubmit={submitDialog}
+        onCancel={() => { setDialog(null); setDialogError(""); }}
+        saving={saving}
+        error={dialogError}
+      />
     </div>
   );
 }
@@ -5262,6 +5334,9 @@ function createApiClient(baseUrl, getToken) {
       return request(`/stock/serials${qs ? `?${qs}` : ""}`);
     },
     searchSerials: (q) => request(`/stock/serials?q=${encodeURIComponent(q)}`),
+    sendSerialToCustomer: (sn, ref, note) => request(`/stock/serials/${encodeURIComponent(sn)}/send-to-customer`, { method: "POST", body: { ref, note } }),
+    receiveSerialFromCustomer: (sn, ref, note) => request(`/stock/serials/${encodeURIComponent(sn)}/receive-from-customer`, { method: "POST", body: { ref, note } }),
+    getSerialCustomerReturnHistory: (sn) => request(`/stock/serials/${encodeURIComponent(sn)}/customer-return-history`),
     createReceipt: (payload) => request("/stock/receipts", { method: "POST", body: payload }),
     getReceipts: () => request("/stock/receipts"),
 
@@ -6186,7 +6261,7 @@ export default function App() {
   }
   else if (page === "stock") content = <WarehouseStock materials={materials} setPage={goto} setMovementFilter={setMovementFilter} setSerialMaterial={setSerialMaterial} onSubmitReceipt={createReceipt} showToast={showToast} clearSerialHighlight={() => setHighlightSerial("")} currentUser={currentUser} customers={customers} role={role} api={api} />;
   else if (page === "movement") content = <StockMovement movements={movements} filter={movementFilter} setFilter={setMovementFilter} deliveries={deliveries} />;
-  else if (page === "serialDetail") content = <MaterialSerialDetail material={serialMaterial} api={api} onBack={() => goto("stock")} highlightSerial={highlightSerial} highlightToken={highlightToken} deliveries={deliveries} />;
+  else if (page === "serialDetail") content = <MaterialSerialDetail material={serialMaterial} api={api} onBack={() => goto("stock")} highlightSerial={highlightSerial} highlightToken={highlightToken} deliveries={deliveries} role={role} showToast={showToast} />;
   else if (page === "toolStock") content = <ToolStockPage tools={tools} setPage={goto} setToolSerialName={setToolSerialName} onSubmitReceipt={createToolReceipt} showToast={showToast} role={role} />;
   else if (page === "stockTransfer") content = <TransferStockPage materials={materials} homebases={homebases} customers={customers} currentUser={currentUser} role={role} api={api} showToast={showToast} />;
   else if (page === "toolSerialDetail") content = <ToolSerialDetail toolName={toolSerialName} api={api} onBack={() => goto("toolStock")} />;
