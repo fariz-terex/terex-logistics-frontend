@@ -1023,20 +1023,7 @@ function DeliveryCreate({ onSubmit, onCancel, materials, tools, consumables, sit
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [needsDivisionPicker, customer]);
 
-  // Same reasoning as divisionStock above, just for the separate
-  // consumables tables — a Manager (or anyone covering more than one
-  // division) needs the ONE chosen division's real Ready qty here too.
-  const [divisionConsumables, setDivisionConsumables] = useState(null);
-  React.useEffect(() => {
-    if (!needsDivisionPicker || !customer) { setDivisionConsumables(null); return; }
-    let cancelled = false;
-    api.getConsumables(customer).then((rows) => { if (!cancelled) setDivisionConsumables(rows); }).catch(() => { if (!cancelled) setDivisionConsumables(null); });
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [needsDivisionPicker, customer]);
-
   const effectiveMaterials = needsDivisionPicker && customer && divisionStock ? divisionStock : materials;
-  const effectiveConsumables = needsDivisionPicker && customer && divisionConsumables ? divisionConsumables : consumables;
 
   const hb = homebases.find((h) => h.name === homebase);
   const siteOptions = sites.filter((s) =>
@@ -1053,7 +1040,7 @@ function DeliveryCreate({ onSubmit, onCancel, materials, tools, consumables, sit
   const catalogItems = [
     ...effectiveMaterials.filter((m) => m.status === "Active").map((m) => ({ ...m, _type: "material" })),
     ...tools.filter((t) => t.status === "Active").map((t) => ({ ...t, _type: "tool", ready: t.available })),
-    ...effectiveConsumables.filter((c) => c.status === "Active").map((c) => ({ ...c, _type: "consumable" })),
+    ...consumables.filter((c) => c.status === "Active").map((c) => ({ ...c, _type: "consumable" })),
   ];
   const filteredCatalog = catalogItems.filter((m) => m.name.toLowerCase().includes(matSearch.toLowerCase()));
 
@@ -1066,7 +1053,7 @@ function DeliveryCreate({ onSubmit, onCancel, materials, tools, consumables, sit
   };
 
   const cartItems = Object.entries(cart).filter(([, q]) => q > 0).map(([id, q]) => ({ material: catalogItems.find((m) => m.id === id), qty: q }));
-  const step1Valid = homebase && keperluan && (keperluan !== "Other" || otherDesc.trim()) && (!needsDivisionPicker || (customer && divisionStock !== null && divisionConsumables !== null));
+  const step1Valid = homebase && keperluan && (keperluan !== "Other" || otherDesc.trim()) && (!needsDivisionPicker || (customer && divisionStock !== null));
   const step2Valid = cartItems.length > 0 && cartItems.every((i) => i.qty <= i.material.ready);
 
   return (
@@ -4664,29 +4651,21 @@ function MasterConsumable({ consumables, onCreate, onToggle, onDelete, onBulkDel
   );
 }
 
-function ConsumableReceiptForm({ consumables, onSubmit, onCancel, showToast, currentUser, customers }) {
+function ConsumableReceiptForm({ consumables, onSubmit, onCancel, showToast }) {
   const [consumable, setConsumable] = useState("");
   const [qty, setQty] = useState(1);
   const [note, setNote] = useState("");
-  const [customer, setCustomer] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
-  const isManager = currentUser?.role === ROLES.MANAGER;
-  const myDivisions = currentUser?.customers || [];
-  const needsDivisionPicker = isManager || myDivisions.length > 1;
-  const divisionOptions = isManager ? customers.filter((c) => c.status === "Active").map((c) => c.name) : myDivisions;
-
-  const valid = consumable && qty > 0 && (needsDivisionPicker ? !!customer : myDivisions.length === 1);
+  const valid = consumable && qty > 0;
 
   const submit = async () => {
     setSaving(true); setError("");
     const submittedConsumable = consumable;
     const submittedQty = qty;
     try {
-      const payload = { consumable, qty, note };
-      if (needsDivisionPicker) payload.customer = customer;
-      await onSubmit(payload);
+      await onSubmit({ consumable, qty, note });
       showToast(`Berhasil menerima ${submittedQty} ${submittedConsumable}`);
       setConsumable(""); setQty(1); setNote("");
     } catch (err) {
@@ -4708,21 +4687,10 @@ function ConsumableReceiptForm({ consumables, onSubmit, onCancel, showToast, cur
           </select>
         </div>
         <div>
-          <label className="text-xs font-medium text-gray-500">Divisi (Customer) <span className="text-red-500">*</span></label>
-          {needsDivisionPicker ? (
-            <select value={customer} onChange={(e) => setCustomer(e.target.value)} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600">
-              <option value="">Pilih divisi tujuan...</option>
-              {divisionOptions.map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
-          ) : (
-            <div className="mt-1 w-full border border-gray-100 bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-600">{myDivisions[0] || "—"}</div>
-          )}
-        </div>
-        <div>
           <label className="text-xs font-medium text-gray-500">Qty <span className="text-red-500">*</span></label>
           <input type="number" min={1} value={qty} onChange={(e) => setQty(Number(e.target.value))} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
         </div>
-        <div>
+        <div className="sm:col-span-2">
           <label className="text-xs font-medium text-gray-500">Catatan <span className="text-gray-400 font-normal">(opsional)</span></label>
           <input value={note} onChange={(e) => setNote(e.target.value)} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
         </div>
@@ -4736,7 +4704,7 @@ function ConsumableReceiptForm({ consumables, onSubmit, onCancel, showToast, cur
   );
 }
 
-function ConsumableStockPage({ consumables, onSubmitReceipt, showToast, role, currentUser, customers }) {
+function ConsumableStockPage({ consumables, onSubmitReceipt, showToast, role }) {
   const [search, setSearch] = useState("");
   const [showReceiptForm, setShowReceiptForm] = useState(false);
   const canReceive = role === ROLES.MANAGER || role === ROLES.LOGISTICS;
@@ -4750,7 +4718,7 @@ function ConsumableStockPage({ consumables, onSubmitReceipt, showToast, role, cu
       />
 
       {showReceiptForm && canReceive && (
-        <ConsumableReceiptForm consumables={consumables} onCancel={() => setShowReceiptForm(false)} onSubmit={onSubmitReceipt} showToast={showToast} currentUser={currentUser} customers={customers} />
+        <ConsumableReceiptForm consumables={consumables} onCancel={() => setShowReceiptForm(false)} onSubmit={onSubmitReceipt} showToast={showToast} />
       )}
 
       <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2.5 w-80">
@@ -5614,7 +5582,7 @@ function createApiClient(baseUrl, getToken) {
     getMaterialCascadePreview: (id) => request(`/materials/${id}/cascade-preview`),
     forceDeleteMaterial: (id) => request(`/materials/${id}/force`, { method: "DELETE" }),
 
-    getConsumables: (customer) => request(`/consumables${customer ? `?customer=${encodeURIComponent(customer)}` : ""}`),
+    getConsumables: () => request("/consumables"),
     createConsumable: (payload) => request("/consumables", { method: "POST", body: payload }),
     toggleConsumableStatus: (id) => request(`/consumables/${id}/toggle-status`, { method: "PATCH" }),
     importConsumables: (rows) => request("/consumables/import", { method: "POST", body: { rows } }),
@@ -6641,7 +6609,7 @@ export default function App() {
   else if (page === "movement") content = <StockMovement movements={movements} filter={movementFilter} setFilter={setMovementFilter} deliveries={deliveries} />;
   else if (page === "serialDetail") content = <MaterialSerialDetail material={serialMaterial} api={api} onBack={() => goto("stock")} highlightSerial={highlightSerial} highlightToken={highlightToken} deliveries={deliveries} role={role} showToast={showToast} />;
   else if (page === "toolStock") content = <ToolStockPage tools={tools} setPage={goto} setToolSerialName={setToolSerialName} onSubmitReceipt={createToolReceipt} showToast={showToast} role={role} />;
-  else if (page === "consumableStock") content = <ConsumableStockPage consumables={consumables} onSubmitReceipt={createConsumableReceipt} showToast={showToast} role={role} currentUser={currentUser} customers={customers} />;
+  else if (page === "consumableStock") content = <ConsumableStockPage consumables={consumables} onSubmitReceipt={createConsumableReceipt} showToast={showToast} role={role} />;
   else if (page === "stockTransfer") content = <TransferStockPage materials={materials} homebases={homebases} customers={customers} currentUser={currentUser} role={role} api={api} showToast={showToast} />;
   else if (page === "toolSerialDetail") content = <ToolSerialDetail toolName={toolSerialName} api={api} onBack={() => goto("toolStock")} />;
   else if (page === "reports") content = <ReportsPage
