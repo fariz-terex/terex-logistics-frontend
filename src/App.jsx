@@ -193,6 +193,7 @@ const NAV_ACCESS = {
   reports: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.DIVISION_MANAGER],
   reportsDeviceLocation: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV, ROLES.DIVISION_MANAGER],
   toolStock: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV, ROLES.DIVISION_MANAGER],
+  consumableStock: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV, ROLES.DIVISION_MANAGER],
   master: [ROLES.MANAGER],
   users: [ROLES.MANAGER],
   settings: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV, ROLES.TECH, ROLES.DIVISION_MANAGER],
@@ -411,6 +412,7 @@ const NAV_TREE = [
       { key: "stock", label: "Warehouse Stock" },
       { key: "movement", label: "Stock Movement" },
       { key: "toolStock", label: "Stock Alat" },
+      { key: "consumableStock", label: "Stock Consumable" },
       { key: "stockTransfer", label: "Transfer Stock" },
     ],
   },
@@ -432,6 +434,7 @@ const NAV_TREE = [
       { key: "masterArea", label: "Master Area" },
       { key: "masterCustomer", label: "Master Customer" },
       { key: "masterTools", label: "Master Alat" },
+      { key: "masterConsumable", label: "Master Consumable" },
     ],
   },
   { key: "users", label: "User Management", icon: Users },
@@ -444,10 +447,10 @@ function hasAccess(key, role) {
     delivery: NAV_ACCESS.delivery, returnFaulty: NAV_ACCESS.returnFaulty, reconciliation: NAV_ACCESS.reconciliation,
     materialSwap: NAV_ACCESS.materialSwap,
     stock: NAV_ACCESS.stock, movement: NAV_ACCESS.movement,
-    toolStock: NAV_ACCESS.toolStock, stockTransfer: NAV_ACCESS.stockTransfer,
+    toolStock: NAV_ACCESS.toolStock, stockTransfer: NAV_ACCESS.stockTransfer, consumableStock: NAV_ACCESS.consumableStock,
     reports: NAV_ACCESS.reports, reportsFaulty: NAV_ACCESS.reports, reportsRecon: NAV_ACCESS.reports, reportsDeviceLocation: NAV_ACCESS.reportsDeviceLocation,
     masterMaterial: NAV_ACCESS.master, masterSite: NAV_ACCESS.master, masterHomebase: NAV_ACCESS.master,
-    masterArea: NAV_ACCESS.master, masterCustomer: NAV_ACCESS.master, masterTools: NAV_ACCESS.master,
+    masterArea: NAV_ACCESS.master, masterCustomer: NAV_ACCESS.master, masterTools: NAV_ACCESS.master, masterConsumable: NAV_ACCESS.master,
     users: NAV_ACCESS.users, dashboard: NAV_ACCESS.dashboard, settings: NAV_ACCESS.settings,
   };
   const allowed = map[key];
@@ -988,7 +991,7 @@ function DeliveryList({ deliveries, setSelected, setPage, role }) {
   );
 }
 
-function DeliveryCreate({ onSubmit, onCancel, materials, tools, sites, homebases, currentUser, customers, api }) {
+function DeliveryCreate({ onSubmit, onCancel, materials, tools, consumables, sites, homebases, currentUser, customers, api }) {
   const [step, setStep] = useState(1);
   const [homebase, setHomebase] = useState("");
   const [site, setSite] = useState("");
@@ -1020,7 +1023,20 @@ function DeliveryCreate({ onSubmit, onCancel, materials, tools, sites, homebases
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [needsDivisionPicker, customer]);
 
+  // Same reasoning as divisionStock above, just for the separate
+  // consumables tables — a Manager (or anyone covering more than one
+  // division) needs the ONE chosen division's real Ready qty here too.
+  const [divisionConsumables, setDivisionConsumables] = useState(null);
+  React.useEffect(() => {
+    if (!needsDivisionPicker || !customer) { setDivisionConsumables(null); return; }
+    let cancelled = false;
+    api.getConsumables(customer).then((rows) => { if (!cancelled) setDivisionConsumables(rows); }).catch(() => { if (!cancelled) setDivisionConsumables(null); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [needsDivisionPicker, customer]);
+
   const effectiveMaterials = needsDivisionPicker && customer && divisionStock ? divisionStock : materials;
+  const effectiveConsumables = needsDivisionPicker && customer && divisionConsumables ? divisionConsumables : consumables;
 
   const hb = homebases.find((h) => h.name === homebase);
   const siteOptions = sites.filter((s) =>
@@ -1028,14 +1044,16 @@ function DeliveryCreate({ onSubmit, onCancel, materials, tools, sites, homebases
     (s.name.toLowerCase().includes(siteSearch.toLowerCase()) || s.code.toLowerCase().includes(siteSearch.toLowerCase()) || s.terminalId.toLowerCase().includes(siteSearch.toLowerCase()))
   );
 
-  // Sparepart (dikirim, one-way) and alat (dipinjam, harus dikembalikan)
-  // live in one combined catalog here so a single request can mix both —
-  // `ready` is aliased onto tools (from `available`) so the rest of this
-  // component's qty-vs-stock logic works the same for either kind. Tools
-  // stay unscoped (shared pool, no division split) regardless.
+  // Sparepart (dikirim, one-way), alat (dipinjam, harus dikembalikan), and
+  // consumable (habis pakai, tidak dikembalikan) live in one combined
+  // catalog here so a single request can mix all three — `ready` is
+  // aliased onto tools (from `available`) so the rest of this component's
+  // qty-vs-stock logic works the same across all kinds. Tools stay
+  // unscoped (shared pool, no division split) regardless.
   const catalogItems = [
     ...effectiveMaterials.filter((m) => m.status === "Active").map((m) => ({ ...m, _type: "material" })),
     ...tools.filter((t) => t.status === "Active").map((t) => ({ ...t, _type: "tool", ready: t.available })),
+    ...effectiveConsumables.filter((c) => c.status === "Active").map((c) => ({ ...c, _type: "consumable" })),
   ];
   const filteredCatalog = catalogItems.filter((m) => m.name.toLowerCase().includes(matSearch.toLowerCase()));
 
@@ -1048,7 +1066,7 @@ function DeliveryCreate({ onSubmit, onCancel, materials, tools, sites, homebases
   };
 
   const cartItems = Object.entries(cart).filter(([, q]) => q > 0).map(([id, q]) => ({ material: catalogItems.find((m) => m.id === id), qty: q }));
-  const step1Valid = homebase && keperluan && (keperluan !== "Other" || otherDesc.trim()) && (!needsDivisionPicker || (customer && divisionStock !== null));
+  const step1Valid = homebase && keperluan && (keperluan !== "Other" || otherDesc.trim()) && (!needsDivisionPicker || (customer && divisionStock !== null && divisionConsumables !== null));
   const step2Valid = cartItems.length > 0 && cartItems.every((i) => i.qty <= i.material.ready);
 
   return (
@@ -1156,12 +1174,14 @@ function DeliveryCreate({ onSubmit, onCancel, materials, tools, sites, homebases
               const qty = cart[m.id] || 0;
               const insufficient = qty > m.ready;
               const isTool = m._type === "tool";
+              const isConsumable = m._type === "consumable";
               return (
                 <div key={m.id} className={`flex items-center justify-between border rounded-xl px-4 py-3 ${qty > 0 ? "border-emerald-200 bg-emerald-50/30" : "border-gray-100"}`}>
                   <div>
                     <div className="text-sm font-medium text-gray-800 flex items-center gap-2">
                       {m.name}
                       {isTool && <span className="text-[10px] font-semibold uppercase tracking-wide text-indigo-600 bg-indigo-50 rounded-full px-2 py-0.5">Alat · Pinjam</span>}
+                      {isConsumable && <span className="text-[10px] font-semibold uppercase tracking-wide text-amber-600 bg-amber-50 rounded-full px-2 py-0.5">Consumable</span>}
                     </div>
                     <div className={`text-xs mt-0.5 ${insufficient ? "text-red-600 font-medium" : "text-gray-400"}`}>
                       Stock Available: {m.ready}{qty > 0 && ` · Requested: ${qty} · ${insufficient ? "Insufficient Stock" : "Available"}`}
@@ -1199,6 +1219,7 @@ function DeliveryCreate({ onSubmit, onCancel, materials, tools, sites, homebases
                   <span className="text-gray-700 flex items-center gap-2">
                     {i.material.name}
                     {i.material._type === "tool" && <span className="text-[10px] font-semibold uppercase tracking-wide text-indigo-600 bg-indigo-50 rounded-full px-2 py-0.5">Alat · Pinjam</span>}
+                    {i.material._type === "consumable" && <span className="text-[10px] font-semibold uppercase tracking-wide text-amber-600 bg-amber-50 rounded-full px-2 py-0.5">Consumable</span>}
                   </span>
                   <span className="font-medium text-gray-800">Qty {i.qty}</span>
                 </div>
@@ -1422,6 +1443,7 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, 
                 <span className="text-gray-700 flex items-center gap-2">
                   {i.material}
                   {i.type === "tool" && <span className="text-[10px] font-semibold uppercase tracking-wide text-indigo-600 bg-indigo-50 rounded-full px-2 py-0.5">Alat · Pinjam</span>}
+                  {i.type === "consumable" && <span className="text-[10px] font-semibold uppercase tracking-wide text-amber-600 bg-amber-50 rounded-full px-2 py-0.5">Consumable</span>}
                 </span>
                 <span className="font-medium text-gray-800">Qty {i.qty}</span>
               </div>
@@ -4463,6 +4485,318 @@ function MasterTools({ tools, onCreate, onToggle, onDelete, onBulkDelete, showTo
   );
 }
 
+function MasterConsumable({ consumables, onCreate, onToggle, onDelete, onBulkDelete, showToast }) {
+  const [search, setSearch] = useState("");
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ name: "", category: "", unit: "Pcs", minStock: 1 });
+  const [saving, setSaving] = useState(false);
+  const [selected, setSelected] = useState(new Set());
+  const [confirmDelete, setConfirmDelete] = useState(null); // { type: "one"|"bulk", id? }
+  const [statusFilter, setStatusFilter] = useState("All");
+  const [sort, setSort] = useState({ key: null, dir: "asc" });
+  const handleSort = (key) => setSort((prev) => (prev.key === key ? { key, dir: prev.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" }));
+
+  const filtered = sortRows(
+    consumables.filter((c) => (statusFilter === "All" || c.status === statusFilter) && c.name.toLowerCase().includes(search.toLowerCase())),
+    sort
+  );
+
+  const toggleOne = (id) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const toggleAllVisible = () => {
+    const visibleIds = filtered.map((c) => c.id);
+    const allSelected = visibleIds.every((id) => selected.has(id));
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allSelected) visibleIds.forEach((id) => next.delete(id));
+      else visibleIds.forEach((id) => next.add(id));
+      return next;
+    });
+  };
+  const handleDeleteOne = async (id) => {
+    try {
+      await onDelete(id);
+      showToast("Consumable berhasil dihapus");
+    } catch (err) {
+      showToast(err.message || "Gagal menghapus consumable");
+    }
+  };
+  const handleBulkDelete = async () => {
+    const ids = Array.from(selected);
+    try {
+      const result = await onBulkDelete(ids);
+      const blockedCount = result?.blocked?.length || 0;
+      showToast(blockedCount > 0 ? `${result.deleted} dihapus, ${blockedCount} gagal karena masih dipakai` : `${result.deleted} consumable berhasil dihapus`);
+      setSelected(new Set());
+    } catch (err) {
+      showToast(err.message || "Gagal menghapus consumable");
+    }
+  };
+
+  const addConsumable = async () => {
+    if (!form.name.trim() || !form.category.trim()) return;
+    setSaving(true);
+    try {
+      await onCreate({ name: form.name.trim(), category: form.category.trim(), unit: form.unit, minStock: Number(form.minStock) || 0 });
+      showToast(`Consumable "${form.name}" berhasil ditambahkan`);
+      setForm({ name: "", category: "", unit: "Pcs", minStock: 1 });
+      setShowForm(false);
+    } catch (err) {
+      showToast(err.message || "Gagal menambahkan consumable");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="p-4 sm:p-8 space-y-5">
+      <SectionTitle
+        title="Master Consumable" subtitle="Barang habis pakai untuk maintenance — konektor, isolasi, rubber, dsb (tidak dipinjam, tidak ada Faulty)"
+        right={<PrimaryButton onClick={() => setShowForm(!showForm)}><Plus size={16} /> Tambah Consumable</PrimaryButton>}
+      />
+
+      {showForm && (
+        <Card className="p-6 space-y-4 max-w-xl">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="text-sm font-medium text-gray-700">Nama Consumable <span className="text-red-500">*</span></label>
+              <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="mis. Konektor RJ45" className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-gray-700">Category <span className="text-red-500">*</span></label>
+              <input value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} placeholder="mis. Konektor" className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-gray-700">Unit</label>
+              <input value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-gray-700">Min Stock</label>
+              <input type="number" min="0" value={form.minStock} onChange={(e) => setForm({ ...form, minStock: e.target.value })} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <GhostButton onClick={() => setShowForm(false)}>Batal</GhostButton>
+            <PrimaryButton onClick={addConsumable} disabled={!form.name.trim() || !form.category.trim() || saving}>{saving ? "Menyimpan..." : "Simpan"}</PrimaryButton>
+          </div>
+        </Card>
+      )}
+
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2.5 w-80">
+            <Search size={16} className="text-gray-400" />
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari consumable..." className="bg-transparent text-sm outline-none w-full" />
+          </div>
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none bg-white text-gray-600">
+            <option value="All">Semua Status</option>
+            <option value="Active">Active</option>
+            <option value="Inactive">Inactive</option>
+          </select>
+        </div>
+        {selected.size > 0 && (
+          <DangerButton onClick={() => setConfirmDelete({ type: "bulk" })}><X size={14} /> Hapus Terpilih ({selected.size})</DangerButton>
+        )}
+      </div>
+
+      <Card className="overflow-hidden">
+        <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
+              <th className="px-5 py-3 font-medium w-8">
+                <input type="checkbox" checked={filtered.length > 0 && filtered.every((c) => selected.has(c.id))} onChange={toggleAllVisible} className="accent-emerald-800" />
+              </th>
+              <SortableHeader label="Consumable ID" sortKey="id" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Nama" sortKey="name" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Category" sortKey="category" sort={sort} onSort={handleSort} />
+              <th className="px-5 py-3 font-medium">Unit</th>
+              <SortableHeader label="Min Stock" sortKey="min_stock" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Status" sortKey="status" sort={sort} onSort={handleSort} />
+              <th className="px-5 py-3 font-medium"></th>
+              <th className="px-5 py-3 font-medium"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((c) => (
+              <tr key={c.id} className="border-b border-gray-50 last:border-0">
+                <td className="px-5 py-3"><input type="checkbox" checked={selected.has(c.id)} onChange={() => toggleOne(c.id)} className="accent-emerald-800" /></td>
+                <td className="px-5 py-3 text-gray-500">{c.id}</td>
+                <td className="px-5 py-3 font-medium text-gray-800">{c.name}</td>
+                <td className="px-5 py-3 text-gray-600">{c.category}</td>
+                <td className="px-5 py-3 text-gray-500">{c.unit}</td>
+                <td className="px-5 py-3 text-gray-500">{c.min_stock}</td>
+                <td className="px-5 py-3"><StatusBadge status={c.status} /></td>
+                <td className="px-5 py-3"><button onClick={() => onToggle(c.id)} className="text-xs font-medium text-emerald-800">{c.status === "Active" ? "Deactivate" : "Activate"}</button></td>
+                <td className="px-5 py-3"><button onClick={() => setConfirmDelete({ type: "one", id: c.id })} className="text-red-500 hover:text-red-700"><X size={14} /></button></td>
+              </tr>
+            ))}
+            {filtered.length === 0 && <tr><td colSpan={9}><EmptyState text="Belum ada data consumable." /></td></tr>}
+          </tbody>
+        </table>
+        </div>
+      </Card>
+
+      <ConfirmDialog
+        open={!!confirmDelete}
+        title="Hapus Consumable"
+        message={
+          confirmDelete?.type === "bulk"
+            ? `${selected.size} consumable terpilih akan dihapus permanen. Tindakan ini tidak bisa dibatalkan. Lanjutkan?`
+            : `Consumable ini akan dihapus permanen. Tindakan ini tidak bisa dibatalkan. Lanjutkan?`
+        }
+        confirmLabel="Ya, Hapus"
+        danger
+        onConfirm={() => {
+          const target = confirmDelete;
+          setConfirmDelete(null);
+          if (target.type === "bulk") handleBulkDelete();
+          else handleDeleteOne(target.id);
+        }}
+        onCancel={() => setConfirmDelete(null)}
+      />
+    </div>
+  );
+}
+
+function ConsumableReceiptForm({ consumables, onSubmit, onCancel, showToast, currentUser, customers }) {
+  const [consumable, setConsumable] = useState("");
+  const [qty, setQty] = useState(1);
+  const [note, setNote] = useState("");
+  const [customer, setCustomer] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const isManager = currentUser?.role === ROLES.MANAGER;
+  const myDivisions = currentUser?.customers || [];
+  const needsDivisionPicker = isManager || myDivisions.length > 1;
+  const divisionOptions = isManager ? customers.filter((c) => c.status === "Active").map((c) => c.name) : myDivisions;
+
+  const valid = consumable && qty > 0 && (needsDivisionPicker ? !!customer : myDivisions.length === 1);
+
+  const submit = async () => {
+    setSaving(true); setError("");
+    const submittedConsumable = consumable;
+    const submittedQty = qty;
+    try {
+      const payload = { consumable, qty, note };
+      if (needsDivisionPicker) payload.customer = customer;
+      await onSubmit(payload);
+      showToast(`Berhasil menerima ${submittedQty} ${submittedConsumable}`);
+      setConsumable(""); setQty(1); setNote("");
+    } catch (err) {
+      setError(err.message || "Gagal menyimpan penerimaan consumable");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card className="p-5 space-y-4">
+      <div className="text-sm font-semibold text-gray-800">Terima Consumable</div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <label className="text-xs font-medium text-gray-500">Consumable <span className="text-red-500">*</span></label>
+          <select value={consumable} onChange={(e) => setConsumable(e.target.value)} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600">
+            <option value="">Pilih consumable...</option>
+            {consumables.filter((c) => c.status === "Active").map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="text-xs font-medium text-gray-500">Divisi (Customer) <span className="text-red-500">*</span></label>
+          {needsDivisionPicker ? (
+            <select value={customer} onChange={(e) => setCustomer(e.target.value)} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600">
+              <option value="">Pilih divisi tujuan...</option>
+              {divisionOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          ) : (
+            <div className="mt-1 w-full border border-gray-100 bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-600">{myDivisions[0] || "—"}</div>
+          )}
+        </div>
+        <div>
+          <label className="text-xs font-medium text-gray-500">Qty <span className="text-red-500">*</span></label>
+          <input type="number" min={1} value={qty} onChange={(e) => setQty(Number(e.target.value))} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
+        </div>
+        <div>
+          <label className="text-xs font-medium text-gray-500">Catatan <span className="text-gray-400 font-normal">(opsional)</span></label>
+          <input value={note} onChange={(e) => setNote(e.target.value)} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
+        </div>
+      </div>
+      {error && <div className="bg-red-50 border border-red-100 text-red-700 text-xs rounded-lg px-3 py-2">{error}</div>}
+      <div className="flex justify-end gap-2">
+        <GhostButton onClick={onCancel}>Batal</GhostButton>
+        <PrimaryButton disabled={!valid || saving} onClick={submit}>{saving ? "Menyimpan..." : "Simpan Penerimaan"}</PrimaryButton>
+      </div>
+    </Card>
+  );
+}
+
+function ConsumableStockPage({ consumables, onSubmitReceipt, showToast, role, currentUser, customers }) {
+  const [search, setSearch] = useState("");
+  const [showReceiptForm, setShowReceiptForm] = useState(false);
+  const canReceive = role === ROLES.MANAGER || role === ROLES.LOGISTICS;
+  const filtered = consumables.filter((c) => c.name.toLowerCase().includes(search.toLowerCase()));
+
+  return (
+    <div className="p-4 sm:p-8 space-y-5">
+      <SectionTitle
+        title="Stock Consumable" subtitle="Ketersediaan barang habis pakai untuk maintenance"
+        right={canReceive ? <PrimaryButton onClick={() => setShowReceiptForm(!showReceiptForm)}><Plus size={16} /> Terima Consumable</PrimaryButton> : null}
+      />
+
+      {showReceiptForm && canReceive && (
+        <ConsumableReceiptForm consumables={consumables} onCancel={() => setShowReceiptForm(false)} onSubmit={onSubmitReceipt} showToast={showToast} currentUser={currentUser} customers={customers} />
+      )}
+
+      <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2.5 w-80">
+        <Search size={16} className="text-gray-400" />
+        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari consumable..." className="bg-transparent text-sm outline-none w-full" />
+      </div>
+      <Card className="overflow-hidden">
+        <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
+              <th className="px-5 py-3 font-medium">Consumable</th>
+              <th className="px-5 py-3 font-medium">Category</th>
+              <th className="px-5 py-3 font-medium">Ready</th>
+              <th className="px-5 py-3 font-medium">Reserved</th>
+              <th className="px-5 py-3 font-medium">In Transit</th>
+              <th className="px-5 py-3 font-medium">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((c) => {
+              const total = c.ready + c.reserved + c.in_transit;
+              const low = c.ready <= c.min_stock;
+              return (
+                <tr key={c.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/50">
+                  <td className="px-5 py-3">
+                    <div className="font-medium text-gray-800">{c.name}</div>
+                    {low && <div className="text-xs text-red-600 font-medium mt-0.5 flex items-center gap-1"><AlertTriangle size={11} /> Mendekati stok minimum ({c.min_stock})</div>}
+                  </td>
+                  <td className="px-5 py-3 text-gray-500">{c.category}</td>
+                  <td className="px-5 py-3 font-semibold text-emerald-700">{c.ready}</td>
+                  <td className="px-5 py-3 text-blue-600">{c.reserved}</td>
+                  <td className="px-5 py-3 text-indigo-600">{c.in_transit}</td>
+                  <td className="px-5 py-3 font-medium text-gray-800">{total}</td>
+                </tr>
+              );
+            })}
+            {filtered.length === 0 && <tr><td colSpan={6}><EmptyState text="Belum ada data consumable." /></td></tr>}
+          </tbody>
+        </table>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 /* Generic Excel/CSV import panel — download template → upload → validated
    preview → confirm. Shared across every Master Data screen instead of
    duplicating this flow per-resource; each caller just supplies its own
@@ -5280,6 +5614,15 @@ function createApiClient(baseUrl, getToken) {
     getMaterialCascadePreview: (id) => request(`/materials/${id}/cascade-preview`),
     forceDeleteMaterial: (id) => request(`/materials/${id}/force`, { method: "DELETE" }),
 
+    getConsumables: (customer) => request(`/consumables${customer ? `?customer=${encodeURIComponent(customer)}` : ""}`),
+    createConsumable: (payload) => request("/consumables", { method: "POST", body: payload }),
+    toggleConsumableStatus: (id) => request(`/consumables/${id}/toggle-status`, { method: "PATCH" }),
+    importConsumables: (rows) => request("/consumables/import", { method: "POST", body: { rows } }),
+    deleteConsumable: (id) => request(`/consumables/${id}`, { method: "DELETE" }),
+    bulkDeleteConsumables: (ids) => request("/consumables/bulk-delete", { method: "POST", body: { ids } }),
+    getConsumableReceipts: () => request("/consumables/receipts"),
+    createConsumableReceipt: (payload) => request("/consumables/receipts", { method: "POST", body: payload }),
+
     getAreas: () => request("/areas"),
     createArea: (payload) => request("/areas", { method: "POST", body: payload }),
     toggleAreaStatus: (code) => request(`/areas/${code}/toggle-status`, { method: "PATCH" }),
@@ -5495,6 +5838,7 @@ export default function App() {
   const [users, setUsers] = useState([]);
   const [tools, setTools] = useState([]);
   const [toolSerialName, setToolSerialName] = useState("");
+  const [consumables, setConsumables] = useState([]);
   const [materialSwaps, setMaterialSwaps] = useState([]);
   const [returnPrefill, setReturnPrefill] = useState(null);
   const [selectedSwap, setSelectedSwap] = useState(null);
@@ -5522,11 +5866,11 @@ export default function App() {
     setDataLoading(true);
     setApiError("");
     try {
-      const [mats, movs, dels, rets, recs, sts, hbs, ars, custs, usrs, tls, swaps] = await Promise.all([
+      const [mats, movs, dels, rets, recs, sts, hbs, ars, custs, usrs, tls, swaps, csms] = await Promise.all([
         api.getStock(), api.getMovements(), api.getDeliveries(), api.getReturns(),
         api.getReconciliations(), api.getSites(), api.getHomebases(), api.getAreas(),
         api.getCustomers(), api.getUsers().catch(() => []), // Users list is Manager-only; ignore 403 for other roles
-        api.getTools(), api.getMaterialSwaps(),
+        api.getTools(), api.getMaterialSwaps(), api.getConsumables(),
       ]);
       setMaterials(mats.map(normalizeMaterial));
       setMovements(movs);
@@ -5540,6 +5884,7 @@ export default function App() {
       setUsers(usrs);
       setTools(tls);
       setMaterialSwaps(swaps);
+      setConsumables(csms);
     } catch (err) {
       setApiError(err.message || "Gagal memuat data dari server");
     } finally {
@@ -5556,7 +5901,7 @@ export default function App() {
   const handleLogout = () => {
     setAuthToken(null); setCurrentUser(null);
     setMaterials([]); setMovements([]); setDeliveries([]); setReturns([]); setReconciliations([]);
-    setSites([]); setHomebases([]); setAreas([]); setCustomers([]); setUsers([]);
+    setSites([]); setHomebases([]); setAreas([]); setCustomers([]); setUsers([]); setConsumables([]);
     setPage("dashboard");
   };
 
@@ -5564,10 +5909,11 @@ export default function App() {
   // touches warehouse stock, instead of a full reload of every collection.
   const refreshStock = async () => {
     try {
-      const [mats, movs, tls] = await Promise.all([api.getStock(), api.getMovements(), api.getTools()]);
+      const [mats, movs, tls, csms] = await Promise.all([api.getStock(), api.getMovements(), api.getTools(), api.getConsumables()]);
       setMaterials(mats.map(normalizeMaterial));
       setMovements(movs);
       setTools(tls);
+      setConsumables(csms);
     } catch (err) {
       setApiError(err.message);
     }
@@ -5613,6 +5959,37 @@ export default function App() {
     const blockedSet = new Set(result.blocked || []);
     setTools((prev) => prev.filter((t) => !ids.includes(t.id) || blockedSet.has(t.id)));
     return result;
+  };
+
+  const createConsumable = async (payload) => {
+    const created = await api.createConsumable(payload);
+    setConsumables((prev) => [...prev, created]);
+  };
+  const toggleConsumable = async (id) => {
+    const updated = await api.toggleConsumableStatus(id);
+    setConsumables((prev) => prev.map((c) => (c.id === id ? { ...c, status: updated.status } : c)));
+  };
+  const importConsumablesToServer = async (rows) => {
+    const result = await api.importConsumables(rows);
+    const list = await api.getConsumables();
+    setConsumables(list);
+    return result;
+  };
+  const deleteConsumableFromServer = async (id) => {
+    await api.deleteConsumable(id);
+    setConsumables((prev) => prev.filter((c) => c.id !== id));
+  };
+  const bulkDeleteConsumablesFromServer = async (ids) => {
+    const result = await api.bulkDeleteConsumables(ids);
+    const blockedSet = new Set(result.blocked || []);
+    setConsumables((prev) => prev.filter((c) => !ids.includes(c.id) || blockedSet.has(c.id)));
+    return result;
+  };
+  const createConsumableReceipt = async (payload) => {
+    const created = await api.createConsumableReceipt(payload);
+    const list = await api.getConsumables();
+    setConsumables(list);
+    return created;
   };
 
   // Tools attached to a Delivery Request come back independently of that
@@ -6187,9 +6564,10 @@ export default function App() {
     reconciliation: ["Reconciliation", ""], reconciliationCreate: ["Reconciliation", ""], reconciliationEdit: ["Reconciliation", "Perbaiki & kirim ulang"],
     stock: ["Warehouse Stock", ""], movement: ["Stock Movement", ""],
     stockTransfer: ["Transfer Stock", "Pindahkan stock antar homebase"],
+    consumableStock: ["Stock Consumable", ""],
     serialDetail: ["Warehouse Stock", "Detail Serial Number"],
     reports: ["Reports", ""], reportsFaulty: ["Reports", ""], reportsRecon: ["Reports", ""],
-    masterMaterial: ["Master Data", ""], masterSite: ["Master Data", ""], masterHomebase: ["Master Data", ""], masterArea: ["Master Data", ""], masterCustomer: ["Master Data", ""],
+    masterMaterial: ["Master Data", ""], masterSite: ["Master Data", ""], masterHomebase: ["Master Data", ""], masterArea: ["Master Data", ""], masterCustomer: ["Master Data", ""], masterConsumable: ["Master Data", ""],
     users: ["User Management", ""], settings: ["Settings", ""],
   };
   const [titleMain, titleSub] = titles[page] || ["TEREX Logistics", ""];
@@ -6209,7 +6587,7 @@ export default function App() {
       const d = deliveries.find((x) => x.id === selectedDelivery);
       content = <DeliveryDetail delivery={d} onBack={() => setSelectedDelivery(null)} onApprove={approveDelivery} onReject={rejectDelivery} onAssignStock={assignDeliveryStock} onShip={shipDelivery} onAddResi={addDeliveryResi} onAddBast={addDeliveryBast} onAddBkbLink={addDeliveryBkbLink} onAdvance={advanceDelivery} onReturnTools={returnDeliveryTools} role={role} materials={materials} tools={tools} api={api} />;
     } else content = <DeliveryList deliveries={deliveries} setSelected={setSelectedDelivery} setPage={goto} role={role} />;
-  } else if (page === "deliveryCreate") content = <DeliveryCreate onSubmit={submitDelivery} onCancel={() => goto("delivery")} materials={materials} tools={tools} sites={sites} homebases={homebases} currentUser={currentUser} customers={customers} api={api} />;
+  } else if (page === "deliveryCreate") content = <DeliveryCreate onSubmit={submitDelivery} onCancel={() => goto("delivery")} materials={materials} tools={tools} consumables={consumables} sites={sites} homebases={homebases} currentUser={currentUser} customers={customers} api={api} />;
   else if (page === "returnFaulty") {
     if (selectedReturn) {
       const r = returns.find((x) => x.id === selectedReturn);
@@ -6263,6 +6641,7 @@ export default function App() {
   else if (page === "movement") content = <StockMovement movements={movements} filter={movementFilter} setFilter={setMovementFilter} deliveries={deliveries} />;
   else if (page === "serialDetail") content = <MaterialSerialDetail material={serialMaterial} api={api} onBack={() => goto("stock")} highlightSerial={highlightSerial} highlightToken={highlightToken} deliveries={deliveries} role={role} showToast={showToast} />;
   else if (page === "toolStock") content = <ToolStockPage tools={tools} setPage={goto} setToolSerialName={setToolSerialName} onSubmitReceipt={createToolReceipt} showToast={showToast} role={role} />;
+  else if (page === "consumableStock") content = <ConsumableStockPage consumables={consumables} onSubmitReceipt={createConsumableReceipt} showToast={showToast} role={role} currentUser={currentUser} customers={customers} />;
   else if (page === "stockTransfer") content = <TransferStockPage materials={materials} homebases={homebases} customers={customers} currentUser={currentUser} role={role} api={api} showToast={showToast} />;
   else if (page === "toolSerialDetail") content = <ToolSerialDetail toolName={toolSerialName} api={api} onBack={() => goto("toolStock")} />;
   else if (page === "reports") content = <ReportsPage
@@ -6407,6 +6786,7 @@ export default function App() {
     }}
   />;
   else if (page === "masterTools") content = <MasterTools tools={tools} onCreate={createToolMaster} onToggle={toggleTool} onDelete={deleteToolFromServer} onBulkDelete={bulkDeleteToolsFromServer} showToast={showToast} />;
+  else if (page === "masterConsumable") content = <MasterConsumable consumables={consumables} onCreate={createConsumable} onToggle={toggleConsumable} onDelete={deleteConsumableFromServer} onBulkDelete={bulkDeleteConsumablesFromServer} showToast={showToast} />;
   else if (page === "users") content = <MasterCrudTable
     title="User Management" subtitle="Kelola akses pengguna sistem"
     entityLabel="User" showToast={showToast}
