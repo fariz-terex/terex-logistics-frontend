@@ -1189,7 +1189,7 @@ function DeliveryCreate({ onSubmit, onCancel, materials, tools, consumables, sit
                       value={qty}
                       onChange={(e) => setQtyDirect(m.id, e.target.value)}
                       onFocus={(e) => e.target.select()}
-                      className="w-14 text-center text-sm font-semibold border border-gray-200 rounded-lg py-1 outline-none focus:border-emerald-600"
+                      className="w-14 text-center text-sm font-semibold border border-gray-200 rounded-lg py-1 outline-none focus:border-emerald-600 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                     />
                     <button onClick={() => updateQty(m.id, 1)} className="w-7 h-7 rounded-full border border-gray-200 flex items-center justify-center hover:bg-gray-100"><Plus size={13} /></button>
                   </div>
