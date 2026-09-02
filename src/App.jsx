@@ -1051,6 +1051,13 @@ function DeliveryCreate({ onSubmit, onCancel, materials, tools, consumables, sit
       return { ...c, [matId]: next };
     });
   };
+  // For items typically requested in bulk (consumables especially — often
+  // dozens or hundreds at once) clicking + repeatedly isn't practical.
+  // Lets the qty be typed directly instead of only stepped.
+  const setQtyDirect = (matId, raw) => {
+    const n = raw === "" ? 0 : Math.max(0, Math.floor(Number(raw)) || 0);
+    setCart((c) => ({ ...c, [matId]: n }));
+  };
 
   const cartItems = Object.entries(cart).filter(([, q]) => q > 0).map(([id, q]) => ({ material: catalogItems.find((m) => m.id === id), qty: q }));
   const step1Valid = homebase && keperluan && (keperluan !== "Other" || otherDesc.trim()) && (!needsDivisionPicker || (customer && divisionStock !== null));
@@ -1176,7 +1183,14 @@ function DeliveryCreate({ onSubmit, onCancel, materials, tools, consumables, sit
                   </div>
                   <div className="flex items-center gap-3">
                     <button onClick={() => updateQty(m.id, -1)} className="w-7 h-7 rounded-full border border-gray-200 flex items-center justify-center hover:bg-gray-100"><Minus size={13} /></button>
-                    <span className="w-6 text-center text-sm font-semibold">{qty}</span>
+                    <input
+                      type="number"
+                      min="0"
+                      value={qty}
+                      onChange={(e) => setQtyDirect(m.id, e.target.value)}
+                      onFocus={(e) => e.target.select()}
+                      className="w-14 text-center text-sm font-semibold border border-gray-200 rounded-lg py-1 outline-none focus:border-emerald-600"
+                    />
                     <button onClick={() => updateQty(m.id, 1)} className="w-7 h-7 rounded-full border border-gray-200 flex items-center justify-center hover:bg-gray-100"><Plus size={13} /></button>
                   </div>
                 </div>
