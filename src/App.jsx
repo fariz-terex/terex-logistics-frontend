@@ -2060,8 +2060,16 @@ function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMateri
   // minStock/transit) — this endpoint returns raw snake_case, so skipping
   // that step silently breaks the table's Total column (NaN).
   const [scopedMaterials, setScopedMaterials] = useState(null);
+  // Tracked separately from `scopedMaterials === null` so the two "not
+  // ready yet" states can't be confused: null also means "the fetch
+  // failed" once loading is done, at which point falling back to the
+  // unfiltered `materials` prop is a reasonable last resort — but while
+  // still loading, showing that same unfiltered prop is exactly the
+  // "everyone's materials flash for a moment" bug this guards against.
+  const [loadingScoped, setLoadingScoped] = useState(role !== ROLES.MANAGER);
   React.useEffect(() => {
     if (role === ROLES.MANAGER) return;
+    setLoadingScoped(true);
     api.getStock(undefined, true)
       .then((rows) => setScopedMaterials(rows.map((m) => ({
         id: m.id, name: m.name, category: m.category, unit: m.unit,
@@ -2069,7 +2077,8 @@ function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMateri
         status: m.status, ready: m.ready, faulty: m.faulty, reserved: m.reserved,
         transit: m.in_transit ?? m.transit,
       }))))
-      .catch(() => setScopedMaterials(null));
+      .catch(() => setScopedMaterials(null))
+      .finally(() => setLoadingScoped(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [role]);
 
@@ -2101,7 +2110,9 @@ function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMateri
 
   const displayMaterials = divisionFilter && divisionMaterials
     ? divisionMaterials
-    : (role === ROLES.MANAGER ? materials : (scopedMaterials || materials));
+    : role === ROLES.MANAGER
+      ? materials
+      : loadingScoped ? [] : (scopedMaterials || materials);
 
   const filtered = displayMaterials.filter((m) => m.name.toLowerCase().includes(search.toLowerCase()));
 
@@ -2151,7 +2162,9 @@ function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMateri
             </tr>
           </thead>
           <tbody>
-            {filtered.map((m) => {
+            {loadingScoped ? (
+              <tr><td colSpan={8}><div className="py-10 text-center text-sm text-gray-400">Memuat data...</div></td></tr>
+            ) : filtered.map((m) => {
               const total = m.ready + m.faulty + m.reserved + m.transit;
               const low = m.ready <= m.minStock;
               return (
