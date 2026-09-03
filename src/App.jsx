@@ -5778,8 +5778,8 @@ function createApiClient(baseUrl, getToken) {
 // and matches the app's green palette exactly.
 function LoginIllustration() {
   return (
-    <div className="relative w-full max-w-md mx-auto">
-      <svg viewBox="0 0 560 340" className="w-full h-auto" fill="none">
+    <div className="relative inline-block h-full mx-auto">
+      <svg viewBox="0 0 560 340" className="h-full w-auto" fill="none">
         {/* soft background clouds */}
         <circle cx="90" cy="60" r="34" fill="#FFFFFF" opacity="0.5" />
         <circle cx="118" cy="70" r="24" fill="#FFFFFF" opacity="0.5" />
@@ -5867,13 +5867,13 @@ function LoginScreen({ apiBase, setApiBase, onLogin }) {
   ];
 
   return (
-    <div className="min-h-screen flex flex-col lg:flex-row bg-gray-50">
+    <div className="h-screen overflow-hidden flex flex-col lg:flex-row bg-gray-50">
       {/* Branding panel — hidden on small screens, shown as a split panel from lg breakpoint up */}
-      <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden bg-gradient-to-br from-emerald-50 via-emerald-50 to-white p-12 flex-col justify-between">
+      <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden bg-gradient-to-br from-emerald-50 via-emerald-50 to-white p-8 xl:p-10 flex-col justify-between">
         <div>
           <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-2xl bg-emerald-800 flex items-center justify-center">
-              <Truck size={22} className="text-white" />
+            <div className="w-10 h-10 rounded-2xl bg-emerald-800 flex items-center justify-center">
+              <Truck size={20} className="text-white" />
             </div>
             <div>
               <div className="text-lg font-bold text-emerald-900 leading-tight">TEREX</div>
@@ -5881,57 +5881,59 @@ function LoginScreen({ apiBase, setApiBase, onLogin }) {
             </div>
           </div>
 
-          <div className="mt-14">
-            <div className="text-2xl text-gray-600">Selamat Datang di</div>
-            <div className="text-4xl font-bold text-emerald-900 mt-1">TEREX Logistics</div>
-            <div className="text-lg text-gray-500 mt-3">Logistics Management System</div>
-            <div className="w-14 h-1 bg-emerald-700 rounded-full mt-4 mb-5" />
-            <p className="text-gray-500 max-w-sm leading-relaxed">
+          <div className="mt-6">
+            <div className="text-xl text-gray-600">Selamat Datang di</div>
+            <div className="text-3xl font-bold text-emerald-900 mt-1">TEREX Logistics</div>
+            <div className="text-base text-gray-500 mt-2">Logistics Management System</div>
+            <div className="w-14 h-1 bg-emerald-700 rounded-full mt-3 mb-3" />
+            <p className="text-sm text-gray-500 max-w-sm leading-relaxed">
               Kelola material, delivery, return faulty dan rekonsiliasi dalam satu sistem yang terintegrasi.
             </p>
           </div>
         </div>
 
-        <LoginIllustration />
+        <div className="h-[34vh] flex items-center justify-center overflow-hidden">
+          <LoginIllustration />
+        </div>
 
         <div>
-          <div className="grid grid-cols-3 gap-5 mt-4">
+          <div className="grid grid-cols-3 gap-4">
             {features.map((f) => (
-              <div key={f.title} className="flex flex-col gap-2">
-                <div className="w-9 h-9 rounded-full bg-white border border-emerald-100 flex items-center justify-center">
-                  <f.icon size={16} className="text-emerald-700" />
+              <div key={f.title} className="flex flex-col gap-1.5">
+                <div className="w-8 h-8 rounded-full bg-white border border-emerald-100 flex items-center justify-center">
+                  <f.icon size={14} className="text-emerald-700" />
                 </div>
                 <div className="text-sm font-semibold text-gray-800">{f.title}</div>
                 <div className="text-xs text-gray-500 leading-snug">{f.desc}</div>
               </div>
             ))}
           </div>
-          <div className="text-xs text-gray-400 mt-10">© 2026 TEREX Logistics · Internal Use Only</div>
+          <div className="text-xs text-gray-400 mt-4">© 2026 TEREX Logistics · Internal Use Only</div>
         </div>
       </div>
 
       {/* Form panel */}
-      <div className="flex-1 flex items-center justify-center p-4 sm:p-8">
+      <div className="flex-1 flex items-center justify-center p-4 overflow-y-auto">
         <div className="w-full max-w-sm">
-          <div className="lg:hidden text-center mb-8">
-            <div className="w-14 h-14 rounded-2xl bg-emerald-800 flex items-center justify-center mx-auto mb-3">
-              <Truck size={26} className="text-white" />
+          <div className="lg:hidden text-center mb-5">
+            <div className="w-12 h-12 rounded-2xl bg-emerald-800 flex items-center justify-center mx-auto mb-2">
+              <Truck size={22} className="text-white" />
             </div>
-            <div className="text-xl font-bold text-emerald-900">TEREX Logistics</div>
+            <div className="text-lg font-bold text-emerald-900">TEREX Logistics</div>
             <div className="text-xs text-gray-500 mt-0.5">Logistics Management System</div>
           </div>
 
-          <div className="text-center mb-7">
-            <div className="hidden lg:flex w-16 h-16 rounded-full bg-emerald-50 items-center justify-center mx-auto mb-4">
-              <Truck size={28} className="text-emerald-700" />
+          <div className="text-center mb-5">
+            <div className="hidden lg:flex w-14 h-14 rounded-full bg-emerald-50 items-center justify-center mx-auto mb-3">
+              <Truck size={24} className="text-emerald-700" />
             </div>
-            <div className="text-2xl font-bold text-gray-900">Welcome Back!</div>
+            <div className="text-xl font-bold text-gray-900">Welcome Back!</div>
             <div className="text-sm text-gray-500 mt-1">Masuk untuk melanjutkan ke sistem</div>
           </div>
 
-          {error && <div className="bg-red-50 border border-red-100 text-red-700 text-sm rounded-lg px-3 py-2 mb-4">{error}</div>}
+          {error && <div className="bg-red-50 border border-red-100 text-red-700 text-sm rounded-lg px-3 py-2 mb-3">{error}</div>}
 
-          <form onSubmit={(e) => { e.preventDefault(); doLogin(username, password); }} className="space-y-4">
+          <form onSubmit={(e) => { e.preventDefault(); doLogin(username, password); }} className="space-y-3">
             <div>
               <label className="text-sm font-medium text-gray-700">Username</label>
               <div className="relative mt-1.5">
@@ -5967,7 +5969,7 @@ function LoginScreen({ apiBase, setApiBase, onLogin }) {
             <PrimaryButton type="submit" disabled={loading} className="w-full justify-center py-2.5">{loading ? "Masuk..." : "MASUK"}</PrimaryButton>
           </form>
 
-          <div className="lg:hidden text-center text-xs text-gray-400 mt-8">© 2026 TEREX Logistics · Internal Use Only</div>
+          <div className="lg:hidden text-center text-xs text-gray-400 mt-4">© 2026 TEREX Logistics · Internal Use Only</div>
         </div>
       </div>
     </div>
