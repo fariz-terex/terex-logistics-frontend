@@ -2054,11 +2054,21 @@ function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMateri
   // the first time is normal, but on THIS page it's just noise: rows for
   // materials their divisions have literally never touched. Fetch a
   // narrower, page-local view instead. Manager keeps seeing everything, as
-  // before — they're meant to have the full picture here.
+  // before — they're meant to have the full picture here. Normalized the
+  // same way as the shared `materials` prop (min_stock/in_transit ->
+  // minStock/transit) — this endpoint returns raw snake_case, so skipping
+  // that step silently breaks the table's Total column (NaN).
   const [scopedMaterials, setScopedMaterials] = useState(null);
   React.useEffect(() => {
     if (role === ROLES.MANAGER) return;
-    api.getStock(undefined, true).then(setScopedMaterials).catch(() => setScopedMaterials(null));
+    api.getStock(undefined, true)
+      .then((rows) => setScopedMaterials(rows.map((m) => ({
+        id: m.id, name: m.name, category: m.category, unit: m.unit,
+        serialized: !!m.serialized, minStock: m.min_stock ?? m.minStock,
+        status: m.status, ready: m.ready, faulty: m.faulty, reserved: m.reserved,
+        transit: m.in_transit ?? m.transit,
+      }))))
+      .catch(() => setScopedMaterials(null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [role]);
 
@@ -2071,7 +2081,21 @@ function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMateri
   const [divisionMaterials, setDivisionMaterials] = useState(null);
   React.useEffect(() => {
     if (!divisionFilter) { setDivisionMaterials(null); return; }
-    api.getStock(divisionFilter).then(setDivisionMaterials).catch(() => setDivisionMaterials(null));
+    // `true` = onlyWithHistory: hides materials this division has never
+    // actually had stock for — otherwise every material company-wide
+    // shows up as a row of zeros, which is just noise once drilled into
+    // one division. Also normalize here (min_stock/in_transit -> minStock/
+    // transit) same as the shared `materials` prop already is, or the
+    // table's Total column silently breaks (NaN) reading fields that
+    // don't exist under those snake_case names.
+    api.getStock(divisionFilter, true)
+      .then((rows) => setDivisionMaterials(rows.map((m) => ({
+        id: m.id, name: m.name, category: m.category, unit: m.unit,
+        serialized: !!m.serialized, minStock: m.min_stock ?? m.minStock,
+        status: m.status, ready: m.ready, faulty: m.faulty, reserved: m.reserved,
+        transit: m.in_transit ?? m.transit,
+      }))))
+      .catch(() => setDivisionMaterials(null));
   }, [divisionFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const displayMaterials = divisionFilter && divisionMaterials
