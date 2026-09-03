@@ -3,7 +3,8 @@ import {
   LayoutDashboard, Package, Truck, Undo2, ClipboardList, Boxes, ArrowLeftRight,
   FileBarChart, Database, Users, Settings as SettingsIcon, ChevronDown, ChevronRight, ChevronUp, ArrowUpDown,
   Search, Bell, LogOut, Plus, Minus, X, Check, AlertTriangle, Camera, ChevronLeft,
-  Filter, Download, Upload, Eye, MapPin, Phone, User as UserIcon, Menu, FileText, Wrench, HelpCircle
+  Filter, Download, Upload, Eye, EyeOff, MapPin, Phone, User as UserIcon, Menu, FileText, Wrench, HelpCircle,
+  Lock, ShieldCheck, Clock3, BarChart3, RefreshCw, PackageCheck
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
@@ -5770,9 +5771,77 @@ function createApiClient(baseUrl, getToken) {
    LOGIN SCREEN
    ============================================================ */
 
+// Hand-drawn-style illustration for the login branding panel: a warehouse
+// shipping out to a homebase, with a truck in transit and three small
+// badge icons marking the stages (sync, package, destination). Pure SVG
+// shapes only — no external image assets — so it always renders instantly
+// and matches the app's green palette exactly.
+function LoginIllustration() {
+  return (
+    <div className="relative w-full max-w-md mx-auto">
+      <svg viewBox="0 0 560 340" className="w-full h-auto" fill="none">
+        {/* soft background clouds */}
+        <circle cx="90" cy="60" r="34" fill="#FFFFFF" opacity="0.5" />
+        <circle cx="118" cy="70" r="24" fill="#FFFFFF" opacity="0.5" />
+        <circle cx="460" cy="50" r="26" fill="#FFFFFF" opacity="0.4" />
+        <circle cx="488" cy="60" r="18" fill="#FFFFFF" opacity="0.4" />
+        {/* ground line */}
+        <line x1="10" y1="300" x2="550" y2="300" stroke="#A7D7C5" strokeWidth="2" />
+
+        {/* dashed route from warehouse to homebase */}
+        <path d="M 150 190 C 230 130, 320 130, 400 175" stroke="#2F855A" strokeWidth="2.5" strokeDasharray="7 7" fill="none" />
+
+        {/* Warehouse */}
+        <g>
+          <rect x="20" y="175" width="150" height="115" fill="#FFFFFF" stroke="#2F855A" strokeWidth="2" />
+          <polygon points="10,175 95,120 180,175" fill="#276749" />
+          <rect x="75" y="220" width="40" height="70" fill="#1C4532" />
+          <rect x="30" y="150" width="70" height="20" rx="3" fill="#276749" />
+          <text x="65" y="164" fontSize="10" fontWeight="700" fill="#FFFFFF" fontFamily="Inter, sans-serif">WAREHOUSE</text>
+          {/* boxes */}
+          <rect x="130" y="255" width="28" height="28" fill="#D6BB92" stroke="#A9825A" />
+          <rect x="145" y="235" width="24" height="24" fill="#E8CFA3" stroke="#A9825A" />
+        </g>
+
+        {/* Homebase */}
+        <g>
+          <rect x="400" y="200" width="110" height="90" fill="#FFFFFF" stroke="#2F855A" strokeWidth="2" />
+          <polygon points="392,200 455,165 518,200" fill="#276749" />
+          <rect x="440" y="240" width="30" height="50" fill="#1C4532" />
+          <rect x="405" y="180" width="65" height="18" rx="3" fill="#276749" />
+          <text x="413" y="193" fontSize="9" fontWeight="700" fill="#FFFFFF" fontFamily="Inter, sans-serif">HOMEBASE</text>
+        </g>
+
+        {/* Truck, mid-route */}
+        <g transform="translate(220,225)">
+          <rect x="0" y="10" width="95" height="35" rx="4" fill="#FFFFFF" stroke="#2F855A" strokeWidth="2" />
+          <path d="M 95 15 L 122 15 L 132 32 L 132 45 L 95 45 Z" fill="#FFFFFF" stroke="#2F855A" strokeWidth="2" />
+          <rect x="102" y="20" width="20" height="12" fill="#A7D7C5" />
+          <circle cx="22" cy="50" r="10" fill="#1C4532" />
+          <circle cx="112" cy="50" r="10" fill="#1C4532" />
+          <rect x="14" y="20" width="18" height="16" rx="2" fill="#276749" />
+        </g>
+      </svg>
+
+      {/* badge icons along the route */}
+      <div className="absolute left-[38%] top-[28%] w-9 h-9 rounded-full bg-white border-2 border-emerald-200 shadow-sm flex items-center justify-center">
+        <RefreshCw size={15} className="text-emerald-700" />
+      </div>
+      <div className="absolute left-[24%] top-[54%] w-9 h-9 rounded-full bg-white border-2 border-emerald-200 shadow-sm flex items-center justify-center">
+        <PackageCheck size={15} className="text-emerald-700" />
+      </div>
+      <div className="absolute left-[68%] top-[42%] w-9 h-9 rounded-full bg-white border-2 border-emerald-200 shadow-sm flex items-center justify-center">
+        <MapPin size={15} className="text-emerald-700" />
+      </div>
+    </div>
+  );
+}
+
 function LoginScreen({ apiBase, setApiBase, onLogin }) {
-  const [username, setUsername] = useState("");
+  const [username, setUsername] = useState(() => localStorage.getItem("terex_remembered_username") || "");
   const [password, setPassword] = useState("");
+  const [rememberMe, setRememberMe] = useState(() => !!localStorage.getItem("terex_remembered_username"));
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -5781,6 +5850,8 @@ function LoginScreen({ apiBase, setApiBase, onLogin }) {
     try {
       const client = createApiClient(apiBase, () => null);
       const result = await client.login(loginUsername, loginPassword);
+      if (rememberMe) localStorage.setItem("terex_remembered_username", loginUsername);
+      else localStorage.removeItem("terex_remembered_username");
       onLogin(result.token, result.user);
     } catch (err) {
       setError(err.message || "Login gagal — periksa kembali API URL dan koneksi ke backend.");
@@ -5789,24 +5860,116 @@ function LoginScreen({ apiBase, setApiBase, onLogin }) {
     }
   };
 
+  const features = [
+    { icon: ShieldCheck, title: "Aman", desc: "Data Anda terlindungi dengan sistem keamanan berlapis" },
+    { icon: Clock3, title: "Efisien", desc: "Proses lebih cepat dan mudah dengan sistem terintegrasi" },
+    { icon: BarChart3, title: "Terintegrasi", desc: "Semua aktivitas logistik dalam satu platform" },
+  ];
+
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-      <Card className="w-full max-w-md p-8 space-y-6">
-        <div className="text-center">
-          <div className="w-14 h-14 rounded-2xl bg-emerald-800 flex items-center justify-center mx-auto mb-3">
-            <Truck size={26} className="text-white" />
+    <div className="min-h-screen flex flex-col lg:flex-row bg-gray-50">
+      {/* Branding panel — hidden on small screens, shown as a split panel from lg breakpoint up */}
+      <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden bg-gradient-to-br from-emerald-50 via-emerald-50 to-white p-12 flex-col justify-between">
+        <div>
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-2xl bg-emerald-800 flex items-center justify-center">
+              <Truck size={22} className="text-white" />
+            </div>
+            <div>
+              <div className="text-lg font-bold text-emerald-900 leading-tight">TEREX</div>
+              <div className="text-[10px] tracking-wide text-emerald-700 leading-tight">LOGISTICS</div>
+            </div>
           </div>
-          <div className="text-2xl font-bold text-emerald-900">TEREX Logistics</div>
-          <div className="text-sm text-gray-500 mt-1">Masuk untuk melanjutkan</div>
+
+          <div className="mt-14">
+            <div className="text-2xl text-gray-600">Selamat Datang di</div>
+            <div className="text-4xl font-bold text-emerald-900 mt-1">TEREX Logistics</div>
+            <div className="text-lg text-gray-500 mt-3">Logistics Management System</div>
+            <div className="w-14 h-1 bg-emerald-700 rounded-full mt-4 mb-5" />
+            <p className="text-gray-500 max-w-sm leading-relaxed">
+              Kelola material, delivery, return faulty dan rekonsiliasi dalam satu sistem yang terintegrasi.
+            </p>
+          </div>
         </div>
 
-        {error && <div className="bg-red-50 border border-red-100 text-red-700 text-sm rounded-lg px-3 py-2">{error}</div>}
-        <form onSubmit={(e) => { e.preventDefault(); doLogin(username, password); }} className="space-y-3">
-          <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Username" type="text" autoCapitalize="none" autoCorrect="off" className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
-          <input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" type="password" className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
-          <PrimaryButton type="submit" disabled={loading} className="w-full">{loading ? "Masuk..." : "Masuk"}</PrimaryButton>
-        </form>
-      </Card>
+        <LoginIllustration />
+
+        <div>
+          <div className="grid grid-cols-3 gap-5 mt-4">
+            {features.map((f) => (
+              <div key={f.title} className="flex flex-col gap-2">
+                <div className="w-9 h-9 rounded-full bg-white border border-emerald-100 flex items-center justify-center">
+                  <f.icon size={16} className="text-emerald-700" />
+                </div>
+                <div className="text-sm font-semibold text-gray-800">{f.title}</div>
+                <div className="text-xs text-gray-500 leading-snug">{f.desc}</div>
+              </div>
+            ))}
+          </div>
+          <div className="text-xs text-gray-400 mt-10">© 2026 TEREX Logistics · Internal Use Only</div>
+        </div>
+      </div>
+
+      {/* Form panel */}
+      <div className="flex-1 flex items-center justify-center p-4 sm:p-8">
+        <div className="w-full max-w-sm">
+          <div className="lg:hidden text-center mb-8">
+            <div className="w-14 h-14 rounded-2xl bg-emerald-800 flex items-center justify-center mx-auto mb-3">
+              <Truck size={26} className="text-white" />
+            </div>
+            <div className="text-xl font-bold text-emerald-900">TEREX Logistics</div>
+            <div className="text-xs text-gray-500 mt-0.5">Logistics Management System</div>
+          </div>
+
+          <div className="text-center mb-7">
+            <div className="hidden lg:flex w-16 h-16 rounded-full bg-emerald-50 items-center justify-center mx-auto mb-4">
+              <Truck size={28} className="text-emerald-700" />
+            </div>
+            <div className="text-2xl font-bold text-gray-900">Welcome Back!</div>
+            <div className="text-sm text-gray-500 mt-1">Masuk untuk melanjutkan ke sistem</div>
+          </div>
+
+          {error && <div className="bg-red-50 border border-red-100 text-red-700 text-sm rounded-lg px-3 py-2 mb-4">{error}</div>}
+
+          <form onSubmit={(e) => { e.preventDefault(); doLogin(username, password); }} className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-gray-700">Username</label>
+              <div className="relative mt-1.5">
+                <UserIcon size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input
+                  value={username} onChange={(e) => setUsername(e.target.value)}
+                  placeholder="Masukkan username" type="text" autoCapitalize="none" autoCorrect="off"
+                  className="w-full border border-gray-200 rounded-lg pl-10 pr-3 py-2.5 text-sm outline-none focus:border-emerald-600"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="text-sm font-medium text-gray-700">Password</label>
+              <div className="relative mt-1.5">
+                <Lock size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input
+                  value={password} onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Masukkan password" type={showPassword ? "text" : "password"}
+                  className="w-full border border-gray-200 rounded-lg pl-10 pr-10 py-2.5 text-sm outline-none focus:border-emerald-600"
+                />
+                <button type="button" onClick={() => setShowPassword((v) => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+            </div>
+
+            <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
+              <input type="checkbox" checked={rememberMe} onChange={(e) => setRememberMe(e.target.checked)} className="accent-emerald-800 w-4 h-4" />
+              Ingat saya
+            </label>
+
+            <PrimaryButton type="submit" disabled={loading} className="w-full justify-center py-2.5">{loading ? "Masuk..." : "MASUK"}</PrimaryButton>
+          </form>
+
+          <div className="lg:hidden text-center text-xs text-gray-400 mt-8">© 2026 TEREX Logistics · Internal Use Only</div>
+        </div>
+      </div>
     </div>
   );
 }
