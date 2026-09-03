@@ -5695,6 +5695,8 @@ function createApiClient(baseUrl, getToken) {
     getTransferOptions: (material, customer) => request(`/stock/transfer-options?material=${encodeURIComponent(material)}&customer=${encodeURIComponent(customer)}`),
     getTransfers: () => request("/stock/transfers"),
     createTransfer: (payload) => request("/stock/transfers", { method: "POST", body: payload }),
+    getPhantomStockRows: () => request("/stock/phantom-check"),
+    cleanupPhantomStockRows: () => request("/stock/phantom-cleanup", { method: "POST" }),
     getMovements: (material) => request(`/stock/movements${material ? `?material=${encodeURIComponent(material)}` : ""}`),
     getSerials: (material, status, customer, homebase) => {
       const params = new URLSearchParams();
@@ -5806,6 +5808,79 @@ function LoginScreen({ apiBase, setApiBase, onLogin }) {
         </form>
       </Card>
     </div>
+  );
+}
+
+function PhantomStockCleanup({ api, showToast }) {
+  const [rows, setRows] = useState(null); // null = not checked yet
+  const [checking, setChecking] = useState(false);
+  const [cleaning, setCleaning] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  const check = async () => {
+    setChecking(true);
+    try {
+      const result = await api.getPhantomStockRows();
+      setRows(result.rows);
+    } catch (err) {
+      showToast(err.message || "Gagal memeriksa data");
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const cleanup = async () => {
+    setCleaning(true);
+    try {
+      const result = await api.cleanupPhantomStockRows();
+      showToast(`${result.deleted} baris data kosong berhasil dibersihkan`);
+      setRows([]);
+    } catch (err) {
+      showToast(err.message || "Gagal membersihkan data");
+    } finally {
+      setCleaning(false);
+    }
+  };
+
+  return (
+    <Card className="p-5 space-y-3 text-sm">
+      <div>
+        <div className="font-semibold text-gray-800">Pembersihan Data Stock Kosong</div>
+        <div className="text-gray-500 text-xs mt-1">
+          Cek apakah ada baris data stock per-divisi yang "kosong" (tidak pernah ada transaksi asli — bukan sekadar stock yang sudah habis). Ini yang menyebabkan material tampil di filter divisi Warehouse Stock padahal divisi itu tidak pernah menerimanya.
+        </div>
+      </div>
+
+      <GhostButton onClick={check} disabled={checking}>{checking ? "Memeriksa..." : "Cek Data"}</GhostButton>
+
+      {rows !== null && (
+        <div className="pt-2 border-t border-gray-50">
+          {rows.length === 0 ? (
+            <div className="text-emerald-700 text-xs">✓ Tidak ada data kosong yang ditemukan.</div>
+          ) : (
+            <>
+              <div className="text-red-600 text-xs font-medium mb-2">{rows.length} baris data kosong ditemukan:</div>
+              <div className="max-h-40 overflow-y-auto border border-gray-100 rounded-lg divide-y divide-gray-50 mb-3">
+                {rows.map((r, i) => (
+                  <div key={i} className="px-3 py-1.5 text-xs text-gray-600">{r.material} — <span className="text-gray-400">{r.customer}</span></div>
+                ))}
+              </div>
+              <DangerButton onClick={() => setConfirmOpen(true)} disabled={cleaning}>{cleaning ? "Membersihkan..." : `Bersihkan ${rows.length} Baris Ini`}</DangerButton>
+            </>
+          )}
+        </div>
+      )}
+
+      <ConfirmDialog
+        open={confirmOpen}
+        title="Bersihkan Data Kosong"
+        message={`${rows?.length || 0} baris data akan dihapus permanen. Sistem sudah memverifikasi tidak ada riwayat transaksi asli di baris-baris ini. Lanjutkan?`}
+        confirmLabel="Ya, Bersihkan"
+        danger
+        onConfirm={() => { setConfirmOpen(false); cleanup(); }}
+        onCancel={() => setConfirmOpen(false)}
+      />
+    </Card>
   );
 }
 
@@ -6826,6 +6901,7 @@ export default function App() {
           <DangerButton onClick={handleLogout}><LogOut size={14} /> Logout</DangerButton>
         </div>
       </Card>
+      {role === ROLES.MANAGER && <PhantomStockCleanup api={api} showToast={showToast} />}
     </div>
   );
 
