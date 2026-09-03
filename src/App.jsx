@@ -4,7 +4,7 @@ import {
   FileBarChart, Database, Users, Settings as SettingsIcon, ChevronDown, ChevronRight, ChevronUp, ArrowUpDown,
   Search, Bell, LogOut, Plus, Minus, X, Check, AlertTriangle, Camera, ChevronLeft,
   Filter, Download, Upload, Eye, EyeOff, MapPin, Phone, User as UserIcon, Menu, FileText, Wrench, HelpCircle,
-  Lock, ShieldCheck, Clock3, BarChart3, RefreshCw, PackageCheck
+  Lock, ShieldCheck, Clock3, BarChart3
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
@@ -5771,77 +5771,6 @@ function createApiClient(baseUrl, getToken) {
    LOGIN SCREEN
    ============================================================ */
 
-// Hand-drawn-style illustration for the login branding panel: a warehouse
-// shipping out to a homebase, with a truck in transit and three small
-// badge icons marking the stages (sync, package, destination). Pure SVG
-// shapes only — no external image assets — so it always renders instantly
-// and matches the app's green palette exactly.
-function LoginIllustration() {
-  return (
-    <div className="relative w-full max-w-md mx-auto">
-      <svg viewBox="0 0 600 265" className="w-full h-auto" fill="none">
-        {/* soft background clouds, tucked into the corners so they never cross the route */}
-        <circle cx="80" cy="45" r="28" fill="#FFFFFF" opacity="0.5" />
-        <circle cx="105" cy="55" r="20" fill="#FFFFFF" opacity="0.5" />
-        <circle cx="500" cy="35" r="24" fill="#FFFFFF" opacity="0.4" />
-        <circle cx="525" cy="45" r="16" fill="#FFFFFF" opacity="0.4" />
-
-        {/* ground line + soft contact shadows, drawn before the objects that sit on them */}
-        <line x1="20" y1="225" x2="580" y2="225" stroke="#A7D7C5" strokeWidth="2" />
-        <ellipse cx="125" cy="226" rx="82" ry="6" fill="#2F855A" opacity="0.12" />
-        <ellipse cx="300" cy="226" rx="62" ry="6" fill="#2F855A" opacity="0.12" />
-        <ellipse cx="485" cy="226" rx="58" ry="6" fill="#2F855A" opacity="0.12" />
-
-        {/* dashed route, arcing over the truck from warehouse roof to homebase roof —
-            the three badges below sit at exact points along this same curve */}
-        <path d="M 170 105 Q 300 40 450 120" stroke="#2F855A" strokeWidth="2.5" strokeDasharray="7 7" fill="none" strokeLinecap="round" />
-
-        {/* Warehouse */}
-        <g>
-          <polygon points="40,120 125,65 210,120" fill="#276749" />
-          <rect x="50" y="120" width="150" height="105" fill="#FFFFFF" stroke="#2F855A" strokeWidth="2" />
-          <rect x="105" y="170" width="35" height="55" fill="#1C4532" />
-          <rect x="160" y="180" width="28" height="28" fill="#E8CFA3" stroke="#A9825A" strokeWidth="1.5" />
-          <rect x="143" y="197" width="32" height="32" fill="#D6BB92" stroke="#A9825A" strokeWidth="1.5" />
-        </g>
-        <text x="125" y="245" textAnchor="middle" fontSize="12" fontWeight="700" letterSpacing="1" fill="#276749" fontFamily="Inter, sans-serif">WAREHOUSE</text>
-
-        {/* Homebase */}
-        <g>
-          <polygon points="422,145 485,100 548,145" fill="#276749" />
-          <rect x="430" y="145" width="110" height="80" fill="#FFFFFF" stroke="#2F855A" strokeWidth="2" />
-          <rect x="468" y="185" width="25" height="40" fill="#1C4532" />
-        </g>
-        <text x="485" y="245" textAnchor="middle" fontSize="12" fontWeight="700" letterSpacing="1" fill="#276749" fontFamily="Inter, sans-serif">HOMEBASE</text>
-
-        {/* Truck, centered on the ground beneath the arc's apex */}
-        <g>
-          <rect x="240" y="185" width="75" height="35" rx="4" fill="#FFFFFF" stroke="#2F855A" strokeWidth="2" />
-          <rect x="315" y="170" width="45" height="50" rx="6" fill="#FFFFFF" stroke="#2F855A" strokeWidth="2" />
-          <rect x="322" y="178" width="20" height="16" rx="2" fill="#A7D7C5" />
-          <rect x="253" y="197" width="14" height="10" rx="2" fill="#276749" />
-          <circle cx="265" cy="213" r="12" fill="#1C4532" />
-          <circle cx="335" cy="213" r="12" fill="#1C4532" />
-          <circle cx="265" cy="213" r="4" fill="#4A5568" />
-          <circle cx="335" cy="213" r="4" fill="#4A5568" />
-        </g>
-      </svg>
-
-      {/* badge icons, positioned as percentages of the viewBox so they land
-          exactly on the three points computed along the path curve above */}
-      <div className="absolute left-[39.3%] top-[30.9%] -translate-x-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-white border-2 border-emerald-200 shadow-sm flex items-center justify-center">
-        <RefreshCw size={15} className="text-emerald-700" />
-      </div>
-      <div className="absolute left-[50.8%] top-[28.7%] -translate-x-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-white border-2 border-emerald-200 shadow-sm flex items-center justify-center">
-        <PackageCheck size={15} className="text-emerald-700" />
-      </div>
-      <div className="absolute left-[62.7%] top-[33.6%] -translate-x-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-white border-2 border-emerald-200 shadow-sm flex items-center justify-center">
-        <MapPin size={15} className="text-emerald-700" />
-      </div>
-    </div>
-  );
-}
-
 function LoginScreen({ apiBase, setApiBase, onLogin }) {
   const [username, setUsername] = useState(() => localStorage.getItem("terex_remembered_username") || "");
   const [password, setPassword] = useState("");
@@ -5895,10 +5824,6 @@ function LoginScreen({ apiBase, setApiBase, onLogin }) {
               Kelola material, delivery, return faulty dan rekonsiliasi dalam satu sistem yang terintegrasi.
             </p>
           </div>
-        </div>
-
-        <div className="flex items-center justify-center">
-          <LoginIllustration />
         </div>
 
         <div>
