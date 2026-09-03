@@ -2061,7 +2061,22 @@ function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMateri
     api.getStock(undefined, true).then(setScopedMaterials).catch(() => setScopedMaterials(null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [role]);
-  const displayMaterials = role === ROLES.MANAGER ? materials : (scopedMaterials || materials);
+
+  // Optional drill-down to ONE specific division instead of the aggregate
+  // (the grand total for Manager, or the summed total across every
+  // division a scoped user covers). Reuses the same `customer` override
+  // /api/stock already supports for the Delivery Request picker.
+  const [divisionFilter, setDivisionFilter] = useState("");
+  const divisionOptions = role === ROLES.MANAGER ? customers.filter((c) => c.status === "Active").map((c) => c.name) : (currentUser?.customers || []);
+  const [divisionMaterials, setDivisionMaterials] = useState(null);
+  React.useEffect(() => {
+    if (!divisionFilter) { setDivisionMaterials(null); return; }
+    api.getStock(divisionFilter).then(setDivisionMaterials).catch(() => setDivisionMaterials(null));
+  }, [divisionFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const displayMaterials = divisionFilter && divisionMaterials
+    ? divisionMaterials
+    : (role === ROLES.MANAGER ? materials : (scopedMaterials || materials));
 
   const filtered = displayMaterials.filter((m) => m.name.toLowerCase().includes(search.toLowerCase()));
 
@@ -2083,9 +2098,17 @@ function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMateri
         />
       )}
 
-      <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2.5 w-80">
-        <Search size={16} className="text-gray-400" />
-        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari material..." className="bg-transparent text-sm outline-none w-full" />
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2.5 w-80">
+          <Search size={16} className="text-gray-400" />
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari material..." className="bg-transparent text-sm outline-none w-full" />
+        </div>
+        {divisionOptions.length > 1 && (
+          <select value={divisionFilter} onChange={(e) => setDivisionFilter(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none bg-white text-gray-600">
+            <option value="">Semua Divisi (Total)</option>
+            {divisionOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        )}
       </div>
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">
