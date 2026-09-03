@@ -5778,59 +5778,64 @@ function createApiClient(baseUrl, getToken) {
 // and matches the app's green palette exactly.
 function LoginIllustration() {
   return (
-    <div className="relative inline-block h-full mx-auto">
-      <svg viewBox="0 0 560 340" className="h-full w-auto" fill="none">
-        {/* soft background clouds */}
-        <circle cx="90" cy="60" r="34" fill="#FFFFFF" opacity="0.5" />
-        <circle cx="118" cy="70" r="24" fill="#FFFFFF" opacity="0.5" />
-        <circle cx="460" cy="50" r="26" fill="#FFFFFF" opacity="0.4" />
-        <circle cx="488" cy="60" r="18" fill="#FFFFFF" opacity="0.4" />
-        {/* ground line */}
-        <line x1="10" y1="300" x2="550" y2="300" stroke="#A7D7C5" strokeWidth="2" />
+    <div className="relative w-full max-w-md mx-auto">
+      <svg viewBox="0 0 600 265" className="w-full h-auto" fill="none">
+        {/* soft background clouds, tucked into the corners so they never cross the route */}
+        <circle cx="80" cy="45" r="28" fill="#FFFFFF" opacity="0.5" />
+        <circle cx="105" cy="55" r="20" fill="#FFFFFF" opacity="0.5" />
+        <circle cx="500" cy="35" r="24" fill="#FFFFFF" opacity="0.4" />
+        <circle cx="525" cy="45" r="16" fill="#FFFFFF" opacity="0.4" />
 
-        {/* dashed route from warehouse to homebase */}
-        <path d="M 150 190 C 230 130, 320 130, 400 175" stroke="#2F855A" strokeWidth="2.5" strokeDasharray="7 7" fill="none" />
+        {/* ground line + soft contact shadows, drawn before the objects that sit on them */}
+        <line x1="20" y1="225" x2="580" y2="225" stroke="#A7D7C5" strokeWidth="2" />
+        <ellipse cx="125" cy="226" rx="82" ry="6" fill="#2F855A" opacity="0.12" />
+        <ellipse cx="300" cy="226" rx="62" ry="6" fill="#2F855A" opacity="0.12" />
+        <ellipse cx="485" cy="226" rx="58" ry="6" fill="#2F855A" opacity="0.12" />
+
+        {/* dashed route, arcing over the truck from warehouse roof to homebase roof —
+            the three badges below sit at exact points along this same curve */}
+        <path d="M 170 105 Q 300 40 450 120" stroke="#2F855A" strokeWidth="2.5" strokeDasharray="7 7" fill="none" strokeLinecap="round" />
 
         {/* Warehouse */}
         <g>
-          <rect x="20" y="175" width="150" height="115" fill="#FFFFFF" stroke="#2F855A" strokeWidth="2" />
-          <polygon points="10,175 95,120 180,175" fill="#276749" />
-          <rect x="75" y="220" width="40" height="70" fill="#1C4532" />
-          <rect x="30" y="150" width="70" height="20" rx="3" fill="#276749" />
-          <text x="65" y="164" fontSize="10" fontWeight="700" fill="#FFFFFF" fontFamily="Inter, sans-serif">WAREHOUSE</text>
-          {/* boxes */}
-          <rect x="130" y="255" width="28" height="28" fill="#D6BB92" stroke="#A9825A" />
-          <rect x="145" y="235" width="24" height="24" fill="#E8CFA3" stroke="#A9825A" />
+          <polygon points="40,120 125,65 210,120" fill="#276749" />
+          <rect x="50" y="120" width="150" height="105" fill="#FFFFFF" stroke="#2F855A" strokeWidth="2" />
+          <rect x="105" y="170" width="35" height="55" fill="#1C4532" />
+          <rect x="160" y="180" width="28" height="28" fill="#E8CFA3" stroke="#A9825A" strokeWidth="1.5" />
+          <rect x="143" y="197" width="32" height="32" fill="#D6BB92" stroke="#A9825A" strokeWidth="1.5" />
         </g>
+        <text x="125" y="245" textAnchor="middle" fontSize="12" fontWeight="700" letterSpacing="1" fill="#276749" fontFamily="Inter, sans-serif">WAREHOUSE</text>
 
         {/* Homebase */}
         <g>
-          <rect x="400" y="200" width="110" height="90" fill="#FFFFFF" stroke="#2F855A" strokeWidth="2" />
-          <polygon points="392,200 455,165 518,200" fill="#276749" />
-          <rect x="440" y="240" width="30" height="50" fill="#1C4532" />
-          <rect x="405" y="180" width="65" height="18" rx="3" fill="#276749" />
-          <text x="413" y="193" fontSize="9" fontWeight="700" fill="#FFFFFF" fontFamily="Inter, sans-serif">HOMEBASE</text>
+          <polygon points="422,145 485,100 548,145" fill="#276749" />
+          <rect x="430" y="145" width="110" height="80" fill="#FFFFFF" stroke="#2F855A" strokeWidth="2" />
+          <rect x="468" y="185" width="25" height="40" fill="#1C4532" />
         </g>
+        <text x="485" y="245" textAnchor="middle" fontSize="12" fontWeight="700" letterSpacing="1" fill="#276749" fontFamily="Inter, sans-serif">HOMEBASE</text>
 
-        {/* Truck, mid-route */}
-        <g transform="translate(220,225)">
-          <rect x="0" y="10" width="95" height="35" rx="4" fill="#FFFFFF" stroke="#2F855A" strokeWidth="2" />
-          <path d="M 95 15 L 122 15 L 132 32 L 132 45 L 95 45 Z" fill="#FFFFFF" stroke="#2F855A" strokeWidth="2" />
-          <rect x="102" y="20" width="20" height="12" fill="#A7D7C5" />
-          <circle cx="22" cy="50" r="10" fill="#1C4532" />
-          <circle cx="112" cy="50" r="10" fill="#1C4532" />
-          <rect x="14" y="20" width="18" height="16" rx="2" fill="#276749" />
+        {/* Truck, centered on the ground beneath the arc's apex */}
+        <g>
+          <rect x="240" y="185" width="75" height="35" rx="4" fill="#FFFFFF" stroke="#2F855A" strokeWidth="2" />
+          <rect x="315" y="170" width="45" height="50" rx="6" fill="#FFFFFF" stroke="#2F855A" strokeWidth="2" />
+          <rect x="322" y="178" width="20" height="16" rx="2" fill="#A7D7C5" />
+          <rect x="253" y="197" width="14" height="10" rx="2" fill="#276749" />
+          <circle cx="265" cy="213" r="12" fill="#1C4532" />
+          <circle cx="335" cy="213" r="12" fill="#1C4532" />
+          <circle cx="265" cy="213" r="4" fill="#4A5568" />
+          <circle cx="335" cy="213" r="4" fill="#4A5568" />
         </g>
       </svg>
 
-      {/* badge icons along the route */}
-      <div className="absolute left-[38%] top-[28%] w-9 h-9 rounded-full bg-white border-2 border-emerald-200 shadow-sm flex items-center justify-center">
+      {/* badge icons, positioned as percentages of the viewBox so they land
+          exactly on the three points computed along the path curve above */}
+      <div className="absolute left-[39.3%] top-[30.9%] -translate-x-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-white border-2 border-emerald-200 shadow-sm flex items-center justify-center">
         <RefreshCw size={15} className="text-emerald-700" />
       </div>
-      <div className="absolute left-[24%] top-[54%] w-9 h-9 rounded-full bg-white border-2 border-emerald-200 shadow-sm flex items-center justify-center">
+      <div className="absolute left-[50.8%] top-[28.7%] -translate-x-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-white border-2 border-emerald-200 shadow-sm flex items-center justify-center">
         <PackageCheck size={15} className="text-emerald-700" />
       </div>
-      <div className="absolute left-[68%] top-[42%] w-9 h-9 rounded-full bg-white border-2 border-emerald-200 shadow-sm flex items-center justify-center">
+      <div className="absolute left-[62.7%] top-[33.6%] -translate-x-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-white border-2 border-emerald-200 shadow-sm flex items-center justify-center">
         <MapPin size={15} className="text-emerald-700" />
       </div>
     </div>
@@ -5892,7 +5897,7 @@ function LoginScreen({ apiBase, setApiBase, onLogin }) {
           </div>
         </div>
 
-        <div className="h-[34vh] flex items-center justify-center overflow-hidden">
+        <div className="flex items-center justify-center">
           <LoginIllustration />
         </div>
 
