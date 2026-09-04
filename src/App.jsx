@@ -445,7 +445,15 @@ const NAV_TREE = [
   { key: "settings", label: "Settings", icon: SettingsIcon },
 ];
 
-function hasAccess(key, role) {
+function hasAccess(key, role, userCustomers = []) {
+  // Cluster transfer is a PIM-only feature: Manager (unscoped, oversees
+  // everything) always sees it; any other role sees it only if PIM is one of
+  // their assigned divisions. Gated here rather than via NAV_ACCESS because
+  // NAV_ACCESS is role-only and this depends on division membership too.
+  if (key === "clusterTransfer") {
+    if (role === ROLES.MANAGER) return true;
+    return (userCustomers || []).includes("PIM");
+  }
   const map = {
     delivery: NAV_ACCESS.delivery, returnFaulty: NAV_ACCESS.returnFaulty, reconciliation: NAV_ACCESS.reconciliation,
     materialSwap: NAV_ACCESS.materialSwap,
@@ -484,7 +492,7 @@ function Sidebar({ page, setPage, role, userName, userCustomers, mobileOpen, onC
       <nav className="flex-1 overflow-y-auto px-3 pb-4 space-y-1">
         {NAV_TREE.map((item) => {
           if (!item.children) {
-            if (!hasAccess(item.key, role)) return null;
+            if (!hasAccess(item.key, role, userCustomers)) return null;
             const active = page === item.key;
             const Icon = item.icon;
             return (
@@ -500,7 +508,7 @@ function Sidebar({ page, setPage, role, userName, userCustomers, mobileOpen, onC
               </button>
             );
           }
-          const visibleChildren = item.children.filter((c) => hasAccess(c.key, role));
+          const visibleChildren = item.children.filter((c) => hasAccess(c.key, role, userCustomers));
           if (visibleChildren.length === 0) return null;
           const Icon = item.icon;
           const isOpen = open[item.key];
@@ -3756,12 +3764,13 @@ function ToolStockPage({ tools, setPage, setToolSerialName, onSubmitReceipt, sho
 // (pick target cluster + a Ready unit currently owned by another cluster) and
 // a list of transfers where Pending ones can be approved/rejected.
 function ClusterTransferPage({ materials, customers, currentUser, role, api, showToast }) {
-  const isManager = role === ROLES.MANAGER;
-  const myDivisions = currentUser?.customers || [];
-  const needsDivisionPicker = isManager || myDivisions.length > 1;
-  const divisionOptions = isManager ? customers.filter((c) => c.status === "Active").map((c) => c.name) : myDivisions;
+  // This feature is PIM-only — the division is always PIM, so there's no
+  // picker. Access to the page itself is already gated to Manager + PIM users
+  // in the sidebar (see hasAccess), so anyone who reaches here is entitled to
+  // act on PIM.
+  const PIM = "PIM";
+  const customer = PIM;
 
-  const [customer, setCustomer] = useState(needsDivisionPicker ? "" : (myDivisions[0] || ""));
   const [clusters, setClusters] = useState([]);
   const [clusterTo, setClusterTo] = useState("");
   const [material, setMaterial] = useState("");
@@ -3783,15 +3792,11 @@ function ClusterTransferPage({ materials, customers, currentUser, role, api, sho
   };
   React.useEffect(loadTransfers, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Clusters available for the chosen division. A division with none (any
-  // non-PIM division today) shows an explanatory empty state instead of the
-  // form — there's nothing to transfer between.
+  // Load PIM's active clusters once on mount (customer is constant).
   React.useEffect(() => {
-    setClusterTo(""); setMaterial(""); setSelectedSn(""); setOptions([]); setError("");
-    if (!customer) { setClusters([]); return; }
     api.getClusters(customer, "Active").then(setClusters).catch(() => setClusters([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [customer]);
+  }, []);
 
   // Fetch the Ready units the requester could ask for: owned by a cluster
   // OTHER than the target, in this division, optionally filtered by material.
@@ -3805,7 +3810,7 @@ function ClusterTransferPage({ materials, customers, currentUser, role, api, sho
   }, [customer, clusterTo, material]);
 
   const divisionUsesClusters = clusters.length > 0;
-  const valid = customer && clusterTo && selectedSn;
+  const valid = clusterTo && selectedSn;
 
   const submit = async () => {
     setSaving(true); setError("");
@@ -3850,26 +3855,9 @@ function ClusterTransferPage({ materials, customers, currentUser, role, api, sho
       <SectionTitle title="Transfer Antar Cluster" subtitle="Pindahkan kepemilikan unit dari satu cluster ke cluster lain (perlu persetujuan SPV cluster pemilik)" />
 
       <Card className="p-6 space-y-4 max-w-2xl">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {needsDivisionPicker ? (
-            <div>
-              <label className="text-sm font-medium text-gray-700">Divisi <span className="text-red-500">*</span></label>
-              <select value={customer} onChange={(e) => setCustomer(e.target.value)} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600">
-                <option value="">Pilih divisi...</option>
-                {divisionOptions.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </div>
-          ) : (
-            <div>
-              <label className="text-sm font-medium text-gray-700">Divisi</label>
-              <div className="mt-1.5 w-full border border-gray-100 bg-gray-50 rounded-lg px-3 py-2.5 text-sm text-gray-600">{customer || "—"}</div>
-            </div>
-          )}
-        </div>
-
-        {customer && !divisionUsesClusters && (
+        {!divisionUsesClusters && (
           <div className="bg-gray-50 border border-gray-100 text-gray-600 text-sm rounded-lg px-4 py-3">
-            Divisi <span className="font-medium">{customer}</span> tidak menggunakan cluster, jadi tidak ada transfer antar cluster di sini.
+            Belum ada cluster aktif untuk divisi PIM. Tambahkan cluster lebih dulu di Master Data.
           </div>
         )}
 
