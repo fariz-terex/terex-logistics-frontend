@@ -190,6 +190,7 @@ const NAV_ACCESS = {
   stock: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV, ROLES.DIVISION_MANAGER],
   movement: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV, ROLES.DIVISION_MANAGER],
   stockTransfer: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.DIVISION_MANAGER],
+  clusterTransfer: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV, ROLES.DIVISION_MANAGER],
   receipts: [ROLES.MANAGER, ROLES.LOGISTICS],
   reports: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.DIVISION_MANAGER],
   reportsDeviceLocation: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV, ROLES.DIVISION_MANAGER],
@@ -415,6 +416,7 @@ const NAV_TREE = [
       { key: "toolStock", label: "Stock Alat" },
       { key: "consumableStock", label: "Stock Consumable" },
       { key: "stockTransfer", label: "Transfer Stock" },
+      { key: "clusterTransfer", label: "Transfer Antar Cluster" },
     ],
   },
   {
@@ -1903,7 +1905,7 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, 
    WAREHOUSE STOCK + MOVEMENT
    ============================================================ */
 
-function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast, currentUser, customers }) {
+function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast, currentUser, customers, api }) {
   const [material, setMaterial] = useState("");
   const [serials, setSerials] = useState([""]);
   const [qty, setQty] = useState(1);
@@ -1913,6 +1915,11 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast, currentUse
   const [error, setError] = useState("");
   const [bulkMode, setBulkMode] = useState(false);
   const [bulkText, setBulkText] = useState("");
+  const [cluster, setCluster] = useState("");
+  // Active clusters for the division being received into. Only some divisions
+  // (today: PIM) have any — for every other division this stays empty and the
+  // cluster picker never renders, so the form is unchanged for them.
+  const [clusterOptions, setClusterOptions] = useState([]);
 
   // Manager has no fixed division and must pick one explicitly; someone
   // covering just one division is pinned to it automatically — no choice to
@@ -1927,6 +1934,25 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast, currentUse
 
   const mat = materials.find((m) => m.name === material);
 
+  // Pull the active clusters for whichever division this receipt is for.
+  // Runs whenever the effective division changes (Manager/multi-division user
+  // picking one, or the pinned single division on mount). A division with no
+  // clusters clears the list, hiding the picker entirely.
+  React.useEffect(() => {
+    let cancelled = false;
+    setCluster("");
+    if (!effectiveCustomer || !api?.getClusters) { setClusterOptions([]); return; }
+    api.getClusters(effectiveCustomer, "Active")
+      .then((rows) => { if (!cancelled) setClusterOptions(rows.map((c) => c.name)); })
+      .catch(() => { if (!cancelled) setClusterOptions([]); });
+    return () => { cancelled = true; };
+  }, [effectiveCustomer]);
+
+  // Cluster is required only when the division actually has clusters AND the
+  // material is serialized (clusters are tagged per serial unit).
+  const divisionUsesClusters = clusterOptions.length > 0;
+  const clusterRequired = divisionUsesClusters && !!mat && !!mat.serialized;
+
   const addSN = () => setSerials([...serials, ""]);
   const updateSN = (i, val) => setSerials(serials.map((s, idx) => (idx === i ? val : s)));
   const removeSN = (i) => setSerials(serials.filter((_, idx) => idx !== i));
@@ -1937,7 +1963,8 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast, currentUse
 
   const trimmedSerials = bulkMode ? bulkSerials : serials.map((s) => s.trim()).filter(Boolean);
   const hasDuplicates = new Set(trimmedSerials).size !== trimmedSerials.length;
-  const valid = mat && !!effectiveCustomer && (mat.serialized ? trimmedSerials.length > 0 && !hasDuplicates : qty > 0);
+  const clusterOk = !clusterRequired || !!cluster;
+  const valid = mat && !!effectiveCustomer && clusterOk && (mat.serialized ? trimmedSerials.length > 0 && !hasDuplicates : qty > 0);
 
   const submit = async () => {
     setSaving(true); setError("");
@@ -1946,10 +1973,11 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast, currentUse
     try {
       const payload = mat.serialized ? { material, serials: trimmedSerials, note } : { material, qty, note };
       if (needsDivisionPicker) payload.customer = customer;
+      if (clusterRequired) payload.cluster = cluster;
       await onSubmit(payload);
       showToast(`Berhasil menerima ${submittedQty} unit ${submittedMaterial}`);
       // Reset fields for the next entry, but keep the form open.
-      setMaterial(""); setSerials([""]); setQty(1); setNote(""); setBulkText("");
+      setMaterial(""); setSerials([""]); setQty(1); setNote(""); setBulkText(""); setCluster("");
     } catch (err) {
       setError(err.message || "Gagal menyimpan penerimaan barang");
     } finally {
@@ -1980,6 +2008,25 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast, currentUse
             <div className="mt-1 w-full border border-gray-100 bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-600">{myDivisions[0] || "—"}</div>
           )}
         </div>
+
+        {divisionUsesClusters && (
+          <div className="sm:col-span-2">
+            <label className="text-xs font-medium text-gray-500">
+              Cluster {clusterRequired && <span className="text-red-500">*</span>}
+              <span className="text-gray-400 font-normal"> — alokasi unit untuk cluster mana</span>
+            </label>
+            {mat && !mat.serialized ? (
+              <div className="mt-1 w-full border border-gray-100 bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-500">
+                Material non-serialized tidak memakai cluster
+              </div>
+            ) : (
+              <select value={cluster} onChange={(e) => setCluster(e.target.value)} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600">
+                <option value="">Pilih cluster...</option>
+                {clusterOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            )}
+          </div>
+        )}
 
         {mat && !mat.serialized && (
           <div>
@@ -2131,6 +2178,7 @@ function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMateri
           showToast={showToast}
           currentUser={currentUser}
           customers={customers}
+          api={api}
         />
       )}
 
@@ -3697,6 +3745,261 @@ function ToolStockPage({ tools, setPage, setToolSerialName, onSubmitReceipt, sho
           </tbody>
         </table>
         </div>
+      </Card>
+    </div>
+  );
+}
+
+// ===================== TRANSFER ANTAR CLUSTER =====================
+// Ownership reallocation of a serialized unit from one PIM cluster to another,
+// gated by the owning cluster's SPV approving. Two panels: a request form
+// (pick target cluster + a Ready unit currently owned by another cluster) and
+// a list of transfers where Pending ones can be approved/rejected.
+function ClusterTransferPage({ materials, customers, currentUser, role, api, showToast }) {
+  const isManager = role === ROLES.MANAGER;
+  const myDivisions = currentUser?.customers || [];
+  const needsDivisionPicker = isManager || myDivisions.length > 1;
+  const divisionOptions = isManager ? customers.filter((c) => c.status === "Active").map((c) => c.name) : myDivisions;
+
+  const [customer, setCustomer] = useState(needsDivisionPicker ? "" : (myDivisions[0] || ""));
+  const [clusters, setClusters] = useState([]);
+  const [clusterTo, setClusterTo] = useState("");
+  const [material, setMaterial] = useState("");
+  const [options, setOptions] = useState([]); // Ready units owned by other clusters
+  const [loadingOptions, setLoadingOptions] = useState(false);
+  const [selectedSn, setSelectedSn] = useState("");
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [transfers, setTransfers] = useState([]);
+  const [loadingTransfers, setLoadingTransfers] = useState(true);
+  const [decidingId, setDecidingId] = useState("");
+
+  const activeMaterials = materials.filter((m) => m.status === "Active" && m.serialized);
+
+  const loadTransfers = () => {
+    setLoadingTransfers(true);
+    api.getClusterTransfers().then(setTransfers).catch(() => {}).finally(() => setLoadingTransfers(false));
+  };
+  React.useEffect(loadTransfers, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Clusters available for the chosen division. A division with none (any
+  // non-PIM division today) shows an explanatory empty state instead of the
+  // form — there's nothing to transfer between.
+  React.useEffect(() => {
+    setClusterTo(""); setMaterial(""); setSelectedSn(""); setOptions([]); setError("");
+    if (!customer) { setClusters([]); return; }
+    api.getClusters(customer, "Active").then(setClusters).catch(() => setClusters([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customer]);
+
+  // Fetch the Ready units the requester could ask for: owned by a cluster
+  // OTHER than the target, in this division, optionally filtered by material.
+  React.useEffect(() => {
+    setSelectedSn("");
+    if (!customer || !clusterTo) { setOptions([]); return; }
+    setLoadingOptions(true);
+    api.getClusterTransferOptions(customer, clusterTo, material || undefined)
+      .then(setOptions).catch(() => setOptions([])).finally(() => setLoadingOptions(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customer, clusterTo, material]);
+
+  const divisionUsesClusters = clusters.length > 0;
+  const valid = customer && clusterTo && selectedSn;
+
+  const submit = async () => {
+    setSaving(true); setError("");
+    try {
+      await api.requestClusterTransfer({ sn: selectedSn, clusterTo, note: note || undefined });
+      showToast(`Permintaan transfer unit ${selectedSn} ke cluster ${clusterTo} dikirim — menunggu persetujuan`);
+      setSelectedSn(""); setNote("");
+      api.getClusterTransferOptions(customer, clusterTo, material || undefined).then(setOptions).catch(() => {});
+      loadTransfers();
+    } catch (err) {
+      setError(err.message || "Gagal mengirim permintaan transfer");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const decide = async (id, action) => {
+    setDecidingId(id);
+    try {
+      if (action === "approve") {
+        await api.approveClusterTransfer(id);
+        showToast("Transfer disetujui — kepemilikan unit berpindah");
+      } else {
+        await api.rejectClusterTransfer(id);
+        showToast("Transfer ditolak");
+      }
+      loadTransfers();
+    } catch (err) {
+      showToast(err.message || "Gagal memproses keputusan");
+    } finally {
+      setDecidingId("");
+    }
+  };
+
+  const statusBadge = (s) => {
+    const styles = { Pending: "bg-amber-100 text-amber-800", Approved: "bg-emerald-100 text-emerald-800", Rejected: "bg-red-100 text-red-700" };
+    return <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${styles[s] || "bg-gray-100 text-gray-600"}`}>{s}</span>;
+  };
+
+  return (
+    <div className="p-4 sm:p-8 space-y-5">
+      <SectionTitle title="Transfer Antar Cluster" subtitle="Pindahkan kepemilikan unit dari satu cluster ke cluster lain (perlu persetujuan SPV cluster pemilik)" />
+
+      <Card className="p-6 space-y-4 max-w-2xl">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {needsDivisionPicker ? (
+            <div>
+              <label className="text-sm font-medium text-gray-700">Divisi <span className="text-red-500">*</span></label>
+              <select value={customer} onChange={(e) => setCustomer(e.target.value)} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600">
+                <option value="">Pilih divisi...</option>
+                {divisionOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+          ) : (
+            <div>
+              <label className="text-sm font-medium text-gray-700">Divisi</label>
+              <div className="mt-1.5 w-full border border-gray-100 bg-gray-50 rounded-lg px-3 py-2.5 text-sm text-gray-600">{customer || "—"}</div>
+            </div>
+          )}
+        </div>
+
+        {customer && !divisionUsesClusters && (
+          <div className="bg-gray-50 border border-gray-100 text-gray-600 text-sm rounded-lg px-4 py-3">
+            Divisi <span className="font-medium">{customer}</span> tidak menggunakan cluster, jadi tidak ada transfer antar cluster di sini.
+          </div>
+        )}
+
+        {divisionUsesClusters && (
+          <>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="text-sm font-medium text-gray-700">Cluster Tujuan <span className="text-red-500">*</span></label>
+                <select value={clusterTo} onChange={(e) => setClusterTo(e.target.value)} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600">
+                  <option value="">Pilih cluster yang membutuhkan...</option>
+                  {clusters.map((c) => <option key={c.code} value={c.name}>{c.name}{c.pic ? ` — ${c.pic}` : ""}</option>)}
+                </select>
+                <div className="mt-1 text-xs text-gray-400">Cluster yang akan menerima unit ini.</div>
+              </div>
+              <div>
+                <label className="text-sm font-medium text-gray-700">Filter Material <span className="text-gray-400 font-normal">(opsional)</span></label>
+                <select value={material} onChange={(e) => setMaterial(e.target.value)} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600">
+                  <option value="">Semua material</option>
+                  {activeMaterials.map((m) => <option key={m.id} value={m.name}>{m.name}</option>)}
+                </select>
+              </div>
+            </div>
+
+            {clusterTo && (
+              <div>
+                <label className="text-sm font-medium text-gray-700">Pilih Unit Milik Cluster Lain <span className="text-red-500">*</span></label>
+                {loadingOptions ? (
+                  <div className="mt-1.5 text-sm text-gray-400">Memuat unit...</div>
+                ) : options.length === 0 ? (
+                  <div className="mt-1.5 bg-gray-50 border border-gray-100 text-gray-500 text-sm rounded-lg px-4 py-3">
+                    Tidak ada unit Ready milik cluster lain{material ? ` untuk material ${material}` : ""} yang bisa diminta.
+                  </div>
+                ) : (
+                  <div className="mt-1.5 border border-gray-200 rounded-lg divide-y divide-gray-100 max-h-72 overflow-y-auto">
+                    {options.map((u) => (
+                      <label key={u.sn} className="flex items-center gap-3 px-3 py-2.5 text-sm cursor-pointer hover:bg-gray-50">
+                        <input type="radio" name="cluster-unit" checked={selectedSn === u.sn} onChange={() => setSelectedSn(u.sn)} className="accent-emerald-700" />
+                        <span className="font-mono text-gray-800">{u.sn}</span>
+                        <span className="text-gray-400">·</span>
+                        <span className="text-gray-600">{u.material}</span>
+                        <span className="ml-auto inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-800">{u.cluster}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div>
+              <label className="text-sm font-medium text-gray-700">Catatan <span className="text-gray-400 font-normal">(opsional, alasan permintaan)</span></label>
+              <input value={note} onChange={(e) => setNote(e.target.value)} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+            </div>
+
+            {error && <div className="bg-red-50 border border-red-100 text-red-700 text-xs rounded-lg px-3 py-2">{error}</div>}
+
+            <div className="flex justify-end">
+              <PrimaryButton disabled={!valid || saving} onClick={submit}>
+                <ArrowLeftRight size={16} /> {saving ? "Mengirim..." : "Ajukan Transfer"}
+              </PrimaryButton>
+            </div>
+          </>
+        )}
+      </Card>
+
+      <Card className="p-0 overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-100 text-sm font-semibold text-gray-800">Riwayat & Persetujuan Transfer</div>
+        {loadingTransfers ? (
+          <div className="px-6 py-8 text-sm text-gray-400 text-center">Memuat...</div>
+        ) : transfers.length === 0 ? (
+          <div className="px-6 py-8 text-sm text-gray-400 text-center">Belum ada transfer antar cluster.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-gray-500 border-b border-gray-100">
+                  <th className="px-4 py-3 font-medium">Tanggal</th>
+                  <th className="px-4 py-3 font-medium">Unit (SN)</th>
+                  <th className="px-4 py-3 font-medium">Material</th>
+                  <th className="px-4 py-3 font-medium">Dari → Ke</th>
+                  <th className="px-4 py-3 font-medium">Pemohon</th>
+                  <th className="px-4 py-3 font-medium">Status</th>
+                  <th className="px-4 py-3 font-medium text-right">Aksi</th>
+                </tr>
+              </thead>
+              <tbody>
+                {transfers.map((t) => (
+                  <tr key={t.id} className="border-b border-gray-50 last:border-0">
+                    <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{t.requested_date}</td>
+                    <td className="px-4 py-3 font-mono text-gray-800">{t.sn}</td>
+                    <td className="px-4 py-3 text-gray-600">{t.material}</td>
+                    <td className="px-4 py-3 text-gray-700 whitespace-nowrap">
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-gray-100 text-gray-700">{t.cluster_from}</span>
+                      <span className="mx-1.5 text-gray-400">→</span>
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-blue-50 text-blue-800">{t.cluster_to}</span>
+                    </td>
+                    <td className="px-4 py-3 text-gray-600">{t.requested_by}</td>
+                    <td className="px-4 py-3">
+                      {statusBadge(t.status)}
+                      {t.status !== "Pending" && t.decided_by && (
+                        <div className="text-xs text-gray-400 mt-1">oleh {t.decided_by}</div>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                      {t.status === "Pending" ? (
+                        <div className="inline-flex items-center gap-2">
+                          <button
+                            disabled={decidingId === t.id}
+                            onClick={() => decide(t.id, "approve")}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-800 text-white text-xs font-medium hover:bg-emerald-900 disabled:opacity-40"
+                          >
+                            <Check size={14} /> Setujui
+                          </button>
+                          <button
+                            disabled={decidingId === t.id}
+                            onClick={() => decide(t.id, "reject")}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-red-200 text-red-700 text-xs font-medium hover:bg-red-50 disabled:opacity-40"
+                          >
+                            <X size={14} /> Tolak
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-gray-400">—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </Card>
     </div>
   );
@@ -5681,6 +5984,25 @@ function createApiClient(baseUrl, getToken) {
     bulkDeleteHomebases: (codes) => request("/homebases/bulk-delete", { method: "POST", body: { codes } }),
 
     getCustomers: () => request("/customers"),
+    getClusters: (customer, status) => {
+      const params = new URLSearchParams();
+      if (customer) params.set("customer", customer);
+      if (status) params.set("status", status);
+      const qs = params.toString();
+      return request(`/clusters${qs ? `?${qs}` : ""}`);
+    },
+    createCluster: (payload) => request("/clusters", { method: "POST", body: payload }),
+    toggleClusterStatus: (code) => request(`/clusters/${code}/toggle-status`, { method: "PATCH" }),
+    deleteCluster: (code) => request(`/clusters/${code}`, { method: "DELETE" }),
+    getClusterTransferOptions: (customer, clusterTo, material) => {
+      const params = new URLSearchParams({ customer, clusterTo });
+      if (material) params.set("material", material);
+      return request(`/stock/cluster-transfer-options?${params.toString()}`);
+    },
+    getClusterTransfers: () => request("/stock/cluster-transfers"),
+    requestClusterTransfer: (payload) => request("/stock/cluster-transfers", { method: "POST", body: payload }),
+    approveClusterTransfer: (id, note) => request(`/stock/cluster-transfers/${id}/approve`, { method: "POST", body: { note } }),
+    rejectClusterTransfer: (id, note) => request(`/stock/cluster-transfers/${id}/reject`, { method: "POST", body: { note } }),
     createCustomer: (payload) => request("/customers", { method: "POST", body: payload }),
     toggleCustomerStatus: (id) => request(`/customers/${id}/toggle-status`, { method: "PATCH" }),
     importCustomers: (rows) => request("/customers/import", { method: "POST", body: { rows } }),
@@ -6837,6 +7159,7 @@ export default function App() {
   else if (page === "toolStock") content = <ToolStockPage tools={tools} setPage={goto} setToolSerialName={setToolSerialName} onSubmitReceipt={createToolReceipt} showToast={showToast} role={role} />;
   else if (page === "consumableStock") content = <ConsumableStockPage consumables={consumables} onSubmitReceipt={createConsumableReceipt} showToast={showToast} role={role} />;
   else if (page === "stockTransfer") content = <TransferStockPage materials={materials} homebases={homebases} customers={customers} currentUser={currentUser} role={role} api={api} showToast={showToast} />;
+  else if (page === "clusterTransfer") content = <ClusterTransferPage materials={materials} customers={customers} currentUser={currentUser} role={role} api={api} showToast={showToast} />;
   else if (page === "toolSerialDetail") content = <ToolSerialDetail toolName={toolSerialName} api={api} onBack={() => goto("toolStock")} />;
   else if (page === "reports") content = <ReportsPage
     title="Delivery Report" subtitle="Laporan seluruh pengajuan delivery"
