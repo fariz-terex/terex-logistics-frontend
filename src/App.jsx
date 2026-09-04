@@ -412,7 +412,7 @@ const NAV_TREE = [
     key: "inventory", label: "Inventory", icon: Boxes,
     children: [
       { key: "stock", label: "Warehouse Stock" },
-      { key: "movement", label: "Stock Movement" },
+      { key: "movement", label: "Stock Movement", hidden: true },
       { key: "toolStock", label: "Stock Alat" },
       { key: "consumableStock", label: "Stock Consumable" },
       { key: "stockTransfer", label: "Transfer Stock" },
@@ -423,9 +423,9 @@ const NAV_TREE = [
     key: "reportsGroup", label: "Reports", icon: FileBarChart,
     children: [
       { key: "reports", label: "Delivery Report" },
-      { key: "reportsFaulty", label: "Faulty Return Report" },
-      { key: "reportsRecon", label: "Reconciliation Report" },
-      { key: "reportsDeviceLocation", label: "Lokasi Perangkat" },
+      { key: "reportsFaulty", label: "Faulty Return Report", hidden: true },
+      { key: "reportsRecon", label: "Reconciliation Report", hidden: true },
+      { key: "reportsDeviceLocation", label: "Lokasi Perangkat", hidden: true },
     ],
   },
   {
@@ -492,6 +492,7 @@ function Sidebar({ page, setPage, role, userName, userCustomers, mobileOpen, onC
       <nav className="flex-1 overflow-y-auto px-3 pb-4 space-y-1">
         {NAV_TREE.map((item) => {
           if (!item.children) {
+            if (item.hidden) return null;
             if (!hasAccess(item.key, role, userCustomers)) return null;
             const active = page === item.key;
             const Icon = item.icon;
@@ -508,7 +509,7 @@ function Sidebar({ page, setPage, role, userName, userCustomers, mobileOpen, onC
               </button>
             );
           }
-          const visibleChildren = item.children.filter((c) => hasAccess(c.key, role, userCustomers));
+          const visibleChildren = item.children.filter((c) => !c.hidden && hasAccess(c.key, role, userCustomers));
           if (visibleChildren.length === 0) return null;
           const Icon = item.icon;
           const isOpen = open[item.key];
@@ -2238,7 +2239,7 @@ function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMateri
                   <td className="px-5 py-3">
                     <div className="flex items-center gap-3">
                       {m.serialized && <button onClick={() => { setSerialMaterial(m.name); clearSerialHighlight?.(); setPage("serialDetail"); }} className="text-emerald-800 text-xs font-medium">Lihat SN</button>}
-                      <button onClick={() => { setMovementFilter(m.name); setPage("movement"); }} className="text-gray-500 text-xs font-medium">Riwayat</button>
+                      {/* "Riwayat" (Stock Movement) hidden while that feature is WIP — see NAV_TREE hidden flags */}
                     </div>
                   </td>
                 </tr>
@@ -6515,7 +6516,14 @@ export default function App() {
     return created;
   };
 
+  // Menus hidden as work-in-progress (see NAV_TREE `hidden: true`). Kept here
+  // as a single source of truth so any navigation attempt — sidebar, dashboard
+  // quick-links, global search — lands on the dashboard instead of an
+  // unfinished page. To re-enable a feature, remove its `hidden` flag in
+  // NAV_TREE and its key from this set.
+  const HIDDEN_PAGES = new Set(["movement", "reportsFaulty", "reportsRecon", "reportsDeviceLocation"]);
   const goto = (p) => {
+    if (HIDDEN_PAGES.has(p)) p = "dashboard";
     setPage(p);
     setSelectedDelivery(null); setSelectedReturn(null); setSelectedRecon(null); setSelectedSwap(null);
     if (p !== "returnFaultyCreate") setReturnPrefill(null); // only meant for the one navigation right after a swap
