@@ -720,6 +720,26 @@ function Dashboard({ role, userName, setPage, deliveries, returns, reconciliatio
   const toolsCheckedOut = tools.reduce((s, t) => s + (t.checked_out || 0), 0);
   const swapsToday = materialSwaps.filter((s) => s.date === new Date().toISOString().slice(0, 10)).length;
 
+  // Division Manager gets a focused dashboard: only the material-health
+  // numbers they care about, all already division-scoped by the API (their
+  // `materials`/`returns` only ever contain their own division's data).
+  const isDivisionManager = role === ROLES.DIVISION_MANAGER;
+  const onHand = materials.reduce((s, m) => s + (m.ready || 0), 0);          // Ready units in warehouse
+  const inTransitMaterial = materials.reduce((s, m) => s + (m.transit || 0), 0); // being shipped to homebase/warehouse
+  const faultyInWarehouse = materials.reduce((s, m) => s + (m.faulty || 0), 0);  // arrived, not yet Sent to Customer
+  // Faulty still on the road from homebase -> Terex warehouse: returns that
+  // have been shipped but not yet received. Qty = sum of each return's item qty.
+  const faultyOnDelivery = returns
+    .filter((r) => r.status === "On Delivery")
+    .reduce((s, r) => s + (r.items || []).reduce((n, it) => n + (it.qty || 0), 0), 0);
+
+  const divisionCards = [
+    { label: "Material On-Hand", value: onHand.toLocaleString("id-ID"), sub: "Ready di warehouse", icon: Boxes, color: "bg-emerald-50 text-emerald-700", page: "stock" },
+    { label: "Dalam Pengiriman", value: inTransitMaterial.toLocaleString("id-ID"), sub: "Menuju homebase/warehouse", icon: Truck, color: "bg-blue-50 text-blue-600", page: "stock" },
+    { label: "Faulty Sedang Dikirim", value: faultyOnDelivery.toLocaleString("id-ID"), sub: "Homebase → warehouse Terex", icon: Undo2, color: "bg-amber-50 text-amber-600", page: "returnFaulty" },
+    { label: "Faulty di Warehouse", value: faultyInWarehouse.toLocaleString("id-ID"), sub: "Belum Sent to Customer", icon: AlertTriangle, color: "bg-red-50 text-red-600", page: "stock" },
+  ];
+
   const now = new Date();
   const hour = now.getHours();
   const greeting = hour < 11 ? "Good morning" : hour < 15 ? "Good afternoon" : hour < 19 ? "Good evening" : "Good night";
@@ -740,15 +760,15 @@ function Dashboard({ role, userName, setPage, deliveries, returns, reconciliatio
         <p className="text-gray-500 mt-1">{formattedDate} · {role}</p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        {[
+      <div className={`grid grid-cols-1 gap-4 ${isDivisionManager ? "md:grid-cols-4" : "md:grid-cols-4"}`}>
+        {(isDivisionManager ? divisionCards : [
           { label: "Delivery Request", value: inProgress, sub: "In Progress", icon: Truck, color: "bg-emerald-50 text-emerald-700", page: "delivery" },
           { label: "Return Material Faulty", value: waitingReview, sub: "Menunggu Review", icon: Undo2, color: "bg-amber-50 text-amber-600", page: "returnFaulty" },
           { label: "Rekonsiliasi Material", value: reconReview, sub: "Menunggu Review", icon: ClipboardList, color: "bg-blue-50 text-blue-600", page: "reconciliation" },
           { label: "Material On Hand", value: totalMaterial.toLocaleString("id-ID"), sub: "Total Material", icon: Boxes, color: "bg-emerald-50 text-emerald-700", page: "stock" },
           { label: "Alat Sedang Dipinjam", value: toolsCheckedOut, sub: "Checked Out", icon: Wrench, color: "bg-indigo-50 text-indigo-700", page: "toolStock" },
           { label: "Penggantian Material", value: swapsToday, sub: "Hari Ini", icon: ArrowLeftRight, color: "bg-teal-50 text-teal-700", page: "materialSwap" },
-        ].map((c) => (
+        ]).map((c) => (
           <Card key={c.label} className="p-5">
             <div className="flex items-start gap-3">
               <div className={`w-11 h-11 rounded-xl flex items-center justify-center ${c.color}`}><c.icon size={20} /></div>
