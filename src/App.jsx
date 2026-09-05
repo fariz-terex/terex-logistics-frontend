@@ -710,7 +710,7 @@ function TopBar({ user, onLogout, title, subtitle, searchQuery, setSearchQuery, 
    DASHBOARD
    ============================================================ */
 
-function Dashboard({ role, userName, setPage, deliveries, returns, reconciliations, materials, tools, materialSwaps }) {
+function Dashboard({ role, userName, setPage, deliveries, returns, reconciliations, materials, tools, materialSwaps, api, currentUser }) {
   const pendingApproval = deliveries.filter((d) => d.status === "Waiting Logistics Approval").length;
   const inProgress = deliveries.filter((d) => ["In Progress", "Waiting Stock Assignment", "Preparing", "Shipped"].includes(d.status)).length;
   const waitingReview = returns.filter((r) => r.status === "Waiting Logistics Review").length;
@@ -720,10 +720,11 @@ function Dashboard({ role, userName, setPage, deliveries, returns, reconciliatio
   const toolsCheckedOut = tools.reduce((s, t) => s + (t.checked_out || 0), 0);
   const swapsToday = materialSwaps.filter((s) => s.date === new Date().toISOString().slice(0, 10)).length;
 
-  // Division Manager gets a focused dashboard: only the material-health
-  // numbers they care about, all already division-scoped by the API (their
-  // `materials`/`returns` only ever contain their own division's data).
-  const isDivisionManager = role === ROLES.DIVISION_MANAGER;
+  // The focused, material-only dashboard is shown to Division Managers, SPVs,
+  // and Managers. Managers/SPVs and Division Managers all get the same summary
+  // cards plus a per-cluster (PIM) or per-homebase (other divisions) breakdown.
+  const showFocused = [ROLES.DIVISION_MANAGER, ROLES.SPV, ROLES.MANAGER].includes(role);
+  const isDivisionManager = showFocused; // keep old name working for the cards below
   const onHand = materials.reduce((s, m) => s + (m.ready || 0), 0);          // Ready units in warehouse
   const inTransitMaterial = materials.reduce((s, m) => s + (m.transit || 0), 0); // being shipped to homebase/warehouse
   const faultyInWarehouse = materials.reduce((s, m) => s + (m.faulty || 0), 0);  // arrived, not yet Sent to Customer
@@ -732,6 +733,24 @@ function Dashboard({ role, userName, setPage, deliveries, returns, reconciliatio
   const faultyOnDelivery = returns
     .filter((r) => r.status === "On Delivery")
     .reduce((s, r) => s + (r.items || []).reduce((n, it) => n + (it.qty || 0), 0), 0);
+
+  // Per-division breakdown (cluster or homebase cards). A Manager may cover
+  // several divisions, so we load one breakdown per division in their scope;
+  // SPV/Division Manager typically have one. currentUser.customers holds the
+  // scoped divisions; empty/undefined (unscoped global Manager) => we still
+  // ask the API which returns the first sensible division.
+  const [breakdowns, setBreakdowns] = React.useState([]);
+  React.useEffect(() => {
+    if (!showFocused || !api?.getDashboardBreakdown) return;
+    const divisions = (currentUser?.customers && currentUser.customers.length > 0)
+      ? currentUser.customers
+      : [undefined]; // let the API pick when unscoped
+    let cancelled = false;
+    Promise.all(divisions.map((d) => api.getDashboardBreakdown(d).catch(() => null)))
+      .then((results) => { if (!cancelled) setBreakdowns(results.filter(Boolean).filter((r) => r.customer)); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const divisionCards = [
     { label: "Material On-Hand", value: onHand.toLocaleString("id-ID"), sub: "Ready di warehouse", icon: Boxes, color: "bg-emerald-50 text-emerald-700", page: "stock" },
@@ -784,6 +803,41 @@ function Dashboard({ role, userName, setPage, deliveries, returns, reconciliatio
           </Card>
         ))}
       </div>
+
+      {showFocused && breakdowns.map((bd) => (
+        <div key={bd.customer} className="space-y-3">
+          <SectionTitle
+            title={bd.mode === "cluster" ? `Rincian per Cluster — ${bd.customer}` : `Rincian per Homebase — ${bd.customer}`}
+            subtitle={bd.mode === "cluster" ? "On-hand & faulty tiap cluster (unit serialized)" : "On-hand & faulty tiap homebase (unit serialized)"}
+          />
+          {bd.groups.length === 0 ? (
+            <EmptyState text="Belum ada unit serialized untuk ditampilkan." />
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {bd.groups.map((g) => (
+                <Card key={g.name} className="p-5">
+                  <div className="flex items-center gap-2 mb-3">
+                    <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${bd.mode === "cluster" ? "bg-blue-50 text-blue-600" : "bg-emerald-50 text-emerald-700"}`}>
+                      {bd.mode === "cluster" ? <Boxes size={17} /> : <MapPin size={17} />}
+                    </div>
+                    <div className="font-semibold text-gray-800 text-sm">{g.name}</div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="rounded-lg bg-emerald-50 px-3 py-2">
+                      <div className="text-xs text-emerald-700 font-medium">On-Hand</div>
+                      <div className="text-xl font-bold text-emerald-900">{g.onHand.toLocaleString("id-ID")}</div>
+                    </div>
+                    <div className="rounded-lg bg-red-50 px-3 py-2">
+                      <div className="text-xs text-red-600 font-medium">Faulty</div>
+                      <div className="text-xl font-bold text-red-700">{g.faulty.toLocaleString("id-ID")}</div>
+                    </div>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <Card className="p-5 lg:col-span-2">
@@ -6009,6 +6063,7 @@ function createApiClient(baseUrl, getToken) {
       return request(`/stock/cluster-transfer-options?${params.toString()}`);
     },
     getClusterTransfers: () => request("/stock/cluster-transfers"),
+    getDashboardBreakdown: (customer) => request(`/stock/dashboard-breakdown${customer ? `?customer=${encodeURIComponent(customer)}` : ""}`),
     requestClusterTransfer: (payload) => request("/stock/cluster-transfers", { method: "POST", body: payload }),
     approveClusterTransfer: (id, note) => request(`/stock/cluster-transfers/${id}/approve`, { method: "POST", body: { note } }),
     rejectClusterTransfer: (id, note) => request(`/stock/cluster-transfers/${id}/reject`, { method: "POST", body: { note } }),
@@ -7113,7 +7168,7 @@ export default function App() {
     content = (
       <div className="p-8 flex items-center justify-center h-full text-gray-400 text-sm">Memuat data dari server...</div>
     );
-  } else if (page === "dashboard") content = <Dashboard role={role} userName={currentUser?.name} setPage={goto} deliveries={deliveries} returns={returns} reconciliations={reconciliations} materials={materials} tools={tools} materialSwaps={materialSwaps} />;
+  } else if (page === "dashboard") content = <Dashboard role={role} userName={currentUser?.name} setPage={goto} deliveries={deliveries} returns={returns} reconciliations={reconciliations} materials={materials} tools={tools} materialSwaps={materialSwaps} api={api} currentUser={currentUser} />;
   else if (page === "delivery") {
     if (selectedDelivery) {
       const d = deliveries.find((x) => x.id === selectedDelivery);
