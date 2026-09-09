@@ -565,7 +565,7 @@ function Sidebar({ page, setPage, role, userName, userCustomers, mobileOpen, onC
    TOP BAR (with role switcher for prototype demo purposes)
    ============================================================ */
 
-function TopBar({ user, onLogout, title, subtitle, searchQuery, setSearchQuery, searchResults, notifications, onNotificationClick, onMenuClick }) {
+function TopBar({ user, onLogout, title, subtitle, searchQuery, setSearchQuery, searchResults, notifications, onNotificationClick, unreadCount = 0, onMarkAllRead, onMenuClick }) {
   const [searchDismissed, setSearchDismissed] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
@@ -637,9 +637,9 @@ function TopBar({ user, onLogout, title, subtitle, searchQuery, setSearchQuery, 
           <div className="relative">
             <button onClick={() => setNotifOpen((o) => !o)} className="relative w-9 h-9 sm:w-10 sm:h-10 rounded-lg border border-gray-200 flex items-center justify-center hover:bg-gray-50">
               <Bell size={18} className="text-gray-600" />
-              {notifications.length > 0 && (
-                <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-[10px] font-semibold rounded-full w-4 h-4 flex items-center justify-center">
-                  {notifications.length > 9 ? "9+" : notifications.length}
+              {(unreadCount > 0 || notifications.length > 0) && (
+                <span className={`absolute -top-1.5 -right-1.5 text-white text-[10px] font-semibold rounded-full w-4 h-4 flex items-center justify-center ${unreadCount > 0 ? "bg-red-500" : "bg-gray-400"}`}>
+                  {(unreadCount || notifications.length) > 9 ? "9+" : (unreadCount || notifications.length)}
                 </span>
               )}
             </button>
@@ -647,21 +647,27 @@ function TopBar({ user, onLogout, title, subtitle, searchQuery, setSearchQuery, 
               <>
                 <div className="fixed inset-0 z-10" onClick={() => setNotifOpen(false)} />
                 <div className="absolute right-0 mt-1.5 w-[calc(100vw-2rem)] sm:w-80 bg-white border border-gray-200 rounded-xl shadow-lg max-h-96 overflow-y-auto z-20">
-                  <div className="px-4 py-3 border-b border-gray-50 text-sm font-semibold text-gray-800">Notifikasi ({notifications.length})</div>
+                  <div className="px-4 py-3 border-b border-gray-50 flex items-center justify-between">
+                    <span className="text-sm font-semibold text-gray-800">Notifikasi{unreadCount > 0 ? ` (${unreadCount} baru)` : ""}</span>
+                    {unreadCount > 0 && onMarkAllRead && (
+                      <button onClick={onMarkAllRead} className="text-xs text-emerald-700 font-medium hover:underline">Tandai semua dibaca</button>
+                    )}
+                  </div>
                   {notifications.length === 0 ? (
-                    <div className="px-4 py-6 text-center text-sm text-gray-400">Tidak ada notifikasi baru.</div>
+                    <div className="px-4 py-6 text-center text-sm text-gray-400">Tidak ada notifikasi.</div>
                   ) : (
                     notifications.map((n, i) => (
                       <button
                         key={i}
                         onClick={() => { onNotificationClick(n); setNotifOpen(false); }}
-                        className="w-full flex items-start gap-3 px-4 py-3 hover:bg-gray-50 text-left border-b border-gray-50 last:border-0"
+                        className={`w-full flex items-start gap-3 px-4 py-3 hover:bg-gray-50 text-left border-b border-gray-50 last:border-0 ${n._unread ? "bg-emerald-50/40" : ""}`}
                       >
                         <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${n.color}`}><n.icon size={15} /></div>
-                        <div className="min-w-0">
+                        <div className="min-w-0 flex-1">
                           <div className="text-sm text-gray-800">{n.text}</div>
                           <div className="text-xs text-gray-400 mt-0.5">{n.sub}</div>
                         </div>
+                        {n._unread && <div className="w-2 h-2 rounded-full bg-emerald-500 shrink-0 mt-1.5" />}
                       </button>
                     ))
                   )}
@@ -6215,6 +6221,10 @@ function createApiClient(baseUrl, getToken) {
     approveDelivery: (id) => request(`/deliveries/${id}/approve`, { method: "POST" }),
     rejectDelivery: (id, reason) => request(`/deliveries/${id}/reject`, { method: "POST", body: { reason } }),
     cancelDelivery: (id, reason) => request(`/deliveries/${id}/cancel`, { method: "POST", body: { reason } }),
+
+    getNotifications: (limit = 30) => request(`/notifications?limit=${limit}`),
+    markNotificationRead: (id) => request(`/notifications/${id}/read`, { method: "POST" }),
+    markAllNotificationsRead: () => request(`/notifications/read-all`, { method: "POST" }),
     assignDeliveryStock: (id, serialSelections) => request(`/deliveries/${id}/assign-stock`, { method: "POST", body: serialSelections ? { serialSelections } : {} }),
     shipDelivery: (id, payload) => request(`/deliveries/${id}/ship`, { method: "POST", body: payload }),
     addDeliveryResi: (id, payload) => request(`/deliveries/${id}/resi`, { method: "POST", body: payload }),
@@ -6691,10 +6701,33 @@ export default function App() {
   const [returnPrefill, setReturnPrefill] = useState(null);
   const [selectedSwap, setSelectedSwap] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [serverNotifs, setServerNotifs] = useState([]); // persisted notifications from the backend
 
   const role = currentUser?.role;
 
   const api = useMemo(() => createApiClient(apiBase, () => authToken), [apiBase, authToken]);
+
+  // Poll the backend for new notifications: on login, every 45s, and whenever
+  // the tab regains focus (so it feels fresh when you come back to it).
+  React.useEffect(() => {
+    if (!authToken) { setServerNotifs([]); return; }
+    let stopped = false;
+    const load = () => api.getNotifications(30).then((rows) => { if (!stopped) setServerNotifs(rows); }).catch(() => {});
+    load();
+    const timer = setInterval(load, 45000);
+    const onFocus = () => { if (document.visibilityState === "visible") load(); };
+    document.addEventListener("visibilitychange", onFocus);
+    return () => { stopped = true; clearInterval(timer); document.removeEventListener("visibilitychange", onFocus); };
+  }, [authToken, api]);
+
+  const markNotifRead = async (id) => {
+    setServerNotifs((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
+    try { await api.markNotificationRead(id); } catch (e) { /* best-effort */ }
+  };
+  const markAllNotifsRead = async () => {
+    setServerNotifs((prev) => prev.map((n) => ({ ...n, read: true })));
+    try { await api.markAllNotificationsRead(); } catch (e) { /* best-effort */ }
+  };
 
   // Backend rows use snake_case for a couple of fields — normalize once here
   // so every component downstream can keep using the camelCase shape it
@@ -7044,7 +7077,7 @@ export default function App() {
     return rows;
   }, [deliveries]);
 
-  const notifications = useMemo(() => {
+  const attentionItems = useMemo(() => {
     const list = [];
     const isLogisticsView = role === ROLES.LOGISTICS || role === ROLES.MANAGER;
 
@@ -7091,6 +7124,34 @@ export default function App() {
 
     return list;
   }, [role, deliveries, returns, reconciliations, materials]);
+
+  const relTime = (iso) => {
+    const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+    if (s < 60) return "baru saja";
+    if (s < 3600) return `${Math.floor(s / 60)} menit lalu`;
+    if (s < 86400) return `${Math.floor(s / 3600)} jam lalu`;
+    return `${Math.floor(s / 86400)} hari lalu`;
+  };
+
+  const unreadNotifCount = serverNotifs.filter((n) => !n.read).length;
+
+  // Bell feed = persisted notifications (events) first, then the derived
+  // "needs attention" reminders.
+  const notifications = useMemo(() => {
+    const server = serverNotifs.map((n) => ({
+      icon: Bell,
+      color: n.read ? "bg-gray-100 text-gray-400" : "bg-emerald-50 text-emerald-700",
+      text: n.title,
+      sub: n.body ? `${n.body} · ${relTime(n.createdAt)}` : relTime(n.createdAt),
+      _unread: !n.read,
+      onSelect: () => {
+        if (n.id) markNotifRead(n.id);
+        if (n.refType === "delivery" && n.refId) gotoDetail("delivery", "delivery", n.refId);
+      },
+    }));
+    return [...server, ...attentionItems];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverNotifs, attentionItems]);
 
   /* ---- Delivery actions — every one calls the API, then merges the
      server's response (the source of truth) back into local state. ---- */
@@ -7692,6 +7753,7 @@ export default function App() {
           user={currentUser} onLogout={handleLogout} title={titleMain} subtitle={titleSub}
           searchQuery={searchQuery} setSearchQuery={setSearchQuery} searchResults={searchResults}
           notifications={notifications} onNotificationClick={(n) => n.onSelect()}
+          unreadCount={unreadNotifCount} onMarkAllRead={markAllNotifsRead}
           onMenuClick={() => setMobileSidebarOpen(true)}
         />
         {apiError && (
