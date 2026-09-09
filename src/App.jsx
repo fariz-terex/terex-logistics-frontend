@@ -6527,15 +6527,31 @@ function StockConsistencyCheck({ api, showToast }) {
             </div>
           )}
 
-          {report.serialVsMaterialStock.length > 0 && (
-            <div>
-              <div className="text-xs font-medium text-gray-700 mb-1">serial_numbers ≠ material_stock ({report.serialVsMaterialStock.length})</div>
-              <List items={report.serialVsMaterialStock} render={(r) => r.issue
-                ? <>{r.material} — <span className="text-red-500">{r.issue}</span> ({r.count} unit)</>
-                : <>{r.material} · <span className="text-gray-400">{r.customer} / {r.field}</span> — dari serial {r.fromSerials}, tersimpan {r.stored}{r.matchesDeliveredInclusive ? <span className="text-gray-400"> (selisih = jumlah unit Delivered, wajar untuk data MSG)</span> : null}</>
-              } />
-            </div>
-          )}
+          {(() => {
+            const all = report.serialVsMaterialStock;
+            const real = all.filter((r) => !r.matchesDeliveredInclusive);
+            const msg = all.filter((r) => r.matchesDeliveredInclusive);
+            const renderRow = (r) => r.issue
+              ? <>{r.material} — <span className="text-red-500">{r.issue}</span> ({r.count} unit)</>
+              : <>{r.material} · <span className="text-gray-400">{r.customer} / {r.field}</span> — dari serial {r.fromSerials}, tersimpan {r.stored} (selisih {r.delta > 0 ? `+${r.delta}` : r.delta})</>;
+            return (
+              <>
+                {real.length > 0 && (
+                  <div>
+                    <div className="text-xs font-medium text-gray-700 mb-1">serial_numbers ≠ material_stock — perlu ditindak ({real.length})</div>
+                    <List items={real} render={renderRow} />
+                  </div>
+                )}
+                {msg.length > 0 && (
+                  <div>
+                    <div className="text-xs font-medium text-gray-500 mb-1">serial vs material_stock — wajar untuk data MSG ({msg.length})</div>
+                    <div className="text-[11px] text-gray-400 mb-1">Selisih `ready` = jumlah unit berstatus Delivered. Import MSG memang menghitung Delivered sebagai ready. Bukan error.</div>
+                    <List items={msg} render={renderRow} />
+                  </div>
+                )}
+              </>
+            );
+          })()}
 
           {report.negatives.length > 0 && (
             <div>
