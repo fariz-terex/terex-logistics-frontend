@@ -6147,6 +6147,7 @@ function createApiClient(baseUrl, getToken) {
     createTransfer: (payload) => request("/stock/transfers", { method: "POST", body: payload }),
     getPhantomStockRows: () => request("/stock/phantom-check"),
     cleanupPhantomStockRows: () => request("/stock/phantom-cleanup", { method: "POST" }),
+    getStockConsistency: () => request("/stock/consistency"),
     getMovements: (material) => request(`/stock/movements${material ? `?material=${encodeURIComponent(material)}` : ""}`),
     getSerials: (material, status, customer, homebase) => {
       const params = new URLSearchParams();
@@ -6424,6 +6425,89 @@ function PhantomStockCleanup({ api, showToast }) {
         onConfirm={() => { setConfirmOpen(false); cleanup(); }}
         onCancel={() => setConfirmOpen(false)}
       />
+    </Card>
+  );
+}
+
+function StockConsistencyCheck({ api, showToast }) {
+  const [report, setReport] = useState(null); // null = belum dicek
+  const [checking, setChecking] = useState(false);
+
+  const check = async () => {
+    setChecking(true);
+    try {
+      setReport(await api.getStockConsistency());
+    } catch (err) {
+      showToast(err.message || "Gagal memeriksa konsistensi stok");
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const List = ({ items, render }) => (
+    <div className="max-h-40 overflow-y-auto border border-gray-100 rounded-lg divide-y divide-gray-50">
+      {items.map((r, i) => <div key={i} className="px-3 py-1.5 text-xs text-gray-600">{render(r)}</div>)}
+    </div>
+  );
+
+  const s = report?.summary;
+  const realCount = s ? s.globalVsDivisionSum + s.serialVsMaterialStock + s.negatives + s.orphans : 0;
+
+  return (
+    <Card className="p-5 space-y-3 text-sm">
+      <div>
+        <div className="font-semibold text-gray-800">Periksa Konsistensi Stok</div>
+        <div className="text-gray-500 text-xs mt-1">
+          Bandingkan tiga sumber angka stok: <span className="font-medium">serial_numbers</span> (per unit),
+          <span className="font-medium"> material_stock</span> (per divisi), dan agregat global. Hanya membaca —
+          tidak mengubah data apa pun. Perbaikan otomatis belum tersedia (lihat TUGAS_PENGEMBANGAN.md #3).
+        </div>
+      </div>
+
+      <GhostButton onClick={check} disabled={checking}>{checking ? "Memeriksa..." : "Periksa Sekarang"}</GhostButton>
+
+      {report && (
+        <div className="pt-2 border-t border-gray-50 space-y-3">
+          <div className="text-xs text-gray-400">Dicek: {report.checkedAt}</div>
+
+          {s.clean ? (
+            <div className="text-emerald-700 text-xs">✓ Semua angka stok konsisten.</div>
+          ) : (
+            <div className="text-red-600 text-xs font-medium">{realCount} kelompok selisih ditemukan.</div>
+          )}
+
+          {report.globalVsDivisionSum.length > 0 && (
+            <div>
+              <div className="text-xs font-medium text-gray-700 mb-1">Global ≠ jumlah semua divisi ({report.globalVsDivisionSum.length})</div>
+              <List items={report.globalVsDivisionSum} render={(r) => <>{r.material} · <span className="text-gray-400">{r.field}</span> — global {r.global}, jumlah divisi {r.divisionSum} (selisih {r.delta > 0 ? `+${r.delta}` : r.delta})</>} />
+            </div>
+          )}
+
+          {report.serialVsMaterialStock.length > 0 && (
+            <div>
+              <div className="text-xs font-medium text-gray-700 mb-1">serial_numbers ≠ material_stock ({report.serialVsMaterialStock.length})</div>
+              <List items={report.serialVsMaterialStock} render={(r) => r.issue
+                ? <>{r.material} — <span className="text-red-500">{r.issue}</span> ({r.count} unit)</>
+                : <>{r.material} · <span className="text-gray-400">{r.customer} / {r.field}</span> — dari serial {r.fromSerials}, tersimpan {r.stored}{r.matchesDeliveredInclusive ? <span className="text-gray-400"> (selisih = jumlah unit Delivered, wajar untuk data MSG)</span> : null}</>
+              } />
+            </div>
+          )}
+
+          {report.negatives.length > 0 && (
+            <div>
+              <div className="text-xs font-medium text-gray-700 mb-1">Nilai negatif ({report.negatives.length})</div>
+              <List items={report.negatives} render={(r) => <>{r.material} · <span className="text-gray-400">{r.scope === "global" ? "global" : r.customer} / {r.field}</span> = {r.value}</>} />
+            </div>
+          )}
+
+          {report.orphans.length > 0 && (
+            <div>
+              <div className="text-xs font-medium text-gray-700 mb-1">Baris stok tak dikenal ({report.orphans.length})</div>
+              <List items={report.orphans} render={(r) => <>{r.material} · <span className="text-gray-400">{r.customer}</span> — {r.type}</>} />
+            </div>
+          )}
+        </div>
+      )}
     </Card>
   );
 }
@@ -7454,6 +7538,7 @@ export default function App() {
         </div>
       </Card>
       {role === ROLES.MANAGER && <PhantomStockCleanup api={api} showToast={showToast} />}
+      {role === ROLES.MANAGER && <StockConsistencyCheck api={api} showToast={showToast} />}
     </div>
   );
 
