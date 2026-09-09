@@ -6148,6 +6148,7 @@ function createApiClient(baseUrl, getToken) {
     getPhantomStockRows: () => request("/stock/phantom-check"),
     cleanupPhantomStockRows: () => request("/stock/phantom-cleanup", { method: "POST" }),
     getStockConsistency: () => request("/stock/consistency"),
+    rebuildGlobalStock: (commit) => request("/stock/rebuild-global", { method: "POST", body: { commit: !!commit } }),
     getMovements: (material) => request(`/stock/movements${material ? `?material=${encodeURIComponent(material)}` : ""}`),
     getSerials: (material, status, customer, homebase) => {
       const params = new URLSearchParams();
@@ -6432,15 +6433,45 @@ function PhantomStockCleanup({ api, showToast }) {
 function StockConsistencyCheck({ api, showToast }) {
   const [report, setReport] = useState(null); // null = belum dicek
   const [checking, setChecking] = useState(false);
+  const [rebuildPreview, setRebuildPreview] = useState(null); // null | { changes: [] }
+  const [rebuilding, setRebuilding] = useState(false);
+  const [confirmRebuild, setConfirmRebuild] = useState(false);
 
   const check = async () => {
     setChecking(true);
+    setRebuildPreview(null);
     try {
       setReport(await api.getStockConsistency());
     } catch (err) {
       showToast(err.message || "Gagal memeriksa konsistensi stok");
     } finally {
       setChecking(false);
+    }
+  };
+
+  const previewRebuild = async () => {
+    setRebuilding(true);
+    try {
+      const res = await api.rebuildGlobalStock(false);
+      setRebuildPreview(res);
+    } catch (err) {
+      showToast(err.message || "Gagal menyiapkan perbaikan");
+    } finally {
+      setRebuilding(false);
+    }
+  };
+
+  const commitRebuild = async () => {
+    setRebuilding(true);
+    try {
+      const res = await api.rebuildGlobalStock(true);
+      showToast(`${res.count} angka global diperbaiki di ${res.materialsUpdated} material`);
+      setRebuildPreview(null);
+      await check();
+    } catch (err) {
+      showToast(err.message || "Gagal menerapkan perbaikan");
+    } finally {
+      setRebuilding(false);
     }
   };
 
@@ -6459,8 +6490,9 @@ function StockConsistencyCheck({ api, showToast }) {
         <div className="font-semibold text-gray-800">Periksa Konsistensi Stok</div>
         <div className="text-gray-500 text-xs mt-1">
           Bandingkan tiga sumber angka stok: <span className="font-medium">serial_numbers</span> (per unit),
-          <span className="font-medium"> material_stock</span> (per divisi), dan agregat global. Hanya membaca —
-          tidak mengubah data apa pun. Perbaikan otomatis belum tersedia (lihat TUGAS_PENGEMBANGAN.md #3).
+          <span className="font-medium"> material_stock</span> (per divisi), dan agregat global. "Periksa" hanya
+          membaca. Perbaikan tersedia baru untuk selisih agregat global (aman — cache dihitung ulang dari
+          material_stock); selisih serial vs material_stock belum bisa auto-fix (lihat TUGAS_PENGEMBANGAN.md #3).
         </div>
       </div>
 
@@ -6480,6 +6512,18 @@ function StockConsistencyCheck({ api, showToast }) {
             <div>
               <div className="text-xs font-medium text-gray-700 mb-1">Global ≠ jumlah semua divisi ({report.globalVsDivisionSum.length})</div>
               <List items={report.globalVsDivisionSum} render={(r) => <>{r.material} · <span className="text-gray-400">{r.field}</span> — global {r.global}, jumlah divisi {r.divisionSum} (selisih {r.delta > 0 ? `+${r.delta}` : r.delta})</>} />
+              {!rebuildPreview
+                ? <GhostButton onClick={previewRebuild} disabled={rebuilding} className="mt-2">{rebuilding ? "Menyiapkan..." : "Perbaiki Agregat Global"}</GhostButton>
+                : (
+                  <div className="mt-2 border border-emerald-100 bg-emerald-50/40 rounded-lg p-3 space-y-2">
+                    <div className="text-xs font-medium text-gray-700">Pratinjau — {rebuildPreview.count} angka akan diubah:</div>
+                    <List items={rebuildPreview.changes} render={(c) => <>{c.material} · <span className="text-gray-400">{c.field}</span> — {c.from} → <span className="font-medium text-emerald-800">{c.to}</span></>} />
+                    <div className="flex gap-2">
+                      <DangerButton onClick={() => setConfirmRebuild(true)} disabled={rebuilding}>{rebuilding ? "Menerapkan..." : "Terapkan"}</DangerButton>
+                      <GhostButton onClick={() => setRebuildPreview(null)} disabled={rebuilding}>Batal</GhostButton>
+                    </div>
+                  </div>
+                )}
             </div>
           )}
 
@@ -6516,6 +6560,15 @@ function StockConsistencyCheck({ api, showToast }) {
           )}
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmRebuild}
+        title="Perbaiki Agregat Global"
+        message={`${rebuildPreview?.count || 0} angka di tabel materials akan disetel ulang = jumlah material_stock semua divisi. Ini hanya memperbaiki kolom cache global — material_stock per divisi dan serial_numbers TIDAK disentuh. Lanjutkan?`}
+        confirmLabel="Ya, Terapkan"
+        onConfirm={() => { setConfirmRebuild(false); commitRebuild(); }}
+        onCancel={() => setConfirmRebuild(false)}
+      />
     </Card>
   );
 }
