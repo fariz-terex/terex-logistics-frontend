@@ -6225,6 +6225,10 @@ function createApiClient(baseUrl, getToken) {
     getNotifications: (limit = 30) => request(`/notifications?limit=${limit}`),
     markNotificationRead: (id) => request(`/notifications/${id}/read`, { method: "POST" }),
     markAllNotificationsRead: () => request(`/notifications/read-all`, { method: "POST" }),
+
+    getTelegramStatus: () => request("/telegram/status"),
+    getTelegramLinkCode: () => request("/telegram/link-code", { method: "POST" }),
+    unlinkTelegram: () => request("/telegram/unlink", { method: "POST" }),
     assignDeliveryStock: (id, serialSelections) => request(`/deliveries/${id}/assign-stock`, { method: "POST", body: serialSelections ? { serialSelections } : {} }),
     shipDelivery: (id, payload) => request(`/deliveries/${id}/ship`, { method: "POST", body: payload }),
     addDeliveryResi: (id, payload) => request(`/deliveries/${id}/resi`, { method: "POST", body: payload }),
@@ -6392,6 +6396,79 @@ function LoginScreen({ apiBase, setApiBase, onLogin }) {
         </div>
       </div>
     </div>
+  );
+}
+
+function TelegramLink({ api, showToast }) {
+  const [state, setState] = useState(null); // { configured, linked, botUsername }
+  const [busy, setBusy] = useState(false);
+  const [pendingUrl, setPendingUrl] = useState(null); // set after "Hubungkan" until re-checked
+
+  const refresh = () => api.getTelegramStatus().then(setState).catch(() => {});
+  React.useEffect(() => { refresh(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const startLink = async () => {
+    setBusy(true);
+    try {
+      const { url } = await api.getTelegramLinkCode();
+      setPendingUrl(url);
+      window.open(url, "_blank", "noopener");
+    } catch (err) {
+      showToast(err.message || "Gagal membuat tautan");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const checkNow = async () => {
+    setBusy(true);
+    try {
+      const s = await api.getTelegramStatus();
+      setState(s);
+      if (s.linked) { setPendingUrl(null); showToast("Telegram terhubung ✓"); }
+      else showToast("Belum terhubung — pastikan sudah klik Start di Telegram");
+    } finally { setBusy(false); }
+  };
+
+  const unlink = async () => {
+    setBusy(true);
+    try { await api.unlinkTelegram(); await refresh(); setPendingUrl(null); showToast("Telegram diputuskan"); }
+    catch (err) { showToast(err.message || "Gagal memutuskan"); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Card className="p-5 space-y-3 text-sm">
+      <div>
+        <div className="font-semibold text-gray-800">Notifikasi Telegram</div>
+        <div className="text-gray-500 text-xs mt-1">
+          Hubungkan akun Telegram Anda untuk menerima notifikasi status Delivery langsung sebagai pesan pribadi dari bot.
+        </div>
+      </div>
+
+      {!state ? (
+        <div className="text-xs text-gray-400">Memuat...</div>
+      ) : !state.configured ? (
+        <div className="text-xs text-gray-400">Integrasi Telegram belum diaktifkan oleh admin server.</div>
+      ) : state.linked ? (
+        <div className="flex items-center justify-between">
+          <span className="text-emerald-700 text-xs font-medium">✓ Telegram terhubung</span>
+          <GhostButton onClick={unlink} disabled={busy}>Putuskan</GhostButton>
+        </div>
+      ) : pendingUrl ? (
+        <div className="space-y-2">
+          <div className="text-xs text-gray-600">
+            Tab Telegram sudah dibuka. Klik <span className="font-medium">Start</span> di chat bot, lalu kembali ke sini.
+          </div>
+          <div className="flex gap-2">
+            <PrimaryButton onClick={checkNow} disabled={busy}>{busy ? "Mengecek..." : "Saya sudah klik Start"}</PrimaryButton>
+            <GhostButton onClick={() => window.open(pendingUrl, "_blank", "noopener")}>Buka Telegram lagi</GhostButton>
+          </div>
+        </div>
+      ) : (
+        <GhostButton onClick={startLink} disabled={busy}>{busy ? "Menyiapkan..." : "Hubungkan Telegram"}</GhostButton>
+      )}
+    </Card>
   );
 }
 
@@ -7740,6 +7817,7 @@ export default function App() {
           <DangerButton onClick={handleLogout}><LogOut size={14} /> Logout</DangerButton>
         </div>
       </Card>
+      <TelegramLink api={api} showToast={showToast} />
       {role === ROLES.MANAGER && <PhantomStockCleanup api={api} showToast={showToast} />}
       {role === ROLES.MANAGER && <StockConsistencyCheck api={api} showToast={showToast} />}
     </div>
