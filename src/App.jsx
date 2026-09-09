@@ -1325,7 +1325,7 @@ function DeliveryCreate({ onSubmit, onCancel, materials, tools, consumables, sit
   );
 }
 
-function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, onShip, onAddResi, onAddBast, onAddBkbLink, onAdvance, onReturnTools, role, materials, tools, api }) {
+function DeliveryDetail({ delivery, onBack, onApprove, onReject, onCancel, onAssignStock, onShip, onAddResi, onAddBast, onAddBkbLink, onAdvance, onReturnTools, role, materials, tools, api }) {
   // Stage 1 — Manager reviews qty only, no SN involved.
   const canApprove = role === ROLES.MANAGER && delivery.status === "Waiting Logistics Approval";
   // Stage 2 — Logistics Staff (or Manager) picks the actual units to fulfill it.
@@ -1345,6 +1345,12 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, 
 
   const [showRejectInput, setShowRejectInput] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
+
+  // Manager can cancel a request any time before it ships. From "Preparing"
+  // this releases the reserved stock back to Ready.
+  const canCancel = role === ROLES.MANAGER && ["Waiting Logistics Approval", "Waiting Stock Assignment", "Preparing"].includes(delivery.status);
+  const [showCancelInput, setShowCancelInput] = useState(false);
+  const [cancelReason, setCancelReason] = useState("");
 
   // Serialized items needing a Serial Number pick at assign-stock time —
   // works for both sparepart (materials) and alat (tools), just checking a
@@ -1507,10 +1513,10 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, 
         <StatusBadge status={delivery.status} />
       </div>
 
-      {delivery.status === "Rejected" && delivery.rejectionReason && (
+      {["Rejected", "Cancelled"].includes(delivery.status) && delivery.rejectionReason && (
         <Card className="p-4 border-red-200 bg-red-50/50 flex items-start gap-3">
           <AlertTriangle size={18} className="text-red-500 mt-0.5 shrink-0" />
-          <div className="text-sm text-red-700"><span className="font-semibold">Alasan penolakan: </span>{delivery.rejectionReason}</div>
+          <div className="text-sm text-red-700"><span className="font-semibold">{delivery.status === "Cancelled" ? "Alasan pembatalan: " : "Alasan penolakan: "}</span>{delivery.rejectionReason}</div>
         </Card>
       )}
 
@@ -1657,6 +1663,26 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onAssignStock, 
           <PrimaryButton onClick={() => setConfirmAssign(true)} disabled={assignDisabled || assigning}>
             <Check size={15} /> {assigning ? "Memproses..." : "Reservasi Stock"}
           </PrimaryButton>
+        </Card>
+      )}
+
+      {canCancel && !canApprove && (
+        <Card className="p-5">
+          {showCancelInput ? (
+            <div className="space-y-3">
+              <textarea value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} placeholder="Alasan pembatalan..." rows={2} className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+              <div className="text-xs text-gray-500">{delivery.status === "Preparing" ? "Stock yang sudah direservasi akan dikembalikan ke Ready." : "Request akan ditutup (belum ada stock yang direservasi)."}</div>
+              <div className="flex justify-end gap-2">
+                <GhostButton onClick={() => { setShowCancelInput(false); setCancelReason(""); }}>Batal</GhostButton>
+                <DangerButton onClick={() => cancelReason.trim() && onCancel(delivery.id, cancelReason)}>Batalkan Request</DangerButton>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between">
+              <div className="text-sm text-gray-600">Batalkan request ini (mis. dibuat untuk testing atau tidak jadi).</div>
+              <DangerButton onClick={() => setShowCancelInput(true)}><X size={15} /> Batalkan</DangerButton>
+            </div>
+          )}
         </Card>
       )}
 
@@ -6149,6 +6175,7 @@ function createApiClient(baseUrl, getToken) {
     cleanupPhantomStockRows: () => request("/stock/phantom-cleanup", { method: "POST" }),
     getStockConsistency: () => request("/stock/consistency"),
     rebuildGlobalStock: (commit) => request("/stock/rebuild-global", { method: "POST", body: { commit: !!commit } }),
+    rebuildSerialBuckets: (commit) => request("/stock/rebuild-serial-buckets", { method: "POST", body: { commit: !!commit } }),
     getMovements: (material) => request(`/stock/movements${material ? `?material=${encodeURIComponent(material)}` : ""}`),
     getSerials: (material, status, customer, homebase) => {
       const params = new URLSearchParams();
@@ -6187,6 +6214,7 @@ function createApiClient(baseUrl, getToken) {
     createDelivery: (payload) => request("/deliveries", { method: "POST", body: payload }),
     approveDelivery: (id) => request(`/deliveries/${id}/approve`, { method: "POST" }),
     rejectDelivery: (id, reason) => request(`/deliveries/${id}/reject`, { method: "POST", body: { reason } }),
+    cancelDelivery: (id, reason) => request(`/deliveries/${id}/cancel`, { method: "POST", body: { reason } }),
     assignDeliveryStock: (id, serialSelections) => request(`/deliveries/${id}/assign-stock`, { method: "POST", body: serialSelections ? { serialSelections } : {} }),
     shipDelivery: (id, payload) => request(`/deliveries/${id}/ship`, { method: "POST", body: payload }),
     addDeliveryResi: (id, payload) => request(`/deliveries/${id}/resi`, { method: "POST", body: payload }),
@@ -6430,48 +6458,74 @@ function PhantomStockCleanup({ api, showToast }) {
   );
 }
 
+// Reusable preview → confirm → apply flow for a stock-repair endpoint that
+// takes { commit } and returns { count, changes: [{material,customer?,field,from,to}] }.
+function RebuildAction({ label, title, confirmMessage, run, onDone, showToast }) {
+  const [preview, setPreview] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [confirm, setConfirm] = useState(false);
+
+  const doPreview = async () => {
+    setBusy(true);
+    try { setPreview(await run(false)); }
+    catch (err) { showToast(err.message || "Gagal menyiapkan perbaikan"); }
+    finally { setBusy(false); }
+  };
+  const doCommit = async () => {
+    setBusy(true);
+    try {
+      const res = await run(true);
+      showToast(`${res.count} angka diperbaiki`);
+      setPreview(null);
+      await onDone();
+    } catch (err) { showToast(err.message || "Gagal menerapkan perbaikan"); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <>
+      {!preview
+        ? <GhostButton onClick={doPreview} disabled={busy} className="mt-2">{busy ? "Menyiapkan..." : label}</GhostButton>
+        : (
+          <div className="mt-2 border border-emerald-100 bg-emerald-50/40 rounded-lg p-3 space-y-2">
+            <div className="text-xs font-medium text-gray-700">Pratinjau — {preview.count} angka akan diubah:</div>
+            <div className="max-h-40 overflow-y-auto border border-gray-100 rounded-lg divide-y divide-gray-50 bg-white">
+              {preview.changes.map((c, i) => (
+                <div key={i} className="px-3 py-1.5 text-xs text-gray-600">
+                  {c.material} · <span className="text-gray-400">{c.customer ? `${c.customer} / ` : ""}{c.field}</span> — {c.from} → <span className="font-medium text-emerald-800">{c.to}</span>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <DangerButton onClick={() => setConfirm(true)} disabled={busy}>{busy ? "Menerapkan..." : "Terapkan"}</DangerButton>
+              <GhostButton onClick={() => setPreview(null)} disabled={busy}>Batal</GhostButton>
+            </div>
+          </div>
+        )}
+      <ConfirmDialog
+        open={confirm}
+        title={title}
+        message={confirmMessage}
+        confirmLabel="Ya, Terapkan"
+        onConfirm={() => { setConfirm(false); doCommit(); }}
+        onCancel={() => setConfirm(false)}
+      />
+    </>
+  );
+}
+
 function StockConsistencyCheck({ api, showToast }) {
   const [report, setReport] = useState(null); // null = belum dicek
   const [checking, setChecking] = useState(false);
-  const [rebuildPreview, setRebuildPreview] = useState(null); // null | { changes: [] }
-  const [rebuilding, setRebuilding] = useState(false);
-  const [confirmRebuild, setConfirmRebuild] = useState(false);
 
   const check = async () => {
     setChecking(true);
-    setRebuildPreview(null);
     try {
       setReport(await api.getStockConsistency());
     } catch (err) {
       showToast(err.message || "Gagal memeriksa konsistensi stok");
     } finally {
       setChecking(false);
-    }
-  };
-
-  const previewRebuild = async () => {
-    setRebuilding(true);
-    try {
-      const res = await api.rebuildGlobalStock(false);
-      setRebuildPreview(res);
-    } catch (err) {
-      showToast(err.message || "Gagal menyiapkan perbaikan");
-    } finally {
-      setRebuilding(false);
-    }
-  };
-
-  const commitRebuild = async () => {
-    setRebuilding(true);
-    try {
-      const res = await api.rebuildGlobalStock(true);
-      showToast(`${res.count} angka global diperbaiki di ${res.materialsUpdated} material`);
-      setRebuildPreview(null);
-      await check();
-    } catch (err) {
-      showToast(err.message || "Gagal menerapkan perbaikan");
-    } finally {
-      setRebuilding(false);
     }
   };
 
@@ -6512,18 +6566,14 @@ function StockConsistencyCheck({ api, showToast }) {
             <div>
               <div className="text-xs font-medium text-gray-700 mb-1">Global ≠ jumlah semua divisi ({report.globalVsDivisionSum.length})</div>
               <List items={report.globalVsDivisionSum} render={(r) => <>{r.material} · <span className="text-gray-400">{r.field}</span> — global {r.global}, jumlah divisi {r.divisionSum} (selisih {r.delta > 0 ? `+${r.delta}` : r.delta})</>} />
-              {!rebuildPreview
-                ? <GhostButton onClick={previewRebuild} disabled={rebuilding} className="mt-2">{rebuilding ? "Menyiapkan..." : "Perbaiki Agregat Global"}</GhostButton>
-                : (
-                  <div className="mt-2 border border-emerald-100 bg-emerald-50/40 rounded-lg p-3 space-y-2">
-                    <div className="text-xs font-medium text-gray-700">Pratinjau — {rebuildPreview.count} angka akan diubah:</div>
-                    <List items={rebuildPreview.changes} render={(c) => <>{c.material} · <span className="text-gray-400">{c.field}</span> — {c.from} → <span className="font-medium text-emerald-800">{c.to}</span></>} />
-                    <div className="flex gap-2">
-                      <DangerButton onClick={() => setConfirmRebuild(true)} disabled={rebuilding}>{rebuilding ? "Menerapkan..." : "Terapkan"}</DangerButton>
-                      <GhostButton onClick={() => setRebuildPreview(null)} disabled={rebuilding}>Batal</GhostButton>
-                    </div>
-                  </div>
-                )}
+              <RebuildAction
+                label="Perbaiki Agregat Global"
+                title="Perbaiki Agregat Global"
+                confirmMessage="Angka di tabel materials akan disetel ulang = jumlah material_stock semua divisi. Ini hanya memperbaiki kolom cache global — material_stock per divisi dan serial_numbers TIDAK disentuh. Lanjutkan?"
+                run={api.rebuildGlobalStock}
+                onDone={check}
+                showToast={showToast}
+              />
             </div>
           )}
 
@@ -6534,12 +6584,28 @@ function StockConsistencyCheck({ api, showToast }) {
             const renderRow = (r) => r.issue
               ? <>{r.material} — <span className="text-red-500">{r.issue}</span> ({r.count} unit)</>
               : <>{r.material} · <span className="text-gray-400">{r.customer} / {r.field}</span> — dari serial {r.fromSerials}, tersimpan {r.stored} (selisih {r.delta > 0 ? `+${r.delta}` : r.delta})</>;
+            const fixable = real.filter((r) => !r.issue && r.field !== "ready");
             return (
               <>
                 {real.length > 0 && (
                   <div>
                     <div className="text-xs font-medium text-gray-700 mb-1">serial_numbers ≠ material_stock — perlu ditindak ({real.length})</div>
                     <List items={real} render={renderRow} />
+                    {fixable.length > 0 && (
+                      <RebuildAction
+                        label="Perbaiki reserved / in_transit / faulty dari serial"
+                        title="Perbaiki dari serial_numbers"
+                        confirmMessage="material_stock.{reserved, in_transit, faulty} akan disetel = jumlah unit di serial_numbers per status (untuk material serialized). Kolom `ready` dan serial_numbers TIDAK disentuh. Setelah ini, jalankan juga 'Perbaiki Agregat Global'. Lanjutkan?"
+                        run={api.rebuildSerialBuckets}
+                        onDone={check}
+                        showToast={showToast}
+                      />
+                    )}
+                    <div className="text-[11px] text-gray-400 mt-1">
+                      Catatan: kalau selisihnya karena unit "nyangkut" di status Reserved/In Transit dari
+                      delivery test, batalkan dulu delivery-nya (Delivery Request → detail → Batalkan) — bukan
+                      lewat tombol ini.
+                    </div>
                   </div>
                 )}
                 {msg.length > 0 && (
@@ -6576,15 +6642,6 @@ function StockConsistencyCheck({ api, showToast }) {
           )}
         </div>
       )}
-
-      <ConfirmDialog
-        open={confirmRebuild}
-        title="Perbaiki Agregat Global"
-        message={`${rebuildPreview?.count || 0} angka di tabel materials akan disetel ulang = jumlah material_stock semua divisi. Ini hanya memperbaiki kolom cache global — material_stock per divisi dan serial_numbers TIDAK disentuh. Lanjutkan?`}
-        confirmLabel="Ya, Terapkan"
-        onConfirm={() => { setConfirmRebuild(false); commitRebuild(); }}
-        onCancel={() => setConfirmRebuild(false)}
-      />
     </Card>
   );
 }
@@ -7097,6 +7154,14 @@ export default function App() {
     } catch (err) { setApiError(err.message); }
   };
 
+  const cancelDelivery = async (id, reason) => {
+    try {
+      const updated = await api.cancelDelivery(id, reason);
+      setDeliveries((prev) => prev.map((d) => (d.id === id ? updated : d)));
+      await refreshStock(); // cancelling from "Preparing" releases reserved stock
+    } catch (err) { setApiError(err.message); }
+  };
+
   const advanceDelivery = async (id, payload) => {
     try {
       const updated = await api.advanceDelivery(id, payload);
@@ -7383,7 +7448,7 @@ export default function App() {
   else if (page === "delivery") {
     if (selectedDelivery) {
       const d = deliveries.find((x) => x.id === selectedDelivery);
-      content = <DeliveryDetail delivery={d} onBack={() => setSelectedDelivery(null)} onApprove={approveDelivery} onReject={rejectDelivery} onAssignStock={assignDeliveryStock} onShip={shipDelivery} onAddResi={addDeliveryResi} onAddBast={addDeliveryBast} onAddBkbLink={addDeliveryBkbLink} onAdvance={advanceDelivery} onReturnTools={returnDeliveryTools} role={role} materials={materials} tools={tools} api={api} />;
+      content = <DeliveryDetail delivery={d} onBack={() => setSelectedDelivery(null)} onApprove={approveDelivery} onReject={rejectDelivery} onCancel={cancelDelivery} onAssignStock={assignDeliveryStock} onShip={shipDelivery} onAddResi={addDeliveryResi} onAddBast={addDeliveryBast} onAddBkbLink={addDeliveryBkbLink} onAdvance={advanceDelivery} onReturnTools={returnDeliveryTools} role={role} materials={materials} tools={tools} api={api} />;
     } else content = <DeliveryList deliveries={deliveries} setSelected={setSelectedDelivery} setPage={goto} role={role} />;
   } else if (page === "deliveryCreate") content = <DeliveryCreate onSubmit={submitDelivery} onCancel={() => goto("delivery")} materials={materials} tools={tools} consumables={consumables} sites={sites} homebases={homebases} currentUser={currentUser} customers={customers} api={api} />;
   else if (page === "returnFaulty") {
