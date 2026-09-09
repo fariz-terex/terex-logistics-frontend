@@ -6506,6 +6506,14 @@ function StockConsistencyCheck({ api, showToast }) {
               <List items={report.orphans} render={(r) => <>{r.material} · <span className="text-gray-400">{r.customer}</span> — {r.type}</>} />
             </div>
           )}
+
+          {report.unassignedStock?.length > 0 && (
+            <div>
+              <div className="text-xs font-medium text-gray-500 mb-1">Stok "Unassigned" ({report.unassignedStock.length}) — bukan error</div>
+              <div className="text-[11px] text-gray-400 mb-1">Stok lama sebelum fitur divisi. Terhitung di total global, tapi tidak terlihat divisi manapun sampai diterima ulang ke divisi asli.</div>
+              <List items={report.unassignedStock} render={(r) => <>{r.material} — ready {r.ready}, faulty {r.faulty}, reserved {r.reserved}, transit {r.in_transit}</>} />
+            </div>
+          )}
         </div>
       )}
     </Card>
