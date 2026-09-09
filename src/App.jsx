@@ -2371,12 +2371,45 @@ function SendToCustomerDialog({ open, mode, serialNumber, onSubmit, onCancel, sa
   );
 }
 
+/* Timeline of the five history dates carried per unit (populated for imported
+   units; blank for units created through the app). Shown when a Serial Number
+   row is expanded. Dates are rendered as-is from the DB (YYYY-MM-DD); a null
+   date shows "—". */
+function SerialDateTimeline({ serial }) {
+  const val = (v) => (v == null || v === "" ? "—" : v);
+  const steps = [
+    { label: "Tanggal Terima", value: serial.received_date },
+    { label: "Tanggal Install", value: serial.installed_date, sub: serial.install_site ? `Lokasi: ${serial.install_site}` : null },
+    { label: "Tanggal Replacement", value: serial.replacement_date },
+    { label: "Dikirim ke Warehouse Terex", value: serial.shipped_to_warehouse_date },
+    { label: "Return ke Customer", value: serial.returned_to_customer_date },
+  ];
+  return (
+    <div>
+      <div className="text-xs font-medium text-gray-400 mb-3">Riwayat Tanggal Unit</div>
+      <div className="flex flex-wrap items-start gap-x-2 gap-y-3">
+        {steps.map((step, i) => (
+          <React.Fragment key={step.label}>
+            {i > 0 && <ChevronRight size={14} className="text-gray-300 mt-6 hidden sm:block" />}
+            <div className="min-w-[9rem]">
+              <div className="text-[11px] uppercase tracking-wide text-gray-400">{step.label}</div>
+              <div className={`text-sm mt-0.5 ${step.value ? "text-gray-800 font-medium" : "text-gray-300"}`}>{val(step.value)}</div>
+              {step.sub && <div className="text-[11px] text-emerald-700 mt-0.5">{step.sub}</div>}
+            </div>
+          </React.Fragment>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function MaterialSerialDetail({ material, api, onBack, highlightSerial, highlightToken, deliveries, role, showToast }) {
   const [status, setStatus] = useState("All");
   const [serials, setSerials] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [highlighted, setHighlighted] = useState(highlightSerial || null);
+  const [expandedSn, setExpandedSn] = useState(null);
   const rowRefs = React.useRef({});
   const canManage = role === ROLES.MANAGER || role === ROLES.LOGISTICS;
   const [dialog, setDialog] = useState(null); // { mode: "send"|"receive", sn }
@@ -2463,17 +2496,25 @@ function MaterialSerialDetail({ material, api, onBack, highlightSerial, highligh
             ) : filtered.length === 0 ? (
               <tr><td colSpan={4}><EmptyState text="Tidak ada Serial Number untuk filter ini." /></td></tr>
             ) : (
-              filtered.map((s) => (
+              filtered.map((s) => {
+                const expanded = expandedSn === s.sn;
+                return (
+                <React.Fragment key={s.sn}>
                 <tr
-                  key={s.sn}
                   ref={(el) => { rowRefs.current[s.sn] = el; }}
-                  className={`border-b border-gray-50 last:border-0 transition-colors duration-700 ${highlighted === s.sn ? "bg-emerald-100" : ""}`}
+                  onClick={() => setExpandedSn(expanded ? null : s.sn)}
+                  className={`border-b border-gray-50 last:border-0 transition-colors duration-700 cursor-pointer hover:bg-gray-50/50 ${highlighted === s.sn ? "bg-emerald-100" : ""}`}
                 >
-                  <td className="px-5 py-3 font-medium text-gray-800">{s.sn}</td>
+                  <td className="px-5 py-3 font-medium text-gray-800">
+                    <span className="flex items-center gap-1.5">
+                      {expanded ? <ChevronDown size={14} className="text-gray-400" /> : <ChevronRight size={14} className="text-gray-400" />}
+                      {s.sn}
+                    </span>
+                  </td>
                   <td className="px-5 py-3"><StatusBadge status={s.status} /></td>
                   <td className="px-5 py-3 text-gray-500 text-xs">{s.current_ref ? describeRef(s.current_ref, deliveries) : (s.received_ref || "-")}</td>
                   {canManage && (
-                    <td className="px-5 py-3">
+                    <td className="px-5 py-3" onClick={(e) => e.stopPropagation()}>
                       {s.status === "Faulty" && (
                         <button onClick={() => setDialog({ mode: "send", sn: s.sn })} className="text-xs font-medium text-emerald-800">Kirim ke Customer</button>
                       )}
@@ -2483,7 +2524,16 @@ function MaterialSerialDetail({ material, api, onBack, highlightSerial, highligh
                     </td>
                   )}
                 </tr>
-              ))
+                {expanded && (
+                  <tr className="bg-gray-50/60 border-b border-gray-50 last:border-0">
+                    <td colSpan={canManage ? 4 : 3} className="px-5 py-4">
+                      <SerialDateTimeline serial={s} />
+                    </td>
+                  </tr>
+                )}
+                </React.Fragment>
+                );
+              })
             )}
           </tbody>
         </table>
