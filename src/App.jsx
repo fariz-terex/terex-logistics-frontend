@@ -376,6 +376,37 @@ function SortableHeader({ label, sortKey, sort, onSort, className = "" }) {
   );
 }
 
+// Shared toolbar for the Inventory pages (Warehouse Stock / Stock Alat /
+// Stock Consumable): free-text search, a Category dropdown, an optional
+// extra control (Warehouse Stock's division picker), and a "low stock only"
+// toggle that also shows how many rows are below minimum.
+function InventoryFilters({ search, setSearch, placeholder, categories, categoryFilter, setCategoryFilter, lowOnly, setLowOnly, lowCount, extra }) {
+  return (
+    <div className="flex items-center gap-3 flex-wrap">
+      <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2.5 w-72">
+        <Search size={16} className="text-gray-400" />
+        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={placeholder} className="bg-transparent text-sm outline-none w-full" />
+      </div>
+      <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none bg-white text-gray-600">
+        <option value="All">Semua Kategori</option>
+        {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+      </select>
+      {extra}
+      <button
+        onClick={() => setLowOnly((v) => !v)}
+        className={`px-3 py-2.5 rounded-lg text-sm font-medium border flex items-center gap-1.5 ${lowOnly ? "bg-red-50 border-red-200 text-red-600" : "border-gray-200 text-gray-500 hover:bg-gray-50"}`}
+      >
+        <AlertTriangle size={14} /> Stok minimum{lowCount ? ` (${lowCount})` : ""}
+      </button>
+    </div>
+  );
+}
+
+// unique, locale-sorted category list from a set of rows
+function categoryList(rows) {
+  return [...new Set(rows.map((r) => r.category).filter(Boolean))].sort((a, b) => a.localeCompare(b, "id"));
+}
+
 // Generic comparator for the sort state above — handles numbers, strings,
 // and null/undefined (always sorted last regardless of direction) the same
 // way across every Master Data table.
@@ -2208,6 +2239,10 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast, currentUse
 
 function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMaterial, onSubmitReceipt, showToast, clearSerialHighlight, currentUser, customers, role, api }) {
   const [search, setSearch] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("All");
+  const [lowOnly, setLowOnly] = useState(false);
+  const [sort, setSort] = useState({ key: null, dir: "asc" });
+  const handleSort = (key) => setSort((prev) => (prev.key === key ? { key, dir: prev.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" }));
   const [showReceiptForm, setShowReceiptForm] = useState(false);
   const canReceive = role === ROLES.MANAGER || role === ROLES.LOGISTICS;
 
@@ -2276,7 +2311,18 @@ function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMateri
       ? materials
       : loadingScoped ? [] : (scopedMaterials || materials);
 
-  const filtered = displayMaterials.filter((m) => m.name.toLowerCase().includes(search.toLowerCase()));
+  const rows = displayMaterials.map((m) => ({
+    ...m,
+    total: (m.ready || 0) + (m.faulty || 0) + (m.reserved || 0) + (m.transit || 0),
+    low: (m.ready || 0) <= (m.minStock || 0),
+  }));
+  const categories = categoryList(rows);
+  const base = rows.filter((m) =>
+    m.name.toLowerCase().includes(search.toLowerCase()) &&
+    (categoryFilter === "All" || m.category === categoryFilter)
+  );
+  const lowCount = base.filter((m) => m.low).length;
+  const filtered = sortRows(lowOnly ? base.filter((m) => m.low) : base, sort);
 
   return (
     <div className="p-4 sm:p-8 space-y-5">
@@ -2297,39 +2343,40 @@ function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMateri
         />
       )}
 
-      <div className="flex items-center gap-3 flex-wrap">
-        <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2.5 w-80">
-          <Search size={16} className="text-gray-400" />
-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari material..." className="bg-transparent text-sm outline-none w-full" />
-        </div>
-        {divisionOptions.length > 1 && (
+      <InventoryFilters
+        search={search} setSearch={setSearch} placeholder="Cari material..."
+        categories={categories} categoryFilter={categoryFilter} setCategoryFilter={setCategoryFilter}
+        lowOnly={lowOnly} setLowOnly={setLowOnly} lowCount={lowCount}
+        extra={divisionOptions.length > 1 && (
           <select value={divisionFilter} onChange={(e) => setDivisionFilter(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none bg-white text-gray-600">
             <option value="">Semua Divisi (Total)</option>
             {divisionOptions.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
         )}
-      </div>
+      />
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
-              <th className="px-5 py-3 font-medium">Material</th>
-              <th className="px-5 py-3 font-medium">Category</th>
-              <th className="px-5 py-3 font-medium">Ready</th>
-              <th className="px-5 py-3 font-medium">Faulty</th>
-              <th className="px-5 py-3 font-medium">Reserved</th>
-              <th className="px-5 py-3 font-medium">In Transit</th>
-              <th className="px-5 py-3 font-medium">Total</th>
+              <SortableHeader label="Material" sortKey="name" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Category" sortKey="category" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Ready" sortKey="ready" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Faulty" sortKey="faulty" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Reserved" sortKey="reserved" sort={sort} onSort={handleSort} />
+              <SortableHeader label="In Transit" sortKey="transit" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Total" sortKey="total" sort={sort} onSort={handleSort} />
               <th className="px-5 py-3 font-medium"></th>
             </tr>
           </thead>
           <tbody>
             {loadingScoped ? (
               <tr><td colSpan={8}><div className="py-10 text-center text-sm text-gray-400">Memuat data...</div></td></tr>
+            ) : filtered.length === 0 ? (
+              <tr><td colSpan={8}><EmptyState text="Tidak ada material untuk filter ini." /></td></tr>
             ) : filtered.map((m) => {
-              const total = m.ready + m.faulty + m.reserved + m.transit;
-              const low = m.ready <= m.minStock;
+              const total = m.total;
+              const low = m.low;
               return (
                 <tr key={m.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/50">
                   <td className="px-5 py-3">
@@ -3850,9 +3897,25 @@ function MaterialSwapDetail({ swap, onBack, setPage, setReturnPrefill }) {
 
 function ToolStockPage({ tools, setPage, setToolSerialName, onSubmitReceipt, showToast, role }) {
   const [search, setSearch] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("All");
+  const [lowOnly, setLowOnly] = useState(false);
+  const [sort, setSort] = useState({ key: null, dir: "asc" });
+  const handleSort = (key) => setSort((prev) => (prev.key === key ? { key, dir: prev.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" }));
   const [showReceiptForm, setShowReceiptForm] = useState(false);
   const canReceive = role === ROLES.MANAGER || role === ROLES.LOGISTICS;
-  const filtered = tools.filter((t) => t.name.toLowerCase().includes(search.toLowerCase()));
+
+  const rows = tools.map((t) => ({
+    ...t,
+    total: (t.available || 0) + (t.checked_out || 0) + (t.under_repair || 0),
+    low: (t.available || 0) <= (t.min_stock || 0),
+  }));
+  const categories = categoryList(rows);
+  const base = rows.filter((t) =>
+    t.name.toLowerCase().includes(search.toLowerCase()) &&
+    (categoryFilter === "All" || t.category === categoryFilter)
+  );
+  const lowCount = base.filter((t) => t.low).length;
+  const filtered = sortRows(lowOnly ? base.filter((t) => t.low) : base, sort);
 
   return (
     <div className="p-4 sm:p-8 space-y-5">
@@ -3865,28 +3928,29 @@ function ToolStockPage({ tools, setPage, setToolSerialName, onSubmitReceipt, sho
         <ToolReceiptForm tools={tools} onCancel={() => setShowReceiptForm(false)} onSubmit={onSubmitReceipt} showToast={showToast} />
       )}
 
-      <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2.5 w-80">
-        <Search size={16} className="text-gray-400" />
-        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari alat..." className="bg-transparent text-sm outline-none w-full" />
-      </div>
+      <InventoryFilters
+        search={search} setSearch={setSearch} placeholder="Cari alat..."
+        categories={categories} categoryFilter={categoryFilter} setCategoryFilter={setCategoryFilter}
+        lowOnly={lowOnly} setLowOnly={setLowOnly} lowCount={lowCount}
+      />
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
-              <th className="px-5 py-3 font-medium">Alat</th>
-              <th className="px-5 py-3 font-medium">Category</th>
-              <th className="px-5 py-3 font-medium">Available</th>
-              <th className="px-5 py-3 font-medium">Checked Out</th>
-              <th className="px-5 py-3 font-medium">Under Repair</th>
-              <th className="px-5 py-3 font-medium">Total</th>
+              <SortableHeader label="Alat" sortKey="name" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Category" sortKey="category" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Available" sortKey="available" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Checked Out" sortKey="checked_out" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Under Repair" sortKey="under_repair" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Total" sortKey="total" sort={sort} onSort={handleSort} />
               <th className="px-5 py-3 font-medium"></th>
             </tr>
           </thead>
           <tbody>
             {filtered.map((t) => {
-              const total = t.available + t.checked_out + t.under_repair;
-              const low = t.available <= t.min_stock;
+              const total = t.total;
+              const low = t.low;
               return (
                 <tr key={t.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/50">
                   <td className="px-5 py-3">
@@ -5229,9 +5293,25 @@ function ConsumableReceiptForm({ consumables, onSubmit, onCancel, showToast }) {
 
 function ConsumableStockPage({ consumables, onSubmitReceipt, showToast, role }) {
   const [search, setSearch] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("All");
+  const [lowOnly, setLowOnly] = useState(false);
+  const [sort, setSort] = useState({ key: null, dir: "asc" });
+  const handleSort = (key) => setSort((prev) => (prev.key === key ? { key, dir: prev.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" }));
   const [showReceiptForm, setShowReceiptForm] = useState(false);
   const canReceive = role === ROLES.MANAGER || role === ROLES.LOGISTICS;
-  const filtered = consumables.filter((c) => c.name.toLowerCase().includes(search.toLowerCase()));
+
+  const rows = consumables.map((c) => ({
+    ...c,
+    total: (c.ready || 0) + (c.reserved || 0) + (c.in_transit || 0),
+    low: (c.ready || 0) <= (c.min_stock || 0),
+  }));
+  const categories = categoryList(rows);
+  const base = rows.filter((c) =>
+    c.name.toLowerCase().includes(search.toLowerCase()) &&
+    (categoryFilter === "All" || c.category === categoryFilter)
+  );
+  const lowCount = base.filter((c) => c.low).length;
+  const filtered = sortRows(lowOnly ? base.filter((c) => c.low) : base, sort);
 
   return (
     <div className="p-4 sm:p-8 space-y-5">
@@ -5244,27 +5324,28 @@ function ConsumableStockPage({ consumables, onSubmitReceipt, showToast, role }) 
         <ConsumableReceiptForm consumables={consumables} onCancel={() => setShowReceiptForm(false)} onSubmit={onSubmitReceipt} showToast={showToast} />
       )}
 
-      <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2.5 w-80">
-        <Search size={16} className="text-gray-400" />
-        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari consumable..." className="bg-transparent text-sm outline-none w-full" />
-      </div>
+      <InventoryFilters
+        search={search} setSearch={setSearch} placeholder="Cari consumable..."
+        categories={categories} categoryFilter={categoryFilter} setCategoryFilter={setCategoryFilter}
+        lowOnly={lowOnly} setLowOnly={setLowOnly} lowCount={lowCount}
+      />
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
-              <th className="px-5 py-3 font-medium">Consumable</th>
-              <th className="px-5 py-3 font-medium">Category</th>
-              <th className="px-5 py-3 font-medium">Ready</th>
-              <th className="px-5 py-3 font-medium">Reserved</th>
-              <th className="px-5 py-3 font-medium">In Transit</th>
-              <th className="px-5 py-3 font-medium">Total</th>
+              <SortableHeader label="Consumable" sortKey="name" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Category" sortKey="category" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Ready" sortKey="ready" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Reserved" sortKey="reserved" sort={sort} onSort={handleSort} />
+              <SortableHeader label="In Transit" sortKey="in_transit" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Total" sortKey="total" sort={sort} onSort={handleSort} />
             </tr>
           </thead>
           <tbody>
             {filtered.map((c) => {
-              const total = c.ready + c.reserved + c.in_transit;
-              const low = c.ready <= c.min_stock;
+              const total = c.total;
+              const low = c.low;
               return (
                 <tr key={c.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/50">
                   <td className="px-5 py-3">
