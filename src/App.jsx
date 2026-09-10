@@ -7809,10 +7809,8 @@ export default function App() {
     <div className="p-4 sm:p-8 max-w-xl space-y-5">
       <SectionTitle title="Settings" subtitle="Preferensi umum aplikasi" />
       <Card className="p-5 space-y-4 text-sm text-gray-600">
-        <div className="flex items-center justify-between"><span>Notifikasi email</span><input type="checkbox" defaultChecked className="accent-emerald-800 w-4 h-4" /></div>
         <div className="flex items-center justify-between"><span>Notifikasi in-app</span><input type="checkbox" defaultChecked className="accent-emerald-800 w-4 h-4" /></div>
         <div className="flex items-center justify-between"><span>Bahasa</span><span className="text-gray-800 font-medium">Bahasa Indonesia</span></div>
-        <div className="flex items-center justify-between"><span>Backend API URL</span><span className="text-gray-800 font-medium text-xs">{apiBase}</span></div>
         <div className="pt-2 border-t border-gray-100">
           <DangerButton onClick={handleLogout}><LogOut size={14} /> Logout</DangerButton>
         </div>
