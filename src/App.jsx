@@ -362,6 +362,19 @@ function EmptyState({ text }) {
   );
 }
 
+// Audit-trail timestamps are stored as UTC ISO strings
+// (e.g. "2026-09-08T07:54:45.175Z"). Render them readably in the viewer's
+// local time — "8 Sep 2026, 14.54".
+function fmtDateTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleString("id-ID", {
+    day: "numeric", month: "short", year: "numeric",
+    hour: "2-digit", minute: "2-digit",
+  });
+}
+
 // Clickable column header for sortable tables — click cycles asc -> desc,
 // clicking a different column resets to asc on that column instead.
 function SortableHeader({ label, sortKey, sort, onSort, className = "" }) {
@@ -2037,7 +2050,7 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onCancel, onAss
         <div className="space-y-3">
           {delivery.history.map((h, i) => (
             <div key={i} className="flex gap-3 text-sm">
-              <div className="text-xs text-gray-400 w-32 shrink-0">{h.time}</div>
+              <div className="text-xs text-gray-400 w-32 shrink-0">{fmtDateTime(h.time)}</div>
               <div className="text-gray-700">{h.text}</div>
             </div>
           ))}
@@ -3278,7 +3291,7 @@ function ReturnFaultyDetail({ r, onBack, onApprove, onRevise, onShip, onAddResi,
         <div className="space-y-3">
           {r.history.map((h, i) => (
             <div key={i} className="flex gap-3 text-sm">
-              <div className="text-xs text-gray-400 w-32 shrink-0">{h.time}</div>
+              <div className="text-xs text-gray-400 w-32 shrink-0">{fmtDateTime(h.time)}</div>
               <div className="text-gray-700">{h.text}</div>
             </div>
           ))}
@@ -3534,7 +3547,7 @@ function ReconciliationDetail({ r, onBack, onApprove, onRevise, onEdit, role }) 
         <div className="space-y-3">
           {r.history.map((h, i) => (
             <div key={i} className="flex gap-3 text-sm">
-              <div className="text-xs text-gray-400 w-32 shrink-0">{h.time}</div>
+              <div className="text-xs text-gray-400 w-32 shrink-0">{fmtDateTime(h.time)}</div>
               <div className="text-gray-700">{h.text}</div>
             </div>
           ))}
