@@ -514,8 +514,8 @@ function Sidebar({ page, setPage, role, userName, userCustomers, mobileOpen, onC
           <Truck size={20} className="text-white" />
         </div>
         <div className="flex-1">
-          <div className="text-emerald-900 font-bold text-lg leading-none tracking-tight">TEREX</div>
-          <div className="text-[10px] text-emerald-700 font-semibold tracking-[0.15em]">LOGISTICS</div>
+          <div className="text-emerald-900 font-bold text-lg leading-none tracking-tight">LMS</div>
+          <div className="text-[10px] text-emerald-700 font-semibold tracking-[0.15em]">TEREX</div>
         </div>
         <button onClick={onClose} className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:bg-gray-50 lg:hidden"><X size={18} /></button>
       </div>
@@ -994,7 +994,7 @@ function HelpStep({ n, children }) {
 function HelpPage({ role }) {
   return (
     <div className="p-4 sm:p-8 max-w-3xl space-y-5">
-      <SectionTitle title="Panduan Penggunaan" subtitle="Ringkasan alur kerja utama di TEREX Logistics" />
+      <SectionTitle title="Panduan Penggunaan" subtitle="Ringkasan alur kerja utama di LMS Terex" />
 
       <Card className="p-5 bg-emerald-50/50 border-emerald-100">
         <div className="text-sm text-emerald-900">
@@ -6384,14 +6384,14 @@ function LoginScreen({ apiBase, setApiBase, onLogin }) {
               <Truck size={20} className="text-white" />
             </div>
             <div>
-              <div className="text-lg font-bold text-emerald-900 leading-tight">TEREX</div>
-              <div className="text-[10px] tracking-wide text-emerald-700 leading-tight">LOGISTICS</div>
+              <div className="text-lg font-bold text-emerald-900 leading-tight">LMS</div>
+              <div className="text-[10px] tracking-wide text-emerald-700 leading-tight">TEREX</div>
             </div>
           </div>
 
           <div className="mt-6">
             <div className="text-xl text-gray-600">Selamat Datang di</div>
-            <div className="text-3xl font-bold text-emerald-900 mt-1">TEREX Logistics</div>
+            <div className="text-3xl font-bold text-emerald-900 mt-1">LMS Terex</div>
             <div className="text-base text-gray-500 mt-2">Logistics Management System</div>
             <div className="w-14 h-1 bg-emerald-700 rounded-full mt-3 mb-3" />
             <p className="text-sm text-gray-500 max-w-sm leading-relaxed">
@@ -6412,7 +6412,7 @@ function LoginScreen({ apiBase, setApiBase, onLogin }) {
               </div>
             ))}
           </div>
-          <div className="text-xs text-gray-400 mt-4">© 2026 TEREX Logistics · Internal Use Only</div>
+          <div className="text-xs text-gray-400 mt-4">© 2026 LMS Terex · Internal Use Only</div>
         </div>
       </div>
 
@@ -6423,7 +6423,7 @@ function LoginScreen({ apiBase, setApiBase, onLogin }) {
             <div className="w-12 h-12 rounded-2xl bg-emerald-800 flex items-center justify-center mx-auto mb-2">
               <Truck size={22} className="text-white" />
             </div>
-            <div className="text-lg font-bold text-emerald-900">TEREX Logistics</div>
+            <div className="text-lg font-bold text-emerald-900">LMS Terex</div>
             <div className="text-xs text-gray-500 mt-0.5">Logistics Management System</div>
           </div>
 
@@ -6473,7 +6473,7 @@ function LoginScreen({ apiBase, setApiBase, onLogin }) {
             <PrimaryButton type="submit" disabled={loading} className="w-full justify-center py-2.5">{loading ? "Masuk..." : "MASUK"}</PrimaryButton>
           </form>
 
-          <div className="lg:hidden text-center text-xs text-gray-400 mt-4">© 2026 TEREX Logistics · Internal Use Only</div>
+          <div className="lg:hidden text-center text-xs text-gray-400 mt-4">© 2026 LMS Terex · Internal Use Only</div>
         </div>
       </div>
     </div>
@@ -7652,7 +7652,7 @@ export default function App() {
     masterMaterial: ["Master Data", ""], masterSite: ["Master Data", ""], masterHomebase: ["Master Data", ""], masterArea: ["Master Data", ""], masterCustomer: ["Master Data", ""], masterConsumable: ["Master Data", ""],
     users: ["User Management", ""], settings: ["Settings", ""],
   };
-  const [titleMain, titleSub] = titles[page] || ["TEREX Logistics", ""];
+  const [titleMain, titleSub] = titles[page] || ["LMS Terex", ""];
 
   if (!authToken) {
     return <LoginScreen apiBase={apiBase} setApiBase={setApiBase} onLogin={handleLogin} />;
