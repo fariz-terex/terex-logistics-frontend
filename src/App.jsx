@@ -1538,6 +1538,7 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onCancel, onAss
   // ---- Resi (optional, can be added after shipping) ----
   const [resiInput, setResiInput] = useState("");
   const [resiPhotoInput, setResiPhotoInput] = useState("");
+  const [estArrivalInput, setEstArrivalInput] = useState("");
   const [showResiInput, setShowResiInput] = useState(false);
 
   // ---- BAST (Berita Acara Serah Terima — optional, added after shipping) ----
@@ -1812,11 +1813,14 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onCancel, onAss
 
           <div className="pt-2 border-t border-gray-50 space-y-2">
             <div className="flex items-center justify-between">
-              <div className="text-sm text-gray-600">
-                Resi: <span className="font-medium text-gray-800">{delivery.resiNumber || (delivery.resiPhoto ? "(nomor belum diisi)" : "Belum tersedia (optional)")}</span>
+              <div className="text-sm text-gray-600 space-y-0.5">
+                <div>Resi: <span className="font-medium text-gray-800">{delivery.resiNumber || (delivery.resiPhoto ? "(nomor belum diisi)" : "Belum tersedia (optional)")}</span></div>
+                {hasResi && (
+                  <div>Estimasi sampai: <span className="font-medium text-gray-800">{delivery.estArrivalDate || "(belum diisi)"}</span></div>
+                )}
               </div>
               {canEditResi && !showResiInput && (
-                <GhostButton onClick={() => { setResiInput(delivery.resiNumber || ""); setResiPhotoInput(delivery.resiPhoto || ""); setShowResiInput(true); }}>
+                <GhostButton onClick={() => { setResiInput(delivery.resiNumber || ""); setResiPhotoInput(delivery.resiPhoto || ""); setEstArrivalInput(delivery.estArrivalDate || ""); setShowResiInput(true); }}>
                   {hasResi ? "Edit Resi" : "+ Tambah Resi"}
                 </GhostButton>
               )}
@@ -1833,13 +1837,18 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onCancel, onAss
               <div className="space-y-3 pt-1">
                 <input value={resiInput} onChange={(e) => setResiInput(e.target.value)} placeholder="Nomor resi (opsional jika ada foto)..." className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
                 <PhotoUpload label="Foto Resi" value={resiPhotoInput} onChange={setResiPhotoInput} />
+                <div>
+                  <label className="text-xs font-medium text-gray-500 mb-1 block">Estimasi Tanggal Sampai (sesuai resi) *</label>
+                  <input type="date" value={estArrivalInput} onChange={(e) => setEstArrivalInput(e.target.value)} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
+                  <div className="text-xs text-gray-400 mt-1">Wajib diisi — dipakai untuk reminder H-2/H-1 ke Logistics Staff via Telegram.</div>
+                </div>
                 <div className="flex justify-end gap-2">
-                  <GhostButton onClick={() => { setShowResiInput(false); setResiInput(""); setResiPhotoInput(""); }}>Batal</GhostButton>
+                  <GhostButton onClick={() => { setShowResiInput(false); setResiInput(""); setResiPhotoInput(""); setEstArrivalInput(""); }}>Batal</GhostButton>
                   <PrimaryButton
-                    disabled={!resiInput.trim() && !resiPhotoInput}
+                    disabled={(!resiInput.trim() && !resiPhotoInput) || !estArrivalInput}
                     onClick={() => {
-                      onAddResi(delivery.id, { resiNumber: resiInput.trim() || undefined, resiPhoto: resiPhotoInput || undefined });
-                      setShowResiInput(false); setResiInput(""); setResiPhotoInput("");
+                      onAddResi(delivery.id, { resiNumber: resiInput.trim() || undefined, resiPhoto: resiPhotoInput || undefined, estArrivalDate: estArrivalInput });
+                      setShowResiInput(false); setResiInput(""); setResiPhotoInput(""); setEstArrivalInput("");
                     }}
                   >
                     Simpan
