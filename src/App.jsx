@@ -4718,6 +4718,8 @@ function MasterMaterial({ materials, onCreate, onToggle, onImport, onDelete, onB
       await onCreate({ name: form.name, category: form.category, unit: form.unit, serialized: form.serialized, minStock: form.minStock });
       showToast(`Material "${submittedName}" berhasil ditambahkan`);
       setForm({ id: "", name: "", category: "", unit: "Unit", serialized: true, minStock: 1 });
+    } catch (err) {
+      showToast(err.message || "Gagal menambahkan material");
     } finally {
       setSaving(false);
     }
@@ -4965,6 +4967,8 @@ function MasterTools({ tools, onCreate, onToggle, onDelete, onBulkDelete, showTo
       await onCreate({ name: form.name, category: form.category, unit: form.unit, serialized: form.serialized, minStock: form.minStock });
       showToast(`Alat "${submittedName}" berhasil ditambahkan`);
       setForm({ name: "", category: "", unit: "Unit", serialized: true, minStock: 1 });
+    } catch (err) {
+      showToast(err.message || "Gagal menambahkan alat");
     } finally {
       setSaving(false);
     }
