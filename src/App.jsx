@@ -4865,9 +4865,9 @@ function MasterMaterial({ materials, onCreate, onToggle, onRename, onImport, onD
                       <button onClick={cancelRename} disabled={renaming} className="text-gray-400 hover:text-gray-600 shrink-0"><X size={15} /></button>
                     </div>
                   ) : (
-                    <div className="flex items-center gap-1.5 group">
+                    <div className="flex items-center gap-1.5">
                       <span>{m.name}</span>
-                      <button onClick={() => startRename(m)} className="text-gray-300 hover:text-emerald-700 opacity-0 group-hover:opacity-100 shrink-0" title="Ubah nama"><Pencil size={13} /></button>
+                      <button onClick={() => startRename(m)} className="text-gray-400 hover:text-emerald-700 shrink-0" title="Ubah nama"><Pencil size={13} /></button>
                     </div>
                   )}
                 </td>
