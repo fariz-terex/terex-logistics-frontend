@@ -4,7 +4,7 @@ import {
   FileBarChart, Database, Users, Settings as SettingsIcon, ChevronDown, ChevronRight, ChevronUp, ArrowUpDown,
   Search, Bell, LogOut, Plus, Minus, X, Check, AlertTriangle, Camera, ChevronLeft,
   Filter, Download, Upload, Eye, EyeOff, MapPin, Phone, User as UserIcon, Menu, FileText, Wrench, HelpCircle,
-  Lock, ShieldCheck, Clock3, BarChart3
+  Lock, ShieldCheck, Clock3, BarChart3, Pencil
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
@@ -4626,12 +4626,32 @@ function ToolReceiptForm({ tools, onSubmit, onCancel, showToast }) {
    MASTER DATA
    ============================================================ */
 
-function MasterMaterial({ materials, onCreate, onToggle, onImport, onDelete, onBulkDelete, onGetCascadePreview, onForceDelete, showToast }) {
+function MasterMaterial({ materials, onCreate, onToggle, onRename, onImport, onDelete, onBulkDelete, onGetCascadePreview, onForceDelete, showToast }) {
   const [search, setSearch] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [form, setForm] = useState({ id: "", name: "", category: "", unit: "Unit", serialized: true, minStock: 1 });
   const [saving, setSaving] = useState(false);
+  const [editingNameId, setEditingNameId] = useState(null);
+  const [editNameValue, setEditNameValue] = useState("");
+  const [renaming, setRenaming] = useState(false);
+
+  const startRename = (m) => { setEditingNameId(m.id); setEditNameValue(m.name); };
+  const cancelRename = () => { setEditingNameId(null); setEditNameValue(""); };
+  const saveRename = async (id) => {
+    const name = editNameValue.trim();
+    if (!name) return;
+    setRenaming(true);
+    try {
+      await onRename(id, name);
+      showToast(`Nama material diubah menjadi "${name}"`);
+      cancelRename();
+    } catch (err) {
+      showToast(err.message || "Gagal mengubah nama material");
+    } finally {
+      setRenaming(false);
+    }
+  };
   const [selected, setSelected] = useState(new Set());
   const [confirmDelete, setConfirmDelete] = useState(null); // { type: "one"|"bulk", id? }
   const [blockedMaterial, setBlockedMaterial] = useState(null); // id — normal delete was blocked, offer cascade wipe
@@ -4833,7 +4853,24 @@ function MasterMaterial({ materials, onCreate, onToggle, onImport, onDelete, onB
               <tr key={m.id} className="border-b border-gray-50 last:border-0">
                 <td className="px-5 py-3"><input type="checkbox" checked={selected.has(m.id)} onChange={() => toggleOne(m.id)} className="accent-emerald-800" /></td>
                 <td className="px-5 py-3 text-gray-500">{m.id}</td>
-                <td className="px-5 py-3 font-medium text-gray-800">{m.name}</td>
+                <td className="px-5 py-3 font-medium text-gray-800">
+                  {editingNameId === m.id ? (
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        autoFocus value={editNameValue} onChange={(e) => setEditNameValue(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === "Enter") saveRename(m.id); if (e.key === "Escape") cancelRename(); }}
+                        className="border border-gray-200 rounded-lg px-2 py-1 text-sm outline-none focus:border-emerald-600 w-full max-w-xs"
+                      />
+                      <button onClick={() => saveRename(m.id)} disabled={renaming || !editNameValue.trim()} className="text-emerald-700 hover:text-emerald-900 disabled:opacity-40 shrink-0"><Check size={15} /></button>
+                      <button onClick={cancelRename} disabled={renaming} className="text-gray-400 hover:text-gray-600 shrink-0"><X size={15} /></button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1.5 group">
+                      <span>{m.name}</span>
+                      <button onClick={() => startRename(m)} className="text-gray-300 hover:text-emerald-700 opacity-0 group-hover:opacity-100 shrink-0" title="Ubah nama"><Pencil size={13} /></button>
+                    </div>
+                  )}
+                </td>
                 <td className="px-5 py-3 text-gray-600">{m.category}</td>
                 <td className="px-5 py-3 text-gray-500">{m.unit}</td>
                 <td className="px-5 py-3 text-gray-500">{m.serialized ? "Yes" : "No"}</td>
@@ -6206,6 +6243,7 @@ function createApiClient(baseUrl, getToken) {
     getMaterials: () => request("/materials"),
     createMaterial: (payload) => request("/materials", { method: "POST", body: payload }),
     toggleMaterialStatus: (id) => request(`/materials/${id}/toggle-status`, { method: "PATCH" }),
+    renameMaterial: (id, name) => request(`/materials/${id}`, { method: "PATCH", body: { name } }),
     importMaterials: (rows) => request("/materials/import", { method: "POST", body: { rows } }),
     deleteMaterial: (id) => request(`/materials/${id}`, { method: "DELETE" }),
     bulkDeleteMaterials: (ids) => request("/materials/bulk-delete", { method: "POST", body: { ids } }),
@@ -7527,6 +7565,12 @@ export default function App() {
     // from the properly-scoped /api/stock instead.
     setMaterials((prev) => prev.map((m) => (m.id === id ? { ...m, status: updated.status } : m)));
   };
+  const renameMaterial = async (id, name) => {
+    const updated = await api.renameMaterial(id, name);
+    // Same reasoning as toggleMaterial above — only take `name`, keep the
+    // stock numbers already in state (sourced from /api/stock).
+    setMaterials((prev) => prev.map((m) => (m.id === id ? { ...m, name: updated.name } : m)));
+  };
   const importMaterialsToServer = async (rows) => {
     const result = await api.importMaterials(rows);
     const list = await api.getStock();
@@ -7817,7 +7861,7 @@ export default function App() {
       { label: "Tgl Dikirim", render: (r) => r.date, exportValue: (r) => r.date },
     ]}
   />;
-  else if (page === "masterMaterial") content = <MasterMaterial materials={materials} onCreate={createMaterial} onToggle={toggleMaterial} onImport={importMaterialsToServer} onDelete={deleteMaterialFromServer} onBulkDelete={bulkDeleteMaterialsFromServer} onGetCascadePreview={getMaterialCascadePreview} onForceDelete={forceDeleteMaterialFromServer} showToast={showToast} />;
+  else if (page === "masterMaterial") content = <MasterMaterial materials={materials} onCreate={createMaterial} onToggle={toggleMaterial} onRename={renameMaterial} onImport={importMaterialsToServer} onDelete={deleteMaterialFromServer} onBulkDelete={bulkDeleteMaterialsFromServer} onGetCascadePreview={getMaterialCascadePreview} onForceDelete={forceDeleteMaterialFromServer} showToast={showToast} />;
   else if (page === "masterSite") content = <MasterSite sites={sites} homebases={homebases} customers={customers} onImport={importSitesToServer} onCreate={createSiteToServer} onDelete={deleteSiteFromServer} onBulkDelete={bulkDeleteSitesFromServer} onToggle={toggleSite} showToast={showToast} />;
   else if (page === "masterHomebase") content = <MasterCrudTable
     title="Master Homebase" subtitle="Data homebase & PIC tim lapangan"
