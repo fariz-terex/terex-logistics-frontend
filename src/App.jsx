@@ -6965,9 +6965,12 @@ export default function App() {
     customer: s.customer, area: s.area, homebase: s.homebase, status: s.status,
   });
 
-  const loadAllData = async () => {
-    setDataLoading(true);
-    setApiError("");
+  // `silent` skips the full-screen "Memuat data..." placeholder and the
+  // error banner — used for background refreshes so they never interrupt
+  // whatever the user is doing (typing into a form, mid-upload, etc.). The
+  // initial load on login is the only non-silent call.
+  const loadAllData = async ({ silent = false } = {}) => {
+    if (!silent) { setDataLoading(true); setApiError(""); }
     try {
       const [mats, movs, dels, rets, recs, sts, hbs, ars, custs, usrs, tls, swaps, csms] = await Promise.all([
         api.getStock(), api.getMovements(), api.getDeliveries(), api.getReturns(),
@@ -6989,14 +6992,34 @@ export default function App() {
       setMaterialSwaps(swaps);
       setConsumables(csms);
     } catch (err) {
-      setApiError(err.message || "Gagal memuat data dari server");
+      if (silent) console.error("[loadAllData] background refresh failed:", err.message);
+      else setApiError(err.message || "Gagal memuat data dari server");
     } finally {
-      setDataLoading(false);
+      if (!silent) setDataLoading(false);
     }
   };
 
   React.useEffect(() => {
     if (authToken) loadAllData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authToken]);
+
+  // Background refresh of the same collections above — silently, so a
+  // status change another user made (or one you made on another device)
+  // shows up here without a manual page reload. Every 90s, plus
+  // immediately whenever this tab regains focus — same pattern as the
+  // notification poller above, just covering the rest of the app's data.
+  // Every page/detail view looks its record up from these arrays by id
+  // each render (e.g. `deliveries.find(d => d.id === selectedDelivery)`),
+  // so replacing the arrays in place updates what's on screen without
+  // losing navigation state or any in-progress form (those live in each
+  // component's own local state, untouched by this).
+  React.useEffect(() => {
+    if (!authToken) return;
+    const timer = setInterval(() => loadAllData({ silent: true }), 90000);
+    const onFocus = () => { if (document.visibilityState === "visible") loadAllData({ silent: true }); };
+    document.addEventListener("visibilitychange", onFocus);
+    return () => { clearInterval(timer); document.removeEventListener("visibilitychange", onFocus); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authToken]);
 
@@ -7566,10 +7589,14 @@ export default function App() {
     setMaterials((prev) => prev.map((m) => (m.id === id ? { ...m, status: updated.status } : m)));
   };
   const renameMaterial = async (id, name) => {
-    const updated = await api.renameMaterial(id, name);
-    // Same reasoning as toggleMaterial above — only take `name`, keep the
-    // stock numbers already in state (sourced from /api/stock).
-    setMaterials((prev) => prev.map((m) => (m.id === id ? { ...m, name: updated.name } : m)));
+    await api.renameMaterial(id, name);
+    // Unlike toggleMaterial, a rename cascades server-side into every
+    // delivery/return/reconciliation/stock-movement row that carries this
+    // material's name as a plain text snapshot (see materials.js) — a
+    // local patch to just the `materials` array would leave all of those
+    // showing the old name until the next full reload. Refetch everything
+    // instead so it's correct everywhere immediately.
+    await loadAllData();
   };
   const importMaterialsToServer = async (rows) => {
     const result = await api.importMaterials(rows);
