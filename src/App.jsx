@@ -2344,6 +2344,7 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
 
   const [divisionAutoDetected, setDivisionAutoDetected] = useState(false);
   const [suggestingKeys, setSuggestingKeys] = useState(new Set());
+  const [documentType, setDocumentType] = useState(null);
 
   const updateRow = (key, patch) => setRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)));
   const removeRow = (key) => setRows((prev) => prev.filter((r) => r.key !== key));
@@ -2371,6 +2372,7 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
     setDetecting(true); setDetectError("");
     try {
       const result = await api.parseBkb(docDataUrl);
+      setDocumentType(result.documentType || "tidak_jelas");
       const newRows = (result.items || []).map((it, i) => ({
         key: `${Date.now()}-${i}`,
         rawMaterial: it.rawMaterial,
@@ -2450,6 +2452,20 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
       {rows && (
         <div className="space-y-4">
           <div className="text-xs text-gray-500">{rows.length} barang terdeteksi dari <span className="font-medium text-gray-700">{docName}</span> — periksa & lengkapi sebelum disimpan.</div>
+
+          {documentType && documentType !== "penerimaan_baru" && (
+            <div className="bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded-lg px-3 py-2.5 flex items-start gap-2">
+              <AlertTriangle size={15} className="shrink-0 mt-0.5" />
+              <div>
+                <div className="font-medium">
+                  {documentType === "pengembalian_material" && "Dokumen ini sepertinya Pengembalian Material dari site, bukan penerimaan barang baru dari supplier."}
+                  {documentType === "lainnya" && "Dokumen ini sepertinya bukan dokumen penerimaan barang baru."}
+                  {documentType === "tidak_jelas" && "Sistem tidak yakin jenis dokumen ini."}
+                </div>
+                <div className="mt-0.5">Fitur ini hanya untuk barang baru masuk gudang dari supplier — kalau ini pengembalian material dari site, input lewat menu Return Material Faulty, bukan di sini. Barang di bawah tetap ditampilkan kalau Anda ingin cek, tapi jangan disimpan lewat sini kalau memang bukan penerimaan baru.</div>
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
