@@ -2260,6 +2260,49 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast, currentUse
   );
 }
 
+// Split a serial number into its trailing numeric run + whatever came
+// before it — "SA001" -> { prefix: "SA", num: 1, width: 3 }. Returns null
+// for a SN with no trailing digits (nothing to continue a sequence from).
+function splitSerialSequence(sn) {
+  const m = /^(.*?)(\d+)$/.exec(String(sn || "").trim());
+  if (!m) return null;
+  return { prefix: m[1], num: parseInt(m[2], 10), width: m[2].length };
+}
+
+// Looks at every SN this material has ever had (any status/division) and
+// continues whichever numbering pattern shows up most often — e.g. if
+// "SA001" is already in the system, the next unit(s) become "SA002",
+// "SA003", etc. Zero-padding matches the width of the SN it continued
+// from. Returns [] when the material has no SN history yet (nothing to
+// infer a pattern from) or the API call fails — the field just stays
+// blank for manual entry either way, never guessed from nothing.
+async function suggestNextSerials(materialName, count, api) {
+  if (!materialName || count <= 0) return [];
+  let existing;
+  try {
+    existing = await api.getSerials(materialName);
+  } catch {
+    return [];
+  }
+  const parsed = existing.map((r) => ({ sn: r.sn, ...splitSerialSequence(r.sn) })).filter((p) => p.num !== undefined);
+  if (parsed.length === 0) return [];
+
+  const byPrefix = new Map();
+  parsed.forEach((p) => { if (!byPrefix.has(p.prefix)) byPrefix.set(p.prefix, []); byPrefix.get(p.prefix).push(p); });
+  const [bestPrefix, group] = [...byPrefix.entries()].sort((a, b) => b[1].length - a[1].length)[0];
+  const maxEntry = group.reduce((a, b) => (b.num > a.num ? b : a));
+  const existingSns = new Set(existing.map((r) => r.sn));
+
+  const suggestions = [];
+  let n = maxEntry.num;
+  while (suggestions.length < count && n < maxEntry.num + count + 1000) {
+    n += 1;
+    const candidate = bestPrefix + String(n).padStart(maxEntry.width, "0");
+    if (!existingSns.has(candidate)) suggestions.push(candidate);
+  }
+  return suggestions;
+}
+
 // Upload a BKB (photo/PDF of the goods-receipt shipping document), send it
 // to the backend's /stock/parse-bkb (Claude reads it), then let staff
 // review/fix each detected line before it's actually submitted — one at a
@@ -2300,6 +2343,28 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
   const clusterRequired = divisionUsesClusters && anySerializedRow;
 
   const [divisionAutoDetected, setDivisionAutoDetected] = useState(false);
+  const [suggestingKeys, setSuggestingKeys] = useState(new Set());
+
+  const updateRow = (key, patch) => setRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+  const removeRow = (key) => setRows((prev) => prev.filter((r) => r.key !== key));
+
+  // Only fills in when the BKB had no SN for this line at all — never
+  // overwrites something the document (or the user) already provided.
+  const suggestSerialsFor = async (key, materialName, count) => {
+    setSuggestingKeys((prev) => new Set(prev).add(key));
+    try {
+      const suggestions = await suggestNextSerials(materialName, count, api);
+      if (suggestions.length > 0) updateRow(key, { serialsText: suggestions.join("\n") });
+    } finally {
+      setSuggestingKeys((prev) => { const next = new Set(prev); next.delete(key); return next; });
+    }
+  };
+
+  const handleMaterialChange = (row, name) => {
+    updateRow(row.key, { material: name });
+    const mat = activeMaterials.find((m) => m.name === name);
+    if (mat?.serialized && !row.serialsText.trim()) suggestSerialsFor(row.key, name, row.qty || 1);
+  };
 
   const detect = async () => {
     if (!docDataUrl) return;
@@ -2325,15 +2390,17 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
         setDivisionAutoDetected(true);
       }
       if (newRows.length === 0) showToast("Tidak ada barang terdeteksi dari dokumen ini — coba dokumen lain atau isi manual");
+      // BKB didn't list an SN for these — try to continue that material's
+      // existing numbering instead of leaving it for manual entry.
+      newRows
+        .filter((r) => r.material && !r.serialsText.trim() && activeMaterials.find((m) => m.name === r.material)?.serialized)
+        .forEach((r) => suggestSerialsFor(r.key, r.material, r.qty || 1));
     } catch (err) {
       setDetectError(err.message || "Gagal membaca dokumen BKB");
     } finally {
       setDetecting(false);
     }
   };
-
-  const updateRow = (key, patch) => setRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)));
-  const removeRow = (key) => setRows((prev) => prev.filter((r) => r.key !== key));
 
   const saveAll = async () => {
     setSavingAll(true);
@@ -2426,7 +2493,7 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
                         {row.confidence === "tidak_ada" && <span className="text-amber-600 font-normal"> — tidak ditemukan otomatis, pilih manual</span>}
                         {row.confidence === "rendah" && <span className="text-amber-600 font-normal"> — perkiraan, cek lagi</span>}
                       </label>
-                      <select value={row.material} onChange={(e) => updateRow(row.key, { material: e.target.value })} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600">
+                      <select value={row.material} onChange={(e) => handleMaterialChange(row, e.target.value)} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600">
                         <option value="">Pilih material...</option>
                         {activeMaterials.map((m) => <option key={m.id} value={m.name}>{m.name} {m.serialized ? "(Serialized)" : ""}</option>)}
                       </select>
@@ -2440,8 +2507,12 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
                   </div>
                   {mat && mat.serialized && (
                     <div>
-                      <label className="text-xs font-medium text-gray-500">Serial Number <span className="text-red-500">*</span> <span className="text-gray-400 font-normal">(satu per baris)</span></label>
+                      <label className="text-xs font-medium text-gray-500">
+                        Serial Number <span className="text-red-500">*</span> <span className="text-gray-400 font-normal">(satu per baris)</span>
+                        {suggestingKeys.has(row.key) && <span className="text-emerald-600 font-normal"> — mencari nomor berikutnya...</span>}
+                      </label>
                       <textarea value={row.serialsText} onChange={(e) => updateRow(row.key, { serialsText: e.target.value })} rows={3} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600 font-mono" />
+                      <div className="text-xs text-gray-400 mt-1">BKB tidak selalu mencantumkan SN — kalau kosong, sistem coba lanjutkan penomoran SN material ini yang sudah ada. Tetap cek sebelum disimpan.</div>
                     </div>
                   )}
                   {row.error && <div className="bg-red-50 border border-red-100 text-red-700 text-xs rounded-lg px-3 py-2">{row.error}</div>}
