@@ -599,6 +599,7 @@ function Sidebar({ page, setPage, role, userName, userCustomers, mobileOpen, onC
             <div className="text-xs text-gray-500 truncate">{role}{userCustomers?.length ? ` · ${userCustomers.join(", ")}` : ""}</div>
           </div>
         </div>
+        <div className="text-[10px] text-gray-300 px-2 pt-1 font-mono">v{__APP_COMMIT__}</div>
       </div>
       </div>
     </>
@@ -6239,6 +6240,7 @@ function createApiClient(baseUrl, getToken) {
 
   return {
     login: (username, password) => request("/auth/login", { method: "POST", body: { username, password } }),
+    getHealth: () => request("/health"),
 
     getMaterials: () => request("/materials"),
     createMaterial: (payload) => request("/materials", { method: "POST", body: payload }),
@@ -6541,6 +6543,40 @@ function LoginScreen({ apiBase, setApiBase, onLogin }) {
         </div>
       </div>
     </div>
+  );
+}
+
+// Shows exactly which build of the frontend (baked in at compile time by
+// vite.config.js — commit hash + build date) and which build of the backend
+// (fetched live from /api/health) are actually running right now. The two
+// deploy independently on Railway, so this doubles as a quick way to tell
+// whether a change has actually rolled out yet, or whether frontend/backend
+// have drifted out of sync with each other.
+function AppVersionInfo({ api }) {
+  const [backend, setBackend] = useState(null); // { commit, startedAt } | "error" | null (loading)
+  React.useEffect(() => {
+    api.getHealth().then(setBackend).catch(() => setBackend("error"));
+  }, [api]);
+
+  const fmt = (iso) => {
+    if (!iso) return "—";
+    try {
+      return new Date(iso).toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Jakarta" }) + " WIB";
+    } catch { return iso; }
+  };
+
+  return (
+    <Card className="p-5 space-y-3 text-sm">
+      <div className="font-medium text-gray-800">Versi Aplikasi</div>
+      <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-gray-600">
+        <span>Frontend</span>
+        <span className="text-gray-800 font-mono text-xs">{__APP_COMMIT__} · dibuild {fmt(__APP_BUILD_DATE__)}</span>
+        <span>Backend</span>
+        <span className="text-gray-800 font-mono text-xs">
+          {backend === null ? "Memeriksa..." : backend === "error" ? "Tidak bisa dihubungi" : `${backend.commit} · aktif sejak ${fmt(backend.startedAt)}`}
+        </span>
+      </div>
+    </Card>
   );
 }
 
@@ -7996,6 +8032,7 @@ export default function App() {
       <TelegramLink api={api} showToast={showToast} />
       {role === ROLES.MANAGER && <PhantomStockCleanup api={api} showToast={showToast} />}
       {role === ROLES.MANAGER && <StockConsistencyCheck api={api} showToast={showToast} />}
+      <AppVersionInfo api={api} />
     </div>
   );
 
