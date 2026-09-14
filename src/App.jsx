@@ -2260,6 +2260,197 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast, currentUse
   );
 }
 
+// Upload a BKB (photo/PDF of the goods-receipt shipping document), send it
+// to the backend's /stock/parse-bkb (Claude reads it), then let staff
+// review/fix each detected line before it's actually submitted — one at a
+// time, through the exact same onSubmit (POST /receipts) the manual form
+// uses, so all of that route's validation still applies. Nothing from the
+// AI read reaches stock without a human confirming it first.
+function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser, customers, api }) {
+  const [docDataUrl, setDocDataUrl] = useState("");
+  const [docName, setDocName] = useState("");
+  const [detecting, setDetecting] = useState(false);
+  const [detectError, setDetectError] = useState("");
+  const [rows, setRows] = useState(null); // null = not detected yet
+  const [savingAll, setSavingAll] = useState(false);
+  const [customer, setCustomer] = useState("");
+  const [cluster, setCluster] = useState("");
+  const [clusterOptions, setClusterOptions] = useState([]);
+
+  const isManager = currentUser?.role === ROLES.MANAGER;
+  const myDivisions = currentUser?.customers || [];
+  const needsDivisionPicker = isManager || myDivisions.length > 1;
+  const effectiveCustomer = needsDivisionPicker ? customer : myDivisions[0];
+  const divisionOptions = isManager ? customers.filter((c) => c.status === "Active").map((c) => c.name) : myDivisions;
+
+  React.useEffect(() => {
+    let cancelled = false;
+    setCluster("");
+    if (!effectiveCustomer || !api?.getClusters) { setClusterOptions([]); return; }
+    api.getClusters(effectiveCustomer, "Active")
+      .then((rows2) => { if (!cancelled) setClusterOptions(rows2.map((c) => c.name)); })
+      .catch(() => { if (!cancelled) setClusterOptions([]); });
+    return () => { cancelled = true; };
+  }, [effectiveCustomer]);
+
+  const activeMaterials = materials.filter((m) => m.status === "Active");
+  const matFor = (row) => activeMaterials.find((m) => m.name === row.material);
+  const divisionUsesClusters = clusterOptions.length > 0;
+  const anySerializedRow = (rows || []).some((r) => matFor(r)?.serialized);
+  const clusterRequired = divisionUsesClusters && anySerializedRow;
+
+  const detect = async () => {
+    if (!docDataUrl) return;
+    setDetecting(true); setDetectError("");
+    try {
+      const result = await api.parseBkb(docDataUrl);
+      const newRows = (result.items || []).map((it, i) => ({
+        key: `${Date.now()}-${i}`,
+        rawMaterial: it.rawMaterial,
+        material: it.matchedMaterial || "",
+        confidence: it.confidence,
+        qty: it.qty || 1,
+        serialsText: (it.serials || []).join("\n"),
+        note: it.note || "",
+        error: "",
+      }));
+      setRows(newRows);
+      if (newRows.length === 0) showToast("Tidak ada barang terdeteksi dari dokumen ini — coba dokumen lain atau isi manual");
+    } catch (err) {
+      setDetectError(err.message || "Gagal membaca dokumen BKB");
+    } finally {
+      setDetecting(false);
+    }
+  };
+
+  const updateRow = (key, patch) => setRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+  const removeRow = (key) => setRows((prev) => prev.filter((r) => r.key !== key));
+
+  const saveAll = async () => {
+    setSavingAll(true);
+    let successCount = 0;
+    const remaining = [];
+    for (const row of rows) {
+      const mat = matFor(row);
+      if (!mat) { remaining.push({ ...row, error: "Pilih material yang sesuai dulu" }); continue; }
+      const serials = row.serialsText.split(/[\n,;\t]+/).map((s) => s.trim()).filter(Boolean);
+      if (mat.serialized && (serials.length === 0 || new Set(serials).size !== serials.length)) {
+        remaining.push({ ...row, error: serials.length === 0 ? "Serial Number wajib diisi" : "Ada Serial Number duplikat" });
+        continue;
+      }
+      if (!mat.serialized && (!row.qty || row.qty <= 0)) { remaining.push({ ...row, error: "Qty harus lebih dari 0" }); continue; }
+      if (needsDivisionPicker && !customer) { remaining.push({ ...row, error: "Pilih divisi tujuan dulu" }); continue; }
+      if (clusterRequired && mat.serialized && !cluster) { remaining.push({ ...row, error: "Pilih cluster dulu" }); continue; }
+      try {
+        const payload = mat.serialized ? { material: mat.name, serials, note: row.note } : { material: mat.name, qty: row.qty, note: row.note };
+        if (needsDivisionPicker) payload.customer = customer;
+        if (clusterRequired && mat.serialized) payload.cluster = cluster;
+        await onSubmit(payload);
+        successCount++;
+      } catch (err) {
+        remaining.push({ ...row, error: err.message || "Gagal disimpan" });
+      }
+    }
+    setRows(remaining);
+    setSavingAll(false);
+    if (successCount > 0) showToast(`${successCount} barang berhasil diterima${remaining.length ? ` · ${remaining.length} gagal, cek & perbaiki di bawah` : ""}`);
+  };
+
+  return (
+    <Card className="p-5 space-y-4">
+      <div className="text-sm font-semibold text-gray-800">Deteksi Barang dari BKB</div>
+
+      {!rows && (
+        <div className="space-y-3">
+          <DocumentUpload label="Upload BKB (PDF atau foto)" value={docDataUrl} valueName={docName} onChange={(dataUrl, name) => { setDocDataUrl(dataUrl); setDocName(name); }} />
+          {detectError && <div className="bg-red-50 border border-red-100 text-red-700 text-xs rounded-lg px-3 py-2">{detectError}</div>}
+          <div className="flex justify-end gap-2">
+            <GhostButton onClick={onCancel}>Batal</GhostButton>
+            <PrimaryButton disabled={!docDataUrl || detecting} onClick={detect}>{detecting ? "Membaca dokumen..." : "Deteksi Barang"}</PrimaryButton>
+          </div>
+        </div>
+      )}
+
+      {rows && (
+        <div className="space-y-4">
+          <div className="text-xs text-gray-500">{rows.length} barang terdeteksi dari <span className="font-medium text-gray-700">{docName}</span> — periksa & lengkapi sebelum disimpan.</div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="text-xs font-medium text-gray-500">Divisi (Customer) <span className="text-red-500">*</span></label>
+              {needsDivisionPicker ? (
+                <select value={customer} onChange={(e) => setCustomer(e.target.value)} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600">
+                  <option value="">Pilih divisi tujuan...</option>
+                  {divisionOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              ) : (
+                <div className="mt-1 w-full border border-gray-100 bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-600">{myDivisions[0] || "—"}</div>
+              )}
+            </div>
+            {clusterRequired && (
+              <div>
+                <label className="text-xs font-medium text-gray-500">Cluster <span className="text-red-500">*</span> <span className="text-gray-400 font-normal">(untuk unit serialized)</span></label>
+                <select value={cluster} onChange={(e) => setCluster(e.target.value)} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600">
+                  <option value="">Pilih cluster...</option>
+                  {clusterOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-3">
+            {rows.map((row) => {
+              const mat = matFor(row);
+              return (
+                <div key={row.key} className="border border-gray-100 rounded-xl p-3.5 space-y-2.5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="text-xs text-gray-400">Terbaca dari dokumen: <span className="text-gray-600">"{row.rawMaterial}"</span>{row.qty ? ` · qty ${row.qty}` : ""}</div>
+                    <button onClick={() => removeRow(row.key)} className="text-gray-300 hover:text-red-500 shrink-0"><X size={15} /></button>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-xs font-medium text-gray-500">
+                        Material <span className="text-red-500">*</span>
+                        {row.confidence === "none" && <span className="text-amber-600 font-normal"> — tidak ditemukan otomatis, pilih manual</span>}
+                        {row.confidence === "fuzzy" && <span className="text-amber-600 font-normal"> — perkiraan, cek lagi</span>}
+                      </label>
+                      <select value={row.material} onChange={(e) => updateRow(row.key, { material: e.target.value })} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600">
+                        <option value="">Pilih material...</option>
+                        {activeMaterials.map((m) => <option key={m.id} value={m.name}>{m.name} {m.serialized ? "(Serialized)" : ""}</option>)}
+                      </select>
+                    </div>
+                    {mat && !mat.serialized && (
+                      <div>
+                        <label className="text-xs font-medium text-gray-500">Qty <span className="text-red-500">*</span></label>
+                        <input type="number" min={1} value={row.qty} onChange={(e) => updateRow(row.key, { qty: Number(e.target.value) })} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
+                      </div>
+                    )}
+                  </div>
+                  {mat && mat.serialized && (
+                    <div>
+                      <label className="text-xs font-medium text-gray-500">Serial Number <span className="text-red-500">*</span> <span className="text-gray-400 font-normal">(satu per baris)</span></label>
+                      <textarea value={row.serialsText} onChange={(e) => updateRow(row.key, { serialsText: e.target.value })} rows={3} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600 font-mono" />
+                    </div>
+                  )}
+                  {row.error && <div className="bg-red-50 border border-red-100 text-red-700 text-xs rounded-lg px-3 py-2">{row.error}</div>}
+                </div>
+              );
+            })}
+            {rows.length === 0 && <div className="text-xs text-gray-400 italic">Tidak ada barang lagi untuk disimpan.</div>}
+          </div>
+
+          <div className="flex justify-end gap-2">
+            <GhostButton onClick={onCancel}>{rows.length === 0 ? "Tutup" : "Batal"}</GhostButton>
+            {rows.length > 0 && (
+              <PrimaryButton disabled={savingAll} onClick={saveAll}>{savingAll ? "Menyimpan..." : `Simpan ${rows.length} Barang`}</PrimaryButton>
+            )}
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMaterial, onSubmitReceipt, showToast, clearSerialHighlight, currentUser, customers, role, api }) {
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("All");
@@ -2267,6 +2458,7 @@ function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMateri
   const [sort, setSort] = useState({ key: null, dir: "asc" });
   const handleSort = (key) => setSort((prev) => (prev.key === key ? { key, dir: prev.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" }));
   const [showReceiptForm, setShowReceiptForm] = useState(false);
+  const [showBkbPanel, setShowBkbPanel] = useState(false);
   const canReceive = role === ROLES.MANAGER || role === ROLES.LOGISTICS;
 
   // For anyone scoped to specific divisions, the shared `materials` prop
@@ -2351,8 +2543,25 @@ function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMateri
     <div className="p-4 sm:p-8 space-y-5">
       <SectionTitle
         title="Warehouse Stock" subtitle="Ketersediaan material di gudang pusat"
-        right={canReceive ? <PrimaryButton onClick={() => setShowReceiptForm(!showReceiptForm)}><Plus size={16} /> Terima Barang</PrimaryButton> : null}
+        right={canReceive ? (
+          <div className="flex gap-2">
+            <GhostButton onClick={() => { setShowBkbPanel(!showBkbPanel); setShowReceiptForm(false); }}><FileText size={15} /> Deteksi dari BKB</GhostButton>
+            <PrimaryButton onClick={() => { setShowReceiptForm(!showReceiptForm); setShowBkbPanel(false); }}><Plus size={16} /> Terima Barang</PrimaryButton>
+          </div>
+        ) : null}
       />
+
+      {showBkbPanel && canReceive && (
+        <BkbReceiptPanel
+          materials={materials}
+          onCancel={() => setShowBkbPanel(false)}
+          onSubmit={onSubmitReceipt}
+          showToast={showToast}
+          currentUser={currentUser}
+          customers={customers}
+          api={api}
+        />
+      )}
 
       {showReceiptForm && canReceive && (
         <GoodsReceiptForm
@@ -6345,6 +6554,7 @@ function createApiClient(baseUrl, getToken) {
     getSerialCustomerReturnHistory: (sn) => request(`/stock/serials/${encodeURIComponent(sn)}/customer-return-history`),
     createReceipt: (payload) => request("/stock/receipts", { method: "POST", body: payload }),
     getReceipts: () => request("/stock/receipts"),
+    parseBkb: (document) => request("/stock/parse-bkb", { method: "POST", body: { document } }),
 
     // ---- Tools / Alat (shared pool, no division split — Peminjaman now happens via Delivery Request) ----
     getTools: () => request("/tools"),
