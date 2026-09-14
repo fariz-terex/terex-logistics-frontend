@@ -3258,7 +3258,7 @@ function findSNConflict(sn, { returns = [], reconciliations = [], excludeId = nu
   return null;
 }
 
-function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconciliations, initialData, excludeId, revisionNote, currentUser, customers, prefillItems }) {
+function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconciliations, initialData, excludeId, revisionNote, currentUser, customers, prefillItems, api, showToast }) {
   const isEdit = !!initialData;
   const isManager = currentUser?.role === ROLES.MANAGER;
   const myDivisions = currentUser?.customers || [];
@@ -3273,6 +3273,44 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
       : [{ material: "", serials: [{ sn: "", photo: "" }] }]
   );
   const [docs, setDocs] = useState(initialData?.docs ? { ...initialData.docs } : { beforePacking: "", afterPacking: "", weighing: "" });
+
+  // "Deteksi dari BKB" (Tanda Terima Pengembalian) — only offered for a
+  // brand-new Return with nothing already prefilled, so it never fights
+  // with the revision-edit or Material Swap prefill flows.
+  const offerBkbDetect = !isEdit && !prefillItems?.length && api;
+  const [bkbMode, setBkbMode] = useState(false);
+  const [bkbDocUrl, setBkbDocUrl] = useState("");
+  const [bkbDocName, setBkbDocName] = useState("");
+  const [bkbDetecting, setBkbDetecting] = useState(false);
+  const [bkbError, setBkbError] = useState("");
+  const [bkbDocumentType, setBkbDocumentType] = useState(null);
+  const [bkbDivisionDetected, setBkbDivisionDetected] = useState(false);
+
+  const detectFromBkb = async () => {
+    if (!bkbDocUrl) return;
+    setBkbDetecting(true); setBkbError("");
+    try {
+      const result = await api.parseBkb(bkbDocUrl);
+      setBkbDocumentType(result.documentType || "tidak_jelas");
+      const detected = (result.items || []).map((it) => ({
+        material: it.matchedMaterial || "",
+        serials: it.serials.length > 0
+          ? it.serials.map((sn) => ({ sn, photo: "" }))
+          : Array.from({ length: Math.max(it.qty || 1, 1) }, () => ({ sn: "", photo: "" })),
+      }));
+      if (detected.length > 0) setItems(detected);
+      if (needsDivisionPicker && result.division && divisionOptions.includes(result.division)) {
+        setCustomer(result.division);
+        setBkbDivisionDetected(true);
+      }
+      if (detected.length === 0) showToast?.("Tidak ada barang terdeteksi dari dokumen ini — coba dokumen lain atau isi manual");
+      else showToast?.(`${detected.length} material terdeteksi — lengkapi Serial Number & foto yang belum ada, lalu cek sebelum submit`);
+    } catch (err) {
+      setBkbError(err.message || "Gagal membaca dokumen BKB");
+    } finally {
+      setBkbDetecting(false);
+    }
+  };
 
   const addItem = () => setItems([...items, { material: "", serials: [{ sn: "", photo: "" }] }]);
   const removeItem = (itemIdx) => setItems(items.filter((_, i) => i !== itemIdx));
@@ -3306,10 +3344,47 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
         subtitle={isEdit ? "Perbarui data sesuai catatan revisi, lalu kirim ulang ke Logistics" : "Input Serial Number secara manual untuk setiap unit — bisa lebih dari satu material"}
       />
 
+      {offerBkbDetect && (
+        <Card className="p-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="text-sm font-semibold text-gray-800">Isi dari Tanda Terima Pengembalian (BKB)</div>
+            <button onClick={() => setBkbMode(!bkbMode)} className="text-xs text-emerald-800 font-medium underline decoration-dotted">
+              {bkbMode ? "Isi manual saja" : "Deteksi dari BKB"}
+            </button>
+          </div>
+          {bkbMode && (
+            <div className="space-y-3">
+              <DocumentUpload label="Upload BKB (PDF atau foto)" value={bkbDocUrl} valueName={bkbDocName} onChange={(dataUrl, name) => { setBkbDocUrl(dataUrl); setBkbDocName(name); }} />
+              {bkbError && <div className="bg-red-50 border border-red-100 text-red-700 text-xs rounded-lg px-3 py-2">{bkbError}</div>}
+              {bkbDocumentType && bkbDocumentType !== "pengembalian_material" && (
+                <div className="bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded-lg px-3 py-2.5 flex items-start gap-2">
+                  <AlertTriangle size={15} className="shrink-0 mt-0.5" />
+                  <div>
+                    <div className="font-medium">
+                      {bkbDocumentType === "penerimaan_baru" && "Dokumen ini sepertinya penerimaan barang baru dari supplier, bukan pengembalian material."}
+                      {bkbDocumentType === "lainnya" && "Dokumen ini sepertinya bukan dokumen pengembalian material."}
+                      {bkbDocumentType === "tidak_jelas" && "Sistem tidak yakin jenis dokumen ini."}
+                    </div>
+                    <div className="mt-0.5">Barang di bawah tetap terisi kalau Anda ingin cek, tapi pastikan dulu ini memang dokumen pengembalian sebelum submit.</div>
+                  </div>
+                </div>
+              )}
+              <div className="flex justify-end">
+                <PrimaryButton disabled={!bkbDocUrl || bkbDetecting} onClick={detectFromBkb}>{bkbDetecting ? "Membaca dokumen..." : "Deteksi Barang"}</PrimaryButton>
+              </div>
+              <div className="text-xs text-gray-400">Material & Serial Number terisi otomatis dari dokumen — Anda tetap perlu upload foto tiap unit dan lengkapi SN yang tidak tercantum di dokumen.</div>
+            </div>
+          )}
+        </Card>
+      )}
+
       {!isEdit && needsDivisionPicker && (
         <Card className="p-5">
-          <label className="text-sm font-medium text-gray-700">Divisi (Customer) <span className="text-red-500">*</span></label>
-          <select value={customer} onChange={(e) => setCustomer(e.target.value)} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600">
+          <label className="text-sm font-medium text-gray-700">
+            Divisi (Customer) <span className="text-red-500">*</span>
+            {bkbDivisionDetected && <span className="text-emerald-600 font-normal text-xs"> — terdeteksi dari dokumen, cek lagi</span>}
+          </label>
+          <select value={customer} onChange={(e) => { setCustomer(e.target.value); setBkbDivisionDetected(false); }} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600">
             <option value="">Pilih divisi...</option>
             {divisionOptions.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
@@ -8117,7 +8192,7 @@ export default function App() {
       const r = returns.find((x) => x.id === selectedReturn);
       content = <ReturnFaultyDetail r={r} onBack={() => setSelectedReturn(null)} onApprove={approveReturn} onRevise={reviseReturn} onShip={shipReturn} onAddResi={addResiReturn} onReceive={receiveReturn} onQC={qcReturn} onComplete={completeReturn} onEdit={() => setPage("returnFaultyEdit")} role={role} />;
     } else content = <ReturnFaultyList returns={returns} setSelected={setSelectedReturn} setPage={goto} role={role} />;
-  } else if (page === "returnFaultyCreate") content = <ReturnFaultyCreate onSubmit={submitReturn} onCancel={() => goto("returnFaulty")} materials={materials} returns={returns} reconciliations={reconciliations} currentUser={currentUser} customers={customers} prefillItems={returnPrefill ? [returnPrefill] : undefined} />;
+  } else if (page === "returnFaultyCreate") content = <ReturnFaultyCreate onSubmit={submitReturn} onCancel={() => goto("returnFaulty")} materials={materials} returns={returns} reconciliations={reconciliations} currentUser={currentUser} customers={customers} prefillItems={returnPrefill ? [returnPrefill] : undefined} api={api} showToast={showToast} />;
   else if (page === "returnFaultyEdit") {
     const r = returns.find((x) => x.id === selectedReturn);
     content = <ReturnFaultyCreate
