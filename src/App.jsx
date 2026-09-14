@@ -2299,6 +2299,8 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
   const anySerializedRow = (rows || []).some((r) => matFor(r)?.serialized);
   const clusterRequired = divisionUsesClusters && anySerializedRow;
 
+  const [divisionAutoDetected, setDivisionAutoDetected] = useState(false);
+
   const detect = async () => {
     if (!docDataUrl) return;
     setDetecting(true); setDetectError("");
@@ -2308,13 +2310,20 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
         key: `${Date.now()}-${i}`,
         rawMaterial: it.rawMaterial,
         material: it.matchedMaterial || "",
-        confidence: it.confidence,
+        confidence: it.confidence, // "tinggi" | "rendah" | "tidak_ada"
         qty: it.qty || 1,
         serialsText: (it.serials || []).join("\n"),
         note: it.note || "",
         error: "",
       }));
       setRows(newRows);
+      // Only trust the detected division if it's actually one this user is
+      // allowed to receive into — Manager/multi-division users only, since
+      // everyone else's division is already pinned automatically.
+      if (needsDivisionPicker && result.division && divisionOptions.includes(result.division)) {
+        setCustomer(result.division);
+        setDivisionAutoDetected(true);
+      }
       if (newRows.length === 0) showToast("Tidak ada barang terdeteksi dari dokumen ini — coba dokumen lain atau isi manual");
     } catch (err) {
       setDetectError(err.message || "Gagal membaca dokumen BKB");
@@ -2377,9 +2386,12 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="text-xs font-medium text-gray-500">Divisi (Customer) <span className="text-red-500">*</span></label>
+              <label className="text-xs font-medium text-gray-500">
+                Divisi (Customer) <span className="text-red-500">*</span>
+                {divisionAutoDetected && <span className="text-emerald-600 font-normal"> — terdeteksi dari dokumen, cek lagi</span>}
+              </label>
               {needsDivisionPicker ? (
-                <select value={customer} onChange={(e) => setCustomer(e.target.value)} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600">
+                <select value={customer} onChange={(e) => { setCustomer(e.target.value); setDivisionAutoDetected(false); }} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600">
                   <option value="">Pilih divisi tujuan...</option>
                   {divisionOptions.map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
@@ -2411,8 +2423,8 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
                     <div>
                       <label className="text-xs font-medium text-gray-500">
                         Material <span className="text-red-500">*</span>
-                        {row.confidence === "none" && <span className="text-amber-600 font-normal"> — tidak ditemukan otomatis, pilih manual</span>}
-                        {row.confidence === "fuzzy" && <span className="text-amber-600 font-normal"> — perkiraan, cek lagi</span>}
+                        {row.confidence === "tidak_ada" && <span className="text-amber-600 font-normal"> — tidak ditemukan otomatis, pilih manual</span>}
+                        {row.confidence === "rendah" && <span className="text-amber-600 font-normal"> — perkiraan, cek lagi</span>}
                       </label>
                       <select value={row.material} onChange={(e) => updateRow(row.key, { material: e.target.value })} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600">
                         <option value="">Pilih material...</option>
