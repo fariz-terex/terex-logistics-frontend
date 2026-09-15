@@ -4622,6 +4622,8 @@ function TransferStockPage({ materials, homebases, customers, currentUser, role,
   const [error, setError] = useState("");
   const [transfers, setTransfers] = useState([]);
   const [loadingTransfers, setLoadingTransfers] = useState(true);
+  const [confirmCancelId, setConfirmCancelId] = useState(null);
+  const [cancellingId, setCancellingId] = useState(null);
 
   const activeMaterials = materials.filter((m) => m.status === "Active");
   const selectedMaterial = activeMaterials.find((m) => m.name === material);
@@ -4632,6 +4634,20 @@ function TransferStockPage({ materials, homebases, customers, currentUser, role,
     api.getTransfers().then(setTransfers).catch(() => {}).finally(() => setLoadingTransfers(false));
   };
   React.useEffect(loadTransfers, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const cancelTransfer = async (id) => {
+    setCancellingId(id);
+    try {
+      await api.cancelTransfer(id);
+      showToast("Transfer dibatalkan — stock dikembalikan ke homebase asal");
+      loadTransfers();
+    } catch (err) {
+      showToast(err.message || "Gagal membatalkan transfer");
+    } finally {
+      setCancellingId(null);
+      setConfirmCancelId(null);
+    }
+  };
 
   // Every time material or division changes, the whole "where is it"
   // picture is stale — reset the homebase choices along with it rather
@@ -4803,11 +4819,13 @@ function TransferStockPage({ materials, homebases, customers, currentUser, role,
               <th className="px-5 py-3 font-medium">Qty</th>
               <th className="px-5 py-3 font-medium">Oleh</th>
               <th className="px-5 py-3 font-medium">Tgl</th>
+              <th className="px-5 py-3 font-medium">Status</th>
+              <th className="px-5 py-3 font-medium"></th>
             </tr>
           </thead>
           <tbody>
             {transfers.map((t) => (
-              <tr key={t.id} className="border-b border-gray-50 last:border-0">
+              <tr key={t.id} className={`border-b border-gray-50 last:border-0 ${t.status === "Cancelled" ? "opacity-50" : ""}`}>
                 <td className="px-5 py-3 font-medium text-gray-800">{t.id}</td>
                 <td className="px-5 py-3 text-gray-700">{t.material}</td>
                 <td className="px-5 py-3 text-gray-600">{t.customer}</td>
@@ -4816,13 +4834,29 @@ function TransferStockPage({ materials, homebases, customers, currentUser, role,
                 <td className="px-5 py-3 text-gray-600">{t.qty}{t.serials?.length > 0 ? ` (${t.serials.join(", ")})` : ""}</td>
                 <td className="px-5 py-3 text-gray-500">{t.performed_by}</td>
                 <td className="px-5 py-3 text-gray-500">{t.date}</td>
+                <td className="px-5 py-3"><StatusBadge status={t.status || "Completed"} /></td>
+                <td className="px-5 py-3">
+                  {canSubmit && t.status !== "Cancelled" && (
+                    <button onClick={() => setConfirmCancelId(t.id)} className="text-red-500 hover:text-red-700 text-xs font-medium">Batalkan</button>
+                  )}
+                </td>
               </tr>
             ))}
-            {!loadingTransfers && transfers.length === 0 && <tr><td colSpan={8}><EmptyState text="Belum ada riwayat transfer." /></td></tr>}
+            {!loadingTransfers && transfers.length === 0 && <tr><td colSpan={10}><EmptyState text="Belum ada riwayat transfer." /></td></tr>}
           </tbody>
         </table>
         </div>
       </Card>
+
+      <ConfirmDialog
+        open={!!confirmCancelId}
+        title="Batalkan Transfer"
+        message={`Transfer ${confirmCancelId} akan dibatalkan dan stock dikembalikan ke homebase asal. Hanya bisa dilakukan kalau belum ada perubahan lain pada unit/stock ini sejak transfer dibuat. Lanjutkan?`}
+        confirmLabel={cancellingId ? "Membatalkan..." : "Ya, Batalkan"}
+        danger
+        onConfirm={() => cancelTransfer(confirmCancelId)}
+        onCancel={() => setConfirmCancelId(null)}
+      />
     </div>
   );
 }
@@ -6701,6 +6735,7 @@ function createApiClient(baseUrl, getToken) {
     getTransferOptions: (material, customer) => request(`/stock/transfer-options?material=${encodeURIComponent(material)}&customer=${encodeURIComponent(customer)}`),
     getTransfers: () => request("/stock/transfers"),
     createTransfer: (payload) => request("/stock/transfers", { method: "POST", body: payload }),
+    cancelTransfer: (id) => request(`/stock/transfers/${id}/cancel`, { method: "POST" }),
     getPhantomStockRows: () => request("/stock/phantom-check"),
     cleanupPhantomStockRows: () => request("/stock/phantom-cleanup", { method: "POST" }),
     getStockConsistency: () => request("/stock/consistency"),
