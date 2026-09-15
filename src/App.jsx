@@ -446,23 +446,23 @@ const NAV_TREE = [
   {
     key: "material", label: "Request", icon: ClipboardList,
     children: [
-      { key: "delivery", label: "Delivery Request" },
+      { key: "delivery", label: "Delivery" },
+      { key: "materialSwap", label: "Replacement" },
+      { key: "stockTransfer", label: "Transfer Stock" },
+      { key: "reconciliation", label: "Reconciliation" },
       // Return Material Faulty & Transfer Antar Cluster no longer get their
       // own sidebar row — reachable as tabs from Delivery Request's list
       // page instead (see RequestTabs), to keep this menu shorter. Kept
       // `hidden: true` (not deleted) since the key is still how the page
       // routes and hasAccess still gates it — same pattern as `movement`.
       { key: "returnFaulty", label: "Return Material Faulty", hidden: true },
-      { key: "reconciliation", label: "Reconciliation" },
-      { key: "materialSwap", label: "Penggantian Material" },
-      { key: "stockTransfer", label: "Transfer Stock" },
       { key: "clusterTransfer", label: "Transfer Antar Cluster", hidden: true },
     ],
   },
   {
     key: "inventory", label: "Inventory", icon: Package,
     children: [
-      { key: "stock", label: "Warehouse Stock" },
+      { key: "stock", label: "Stock Material" },
       { key: "movement", label: "Stock Movement", hidden: true },
       { key: "toolStock", label: "Stock Alat" },
       { key: "consumableStock", label: "Stock Consumable" },
