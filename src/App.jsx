@@ -6581,7 +6581,8 @@ function createApiClient(baseUrl, getToken) {
       body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
     });
     let data = null;
-    try { data = await res.json(); } catch (e) { /* empty body */ }
+    let parseError = null;
+    try { data = await res.json(); } catch (e) { parseError = e; }
     if (!res.ok) {
       // For 500s the top-level "error" is a deliberately generic message —
       // the actual cause is in "detail" (e.g. the raw DB error). Surface it
@@ -6590,6 +6591,17 @@ function createApiClient(baseUrl, getToken) {
       const detail = data && data.detail && data.detail !== message ? ` (${data.detail})` : "";
       throw new Error(message + detail);
     }
+    // Every real endpoint here returns JSON on success — none legitimately
+    // send an empty 2xx body. A response that claims success but fails to
+    // parse (a Railway/proxy hiccup, a truncated body mid-restart) used to
+    // silently become `data = null` and get returned as if it were valid,
+    // which fed `null` straight into things like `setDeliveries(null)` —
+    // any code that then assumed an array (e.g. the notifications
+    // useMemo's `.filter()`) crashed on the next render. Treating it as an
+    // error instead lets the caller's existing catch block handle it (and
+    // for the background silent refresh, that just skips the update and
+    // keeps the last-known-good data instead of wiping it).
+    if (parseError) throw new Error("Respons dari server tidak valid — coba lagi");
     return data;
   }
 
