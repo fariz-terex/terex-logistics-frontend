@@ -446,17 +446,19 @@ const NAV_TREE = [
   {
     key: "material", label: "Request", icon: ClipboardList,
     children: [
-      { key: "delivery", label: "Warehouse to Homebase" },
+      { key: "delivery", label: "Delivery" },
       { key: "materialSwap", label: "Replacement" },
       { key: "stockTransfer", label: "Transfer Stock" },
       { key: "reconciliation", label: "Reconciliation" },
       // Return Material Faulty & Transfer Antar Cluster no longer get their
       // own sidebar row — reachable as tabs from Delivery Request's list
-      // page instead (see RequestTabs), to keep this menu shorter. Kept
-      // `hidden: true` (not deleted) since the key is still how the page
-      // routes and hasAccess still gates it — same pattern as `movement`.
-      { key: "returnFaulty", label: "Homebase to Warehouse", hidden: true },
-      { key: "clusterTransfer", label: "Homebase to Homebase", hidden: true },
+      // page instead (see RequestTabs, which uses different labels —
+      // "Warehouse to Homebase" etc. — from these sidebar ones on purpose;
+      // keep this menu shorter. Kept `hidden: true` (not deleted) since
+      // the key is still how the page routes and hasAccess still gates
+      // it — same pattern as `movement`.
+      { key: "returnFaulty", label: "Return Material Faulty", hidden: true },
+      { key: "clusterTransfer", label: "Transfer Antar Cluster", hidden: true },
     ],
   },
   {
