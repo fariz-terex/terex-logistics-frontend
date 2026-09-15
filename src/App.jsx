@@ -450,19 +450,20 @@ const NAV_TREE = [
       // row's own page — the sidebar row stays highlighted while on any
       // of them too, since they read as "part of Delivery" to the user
       // even though they don't get their own row.
-      { key: "delivery", label: "Delivery", groupWith: ["returnFaulty", "clusterTransfer"] },
+      { key: "delivery", label: "Delivery", groupWith: ["returnFaulty", "stockTransfer"] },
       { key: "materialSwap", label: "Replacement" },
-      { key: "stockTransfer", label: "Transfer Stock" },
+      { key: "clusterTransfer", label: "Transfer Antar Cluster" },
       { key: "reconciliation", label: "Reconciliation" },
-      // Return Material Faulty & Transfer Antar Cluster no longer get their
-      // own sidebar row — reachable as tabs from Delivery Request's list
-      // page instead (see RequestTabs, which uses different labels —
-      // "Warehouse to Homebase" etc. — from these sidebar ones on purpose;
-      // keep this menu shorter. Kept `hidden: true` (not deleted) since
-      // the key is still how the page routes and hasAccess still gates
-      // it — same pattern as `movement`.
+      // Return Material Faulty & Transfer Stock no longer get their own
+      // sidebar row — reachable as tabs from Delivery Request's list page
+      // instead (see RequestTabs — Transfer Stock is literally "move
+      // Delivered stock from one homebase to another", i.e. the Homebase
+      // to Homebase tab; Transfer Antar Cluster is a different thing
+      // (PIM-only cluster ownership) and keeps its own row). Kept
+      // `hidden: true` (not deleted) since the key is still how the page
+      // routes and hasAccess still gates it — same pattern as `movement`.
       { key: "returnFaulty", label: "Return Material Faulty", hidden: true },
-      { key: "clusterTransfer", label: "Transfer Antar Cluster", hidden: true },
+      { key: "stockTransfer", label: "Transfer Stock", hidden: true },
     ],
   },
   {
@@ -1080,18 +1081,21 @@ function HelpPage({ role }) {
    ============================================================ */
 
 // Shared tab strip for the three request-type flows that live under one
-// sidebar entry ("Request" > Delivery Request) instead of three — Return
-// Material Faulty and Transfer Antar Cluster don't get their own sidebar
-// row, so this is how you switch between them from any of the three list
-// pages. Only rendered on the LIST view of each (not detail/create), and
-// only shows tabs this user actually has access to (same hasAccess check
-// the sidebar itself uses) — a tab strip with one tab left is pointless,
-// so it hides entirely in that case.
+// sidebar entry ("Request" > Delivery) instead of three — Return Material
+// Faulty and Transfer Stock don't get their own sidebar row, so this is
+// how you switch between them from any of the three list pages. Transfer
+// Stock is literally "move Delivered stock from one homebase to another",
+// i.e. Homebase to Homebase — Transfer Antar Cluster is a different thing
+// (PIM-only cluster ownership) and keeps its own separate sidebar row.
+// Only rendered on the LIST view of each (not detail/create), and only
+// shows tabs this user actually has access to (same hasAccess check the
+// sidebar itself uses) — a tab strip with one tab left is pointless, so
+// it hides entirely in that case.
 function RequestTabs({ page, setPage, role, userCustomers }) {
   const tabs = [
     { key: "delivery", label: "Warehouse to Homebase" },
     { key: "returnFaulty", label: "Homebase to Warehouse" },
-    { key: "clusterTransfer", label: "Homebase to Homebase" },
+    { key: "stockTransfer", label: "Homebase to Homebase" },
   ].filter((t) => hasAccess(t.key, role, userCustomers));
   if (tabs.length <= 1) return null;
   return (
@@ -4367,7 +4371,7 @@ function ToolStockPage({ tools, setPage, setToolSerialName, onSubmitReceipt, sho
 // gated by the owning cluster's SPV approving. Two panels: a request form
 // (pick target cluster + a Ready unit currently owned by another cluster) and
 // a list of transfers where Pending ones can be approved/rejected.
-function ClusterTransferPage({ materials, customers, currentUser, role, api, showToast, setPage, page, userCustomers }) {
+function ClusterTransferPage({ materials, customers, currentUser, role, api, showToast }) {
   // This feature is PIM-only — the division is always PIM, so there's no
   // picker. Access to the page itself is already gated to Manager + PIM users
   // in the sidebar (see hasAccess), so anyone who reaches here is entitled to
@@ -4456,7 +4460,6 @@ function ClusterTransferPage({ materials, customers, currentUser, role, api, sho
 
   return (
     <div className="p-4 sm:p-8 space-y-5">
-      <RequestTabs page={page} setPage={setPage} role={role} userCustomers={userCustomers} />
       <SectionTitle title="Transfer Antar Cluster" subtitle="Pindahkan kepemilikan unit dari satu cluster ke cluster lain (perlu persetujuan SPV cluster pemilik)" />
 
       <Card className="p-6 space-y-4 max-w-2xl">
@@ -4598,7 +4601,7 @@ function ClusterTransferPage({ materials, customers, currentUser, role, api, sho
   );
 }
 
-function TransferStockPage({ materials, homebases, customers, currentUser, role, api, showToast }) {
+function TransferStockPage({ materials, homebases, customers, currentUser, role, api, showToast, setPage, page, userCustomers }) {
   const isManager = role === ROLES.MANAGER;
   const myDivisions = currentUser?.customers || [];
   const needsDivisionPicker = isManager || myDivisions.length > 1;
@@ -4687,6 +4690,7 @@ function TransferStockPage({ materials, homebases, customers, currentUser, role,
 
   return (
     <div className="p-4 sm:p-8 space-y-5">
+      <RequestTabs page={page} setPage={setPage} role={role} userCustomers={userCustomers} />
       <SectionTitle title="Transfer Stock" subtitle={canSubmit ? "Pindahkan stock material yang sudah Delivered dari satu homebase ke homebase lain" : "Riwayat transfer stock antar homebase"} />
 
       {canSubmit && (
@@ -8282,8 +8286,8 @@ export default function App() {
   else if (page === "serialDetail") content = <MaterialSerialDetail material={serialMaterial} api={api} onBack={() => goto("stock")} highlightSerial={highlightSerial} highlightToken={highlightToken} deliveries={deliveries} role={role} showToast={showToast} />;
   else if (page === "toolStock") content = <ToolStockPage tools={tools} setPage={goto} setToolSerialName={setToolSerialName} onSubmitReceipt={createToolReceipt} showToast={showToast} role={role} />;
   else if (page === "consumableStock") content = <ConsumableStockPage consumables={consumables} onSubmitReceipt={createConsumableReceipt} showToast={showToast} role={role} />;
-  else if (page === "stockTransfer") content = <TransferStockPage materials={materials} homebases={homebases} customers={customers} currentUser={currentUser} role={role} api={api} showToast={showToast} />;
-  else if (page === "clusterTransfer") content = <ClusterTransferPage materials={materials} customers={customers} currentUser={currentUser} role={role} api={api} showToast={showToast} setPage={goto} page={page} userCustomers={currentUser?.customers} />;
+  else if (page === "stockTransfer") content = <TransferStockPage materials={materials} homebases={homebases} customers={customers} currentUser={currentUser} role={role} api={api} showToast={showToast} setPage={goto} page={page} userCustomers={currentUser?.customers} />;
+  else if (page === "clusterTransfer") content = <ClusterTransferPage materials={materials} customers={customers} currentUser={currentUser} role={role} api={api} showToast={showToast} />;
   else if (page === "toolSerialDetail") content = <ToolSerialDetail toolName={toolSerialName} api={api} onBack={() => goto("toolStock")} />;
   else if (page === "reports") content = <ReportsPage
     title="Delivery Report" subtitle="Laporan seluruh pengajuan delivery"
