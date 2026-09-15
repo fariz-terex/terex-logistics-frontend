@@ -447,11 +447,16 @@ const NAV_TREE = [
     key: "material", label: "Request", icon: ClipboardList,
     children: [
       { key: "delivery", label: "Delivery Request" },
-      { key: "returnFaulty", label: "Return Material Faulty" },
+      // Return Material Faulty & Transfer Antar Cluster no longer get their
+      // own sidebar row — reachable as tabs from Delivery Request's list
+      // page instead (see RequestTabs), to keep this menu shorter. Kept
+      // `hidden: true` (not deleted) since the key is still how the page
+      // routes and hasAccess still gates it — same pattern as `movement`.
+      { key: "returnFaulty", label: "Return Material Faulty", hidden: true },
       { key: "reconciliation", label: "Reconciliation" },
       { key: "materialSwap", label: "Penggantian Material" },
       { key: "stockTransfer", label: "Transfer Stock" },
-      { key: "clusterTransfer", label: "Transfer Antar Cluster" },
+      { key: "clusterTransfer", label: "Transfer Antar Cluster", hidden: true },
     ],
   },
   {
@@ -557,7 +562,11 @@ function Sidebar({ page, setPage, role, userName, userCustomers, mobileOpen, onC
           if (visibleChildren.length === 0) return null;
           const Icon = item.icon;
           const isOpen = open[item.key];
-          const childActive = visibleChildren.some((c) => c.key === page);
+          // Checked against ALL children (hidden ones too, e.g. Return
+          // Material Faulty/Transfer Antar Cluster reachable only via
+          // RequestTabs) so the parent still highlights while on one of
+          // those pages, not just the ones with their own sidebar row.
+          const childActive = item.children.some((c) => hasAccess(c.key, role, userCustomers) && c.key === page);
           return (
             <div key={item.key}>
               <button
@@ -1064,13 +1073,46 @@ function HelpPage({ role }) {
    DELIVERY REQUEST MODULE
    ============================================================ */
 
-function DeliveryList({ deliveries, setSelected, setPage, role }) {
+// Shared tab strip for the three request-type flows that live under one
+// sidebar entry ("Request" > Delivery Request) instead of three — Return
+// Material Faulty and Transfer Antar Cluster don't get their own sidebar
+// row, so this is how you switch between them from any of the three list
+// pages. Only rendered on the LIST view of each (not detail/create), and
+// only shows tabs this user actually has access to (same hasAccess check
+// the sidebar itself uses) — a tab strip with one tab left is pointless,
+// so it hides entirely in that case.
+function RequestTabs({ page, setPage, role, userCustomers }) {
+  const tabs = [
+    { key: "delivery", label: "Delivery Request" },
+    { key: "returnFaulty", label: "Return Material Faulty" },
+    { key: "clusterTransfer", label: "Transfer Antar Cluster" },
+  ].filter((t) => hasAccess(t.key, role, userCustomers));
+  if (tabs.length <= 1) return null;
+  return (
+    <div className="flex gap-1 border-b border-gray-100">
+      {tabs.map((t) => (
+        <button
+          key={t.key}
+          onClick={() => setPage(t.key)}
+          className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
+            page === t.key ? "border-emerald-800 text-emerald-800" : "border-transparent text-gray-500 hover:text-gray-700"
+          }`}
+        >
+          {t.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function DeliveryList({ deliveries, setSelected, setPage, role, page, userCustomers }) {
   const [filter, setFilter] = useState("All");
   const statuses = ["All", "Waiting Logistics Approval", "In Progress", "Selesai Dikirim", "Rejected"];
   const filtered = filter === "All" ? deliveries : deliveries.filter((d) => d.status === filter || (filter === "In Progress" && ["In Progress", "Preparing", "Shipped", "Waiting Stock Assignment"].includes(d.status)));
 
   return (
     <div className="p-4 sm:p-8 space-y-5">
+      <RequestTabs page={page} setPage={setPage} role={role} userCustomers={userCustomers} />
       <SectionTitle
         title="Delivery Request"
         subtitle="Pengajuan dan pengiriman material ke homebase / site"
@@ -3031,9 +3073,10 @@ function StockMovement({ movements, filter, setFilter, deliveries }) {
    RETURN MATERIAL FAULTY MODULE
    ============================================================ */
 
-function ReturnFaultyList({ returns, setSelected, setPage, role }) {
+function ReturnFaultyList({ returns, setSelected, setPage, role, page, userCustomers }) {
   return (
     <div className="p-4 sm:p-8 space-y-5">
+      <RequestTabs page={page} setPage={setPage} role={role} userCustomers={userCustomers} />
       <SectionTitle
         title="Return Material Faulty"
         subtitle="Pengembalian material rusak oleh teknisi lapangan"
@@ -4315,7 +4358,7 @@ function ToolStockPage({ tools, setPage, setToolSerialName, onSubmitReceipt, sho
 // gated by the owning cluster's SPV approving. Two panels: a request form
 // (pick target cluster + a Ready unit currently owned by another cluster) and
 // a list of transfers where Pending ones can be approved/rejected.
-function ClusterTransferPage({ materials, customers, currentUser, role, api, showToast }) {
+function ClusterTransferPage({ materials, customers, currentUser, role, api, showToast, setPage, page, userCustomers }) {
   // This feature is PIM-only — the division is always PIM, so there's no
   // picker. Access to the page itself is already gated to Manager + PIM users
   // in the sidebar (see hasAccess), so anyone who reaches here is entitled to
@@ -4404,6 +4447,7 @@ function ClusterTransferPage({ materials, customers, currentUser, role, api, sho
 
   return (
     <div className="p-4 sm:p-8 space-y-5">
+      <RequestTabs page={page} setPage={setPage} role={role} userCustomers={userCustomers} />
       <SectionTitle title="Transfer Antar Cluster" subtitle="Pindahkan kepemilikan unit dari satu cluster ke cluster lain (perlu persetujuan SPV cluster pemilik)" />
 
       <Card className="p-6 space-y-4 max-w-2xl">
@@ -8110,13 +8154,13 @@ export default function App() {
     if (selectedDelivery) {
       const d = deliveries.find((x) => x.id === selectedDelivery);
       content = <DeliveryDetail delivery={d} onBack={() => setSelectedDelivery(null)} onApprove={approveDelivery} onReject={rejectDelivery} onCancel={cancelDelivery} onAssignStock={assignDeliveryStock} onShip={shipDelivery} onAddResi={addDeliveryResi} onAddBast={addDeliveryBast} onAddBkbLink={addDeliveryBkbLink} onAdvance={advanceDelivery} onReturnTools={returnDeliveryTools} role={role} materials={materials} tools={tools} api={api} />;
-    } else content = <DeliveryList deliveries={deliveries} setSelected={setSelectedDelivery} setPage={goto} role={role} />;
+    } else content = <DeliveryList deliveries={deliveries} setSelected={setSelectedDelivery} setPage={goto} role={role} page={page} userCustomers={currentUser?.customers} />;
   } else if (page === "deliveryCreate") content = <DeliveryCreate onSubmit={submitDelivery} onCancel={() => goto("delivery")} materials={materials} tools={tools} consumables={consumables} sites={sites} homebases={homebases} currentUser={currentUser} customers={customers} api={api} />;
   else if (page === "returnFaulty") {
     if (selectedReturn) {
       const r = returns.find((x) => x.id === selectedReturn);
       content = <ReturnFaultyDetail r={r} onBack={() => setSelectedReturn(null)} onApprove={approveReturn} onRevise={reviseReturn} onShip={shipReturn} onAddResi={addResiReturn} onReceive={receiveReturn} onQC={qcReturn} onComplete={completeReturn} onEdit={() => setPage("returnFaultyEdit")} role={role} />;
-    } else content = <ReturnFaultyList returns={returns} setSelected={setSelectedReturn} setPage={goto} role={role} />;
+    } else content = <ReturnFaultyList returns={returns} setSelected={setSelectedReturn} setPage={goto} role={role} page={page} userCustomers={currentUser?.customers} />;
   } else if (page === "returnFaultyCreate") content = <ReturnFaultyCreate onSubmit={submitReturn} onCancel={() => goto("returnFaulty")} materials={materials} returns={returns} reconciliations={reconciliations} currentUser={currentUser} customers={customers} prefillItems={returnPrefill ? [returnPrefill] : undefined} />;
   else if (page === "returnFaultyEdit") {
     const r = returns.find((x) => x.id === selectedReturn);
@@ -8167,7 +8211,7 @@ export default function App() {
   else if (page === "toolStock") content = <ToolStockPage tools={tools} setPage={goto} setToolSerialName={setToolSerialName} onSubmitReceipt={createToolReceipt} showToast={showToast} role={role} />;
   else if (page === "consumableStock") content = <ConsumableStockPage consumables={consumables} onSubmitReceipt={createConsumableReceipt} showToast={showToast} role={role} />;
   else if (page === "stockTransfer") content = <TransferStockPage materials={materials} homebases={homebases} customers={customers} currentUser={currentUser} role={role} api={api} showToast={showToast} />;
-  else if (page === "clusterTransfer") content = <ClusterTransferPage materials={materials} customers={customers} currentUser={currentUser} role={role} api={api} showToast={showToast} />;
+  else if (page === "clusterTransfer") content = <ClusterTransferPage materials={materials} customers={customers} currentUser={currentUser} role={role} api={api} showToast={showToast} setPage={goto} page={page} userCustomers={currentUser?.customers} />;
   else if (page === "toolSerialDetail") content = <ToolSerialDetail toolName={toolSerialName} api={api} onBack={() => goto("toolStock")} />;
   else if (page === "reports") content = <ReportsPage
     title="Delivery Report" subtitle="Laporan seluruh pengajuan delivery"
