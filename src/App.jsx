@@ -446,7 +446,7 @@ const NAV_TREE = [
   {
     key: "material", label: "Request", icon: ClipboardList,
     children: [
-      { key: "delivery", label: "Delivery" },
+      { key: "delivery", label: "Warehouse to Homebase" },
       { key: "materialSwap", label: "Replacement" },
       { key: "stockTransfer", label: "Transfer Stock" },
       { key: "reconciliation", label: "Reconciliation" },
@@ -455,8 +455,8 @@ const NAV_TREE = [
       // page instead (see RequestTabs), to keep this menu shorter. Kept
       // `hidden: true` (not deleted) since the key is still how the page
       // routes and hasAccess still gates it — same pattern as `movement`.
-      { key: "returnFaulty", label: "Return Material Faulty", hidden: true },
-      { key: "clusterTransfer", label: "Transfer Antar Cluster", hidden: true },
+      { key: "returnFaulty", label: "Homebase to Warehouse", hidden: true },
+      { key: "clusterTransfer", label: "Homebase to Homebase", hidden: true },
     ],
   },
   {
@@ -1083,9 +1083,9 @@ function HelpPage({ role }) {
 // so it hides entirely in that case.
 function RequestTabs({ page, setPage, role, userCustomers }) {
   const tabs = [
-    { key: "delivery", label: "Delivery" },
-    { key: "returnFaulty", label: "Return Material Faulty" },
-    { key: "clusterTransfer", label: "Transfer Antar Cluster" },
+    { key: "delivery", label: "Warehouse to Homebase" },
+    { key: "returnFaulty", label: "Homebase to Warehouse" },
+    { key: "clusterTransfer", label: "Homebase to Homebase" },
   ].filter((t) => hasAccess(t.key, role, userCustomers));
   if (tabs.length <= 1) return null;
   return (
