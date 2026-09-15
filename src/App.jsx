@@ -7271,6 +7271,45 @@ function StockConsistencyCheck({ api, showToast }) {
 }
 
 /* ============================================================
+   ERROR BOUNDARY
+   ============================================================
+   Without this, ANY uncaught render error anywhere in the tree — a
+   background data refresh landing between a record being selected and
+   this render, a genuinely new bug, anything — unmounts React entirely
+   and leaves the blank white page users have reported ("tiba-tiba
+   hilang"), recoverable only by a manual reload. React only stops that
+   propagation at the nearest class component with getDerivedStateFromError
+   (a function component can't do this), so this has to be a class. */
+export class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  componentDidCatch(error, info) {
+    console.error("[ErrorBoundary] caught a render error:", error, info?.componentStack);
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="h-screen w-screen flex items-center justify-center bg-gray-50 p-8">
+          <div className="text-center space-y-3 max-w-sm">
+            <div className="text-lg font-semibold text-gray-800">Terjadi kesalahan</div>
+            <div className="text-sm text-gray-500">Halaman mengalami error yang tidak terduga. Muat ulang untuk melanjutkan — data Anda aman, tidak ada yang hilang.</div>
+            <button onClick={() => window.location.reload()} className="px-4 py-2.5 bg-emerald-800 text-white rounded-lg text-sm font-medium hover:bg-emerald-900">
+              Muat Ulang Halaman
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+/* ============================================================
    ROOT APP
    ============================================================ */
 
@@ -8154,59 +8193,71 @@ export default function App() {
     );
   } else if (page === "dashboard") content = <Dashboard role={role} userName={currentUser?.name} setPage={goto} deliveries={deliveries} returns={returns} reconciliations={reconciliations} materials={materials} tools={tools} materialSwaps={materialSwaps} api={api} currentUser={currentUser} />;
   else if (page === "delivery") {
-    if (selectedDelivery) {
-      const d = deliveries.find((x) => x.id === selectedDelivery);
-      content = <DeliveryDetail delivery={d} onBack={() => setSelectedDelivery(null)} onApprove={approveDelivery} onReject={rejectDelivery} onCancel={cancelDelivery} onAssignStock={assignDeliveryStock} onShip={shipDelivery} onAddResi={addDeliveryResi} onAddBast={addDeliveryBast} onAddBkbLink={addDeliveryBkbLink} onAdvance={advanceDelivery} onReturnTools={returnDeliveryTools} role={role} materials={materials} tools={tools} api={api} />;
-    } else content = <DeliveryList deliveries={deliveries} setSelected={setSelectedDelivery} setPage={goto} role={role} page={page} userCustomers={currentUser?.customers} />;
+    // `selectedDelivery` can outlive its record (e.g. the background
+    // refresh — see loadAllData's silent poll — lands between it being
+    // selected and this render, or it was deleted elsewhere): falling back
+    // to the list here instead of handing `undefined` to DeliveryDetail is
+    // what actually prevents the blank-white-page crash that used to
+    // follow (Detail components read `delivery.status` etc. with no null
+    // check, and an uncaught render error blanks the whole app since
+    // there's no error boundary below the root).
+    const d = selectedDelivery && deliveries.find((x) => x.id === selectedDelivery);
+    content = d
+      ? <DeliveryDetail delivery={d} onBack={() => setSelectedDelivery(null)} onApprove={approveDelivery} onReject={rejectDelivery} onCancel={cancelDelivery} onAssignStock={assignDeliveryStock} onShip={shipDelivery} onAddResi={addDeliveryResi} onAddBast={addDeliveryBast} onAddBkbLink={addDeliveryBkbLink} onAdvance={advanceDelivery} onReturnTools={returnDeliveryTools} role={role} materials={materials} tools={tools} api={api} />
+      : <DeliveryList deliveries={deliveries} setSelected={setSelectedDelivery} setPage={goto} role={role} page={page} userCustomers={currentUser?.customers} />;
   } else if (page === "deliveryCreate") content = <DeliveryCreate onSubmit={submitDelivery} onCancel={() => goto("delivery")} materials={materials} tools={tools} consumables={consumables} sites={sites} homebases={homebases} currentUser={currentUser} customers={customers} api={api} />;
   else if (page === "returnFaulty") {
-    if (selectedReturn) {
-      const r = returns.find((x) => x.id === selectedReturn);
-      content = <ReturnFaultyDetail r={r} onBack={() => setSelectedReturn(null)} onApprove={approveReturn} onRevise={reviseReturn} onShip={shipReturn} onAddResi={addResiReturn} onReceive={receiveReturn} onQC={qcReturn} onComplete={completeReturn} onEdit={() => setPage("returnFaultyEdit")} role={role} />;
-    } else content = <ReturnFaultyList returns={returns} setSelected={setSelectedReturn} setPage={goto} role={role} page={page} userCustomers={currentUser?.customers} />;
+    const r = selectedReturn && returns.find((x) => x.id === selectedReturn);
+    content = r
+      ? <ReturnFaultyDetail r={r} onBack={() => setSelectedReturn(null)} onApprove={approveReturn} onRevise={reviseReturn} onShip={shipReturn} onAddResi={addResiReturn} onReceive={receiveReturn} onQC={qcReturn} onComplete={completeReturn} onEdit={() => setPage("returnFaultyEdit")} role={role} />
+      : <ReturnFaultyList returns={returns} setSelected={setSelectedReturn} setPage={goto} role={role} page={page} userCustomers={currentUser?.customers} />;
   } else if (page === "returnFaultyCreate") content = <ReturnFaultyCreate onSubmit={submitReturn} onCancel={() => goto("returnFaulty")} materials={materials} returns={returns} reconciliations={reconciliations} currentUser={currentUser} customers={customers} prefillItems={returnPrefill ? [returnPrefill] : undefined} />;
   else if (page === "returnFaultyEdit") {
     const r = returns.find((x) => x.id === selectedReturn);
-    content = <ReturnFaultyCreate
-      onSubmit={(data) => resubmitReturn(r.id, data)}
-      onCancel={() => setPage("returnFaulty")}
-      materials={materials}
-      returns={returns}
-      reconciliations={reconciliations}
-      initialData={{ items: r.items, docs: r.docs }}
-      excludeId={r.id}
-      revisionNote={r.revisionNote}
-      currentUser={currentUser}
-      customers={customers}
-    />;
+    content = r ? (
+      <ReturnFaultyCreate
+        onSubmit={(data) => resubmitReturn(r.id, data)}
+        onCancel={() => setPage("returnFaulty")}
+        materials={materials}
+        returns={returns}
+        reconciliations={reconciliations}
+        initialData={{ items: r.items, docs: r.docs }}
+        excludeId={r.id}
+        revisionNote={r.revisionNote}
+        currentUser={currentUser}
+        customers={customers}
+      />
+    ) : <ReturnFaultyList returns={returns} setSelected={setSelectedReturn} setPage={goto} role={role} page={page} userCustomers={currentUser?.customers} />;
   }
   else if (page === "reconciliation") {
-    if (selectedRecon) {
-      const r = reconciliations.find((x) => x.id === selectedRecon);
-      content = <ReconciliationDetail r={r} onBack={() => setSelectedRecon(null)} onApprove={approveRecon} onRevise={reviseRecon} onEdit={() => setPage("reconciliationEdit")} role={role} />;
-    } else content = <ReconciliationList items={reconciliations} setSelected={setSelectedRecon} setPage={goto} role={role} />;
+    const r = selectedRecon && reconciliations.find((x) => x.id === selectedRecon);
+    content = r
+      ? <ReconciliationDetail r={r} onBack={() => setSelectedRecon(null)} onApprove={approveRecon} onRevise={reviseRecon} onEdit={() => setPage("reconciliationEdit")} role={role} />
+      : <ReconciliationList items={reconciliations} setSelected={setSelectedRecon} setPage={goto} role={role} />;
   } else if (page === "reconciliationCreate") content = <ReconciliationCreate onSubmit={submitRecon} onCancel={() => goto("reconciliation")} materials={materials} returns={returns} reconciliations={reconciliations} homebases={homebases} currentUser={currentUser} customers={customers} />;
   else if (page === "reconciliationEdit") {
     const r = reconciliations.find((x) => x.id === selectedRecon);
-    content = <ReconciliationCreate
-      onSubmit={(data) => resubmitRecon(r.id, data)}
-      onCancel={() => setPage("reconciliation")}
-      materials={materials}
-      returns={returns}
-      reconciliations={reconciliations}
-      homebases={homebases}
-      initialData={{ homebase: r.homebase, period: r.period, items: r.items }}
-      excludeId={r.id}
-      revisionNote={r.revisionNote}
-      currentUser={currentUser}
-      customers={customers}
-    />;
+    content = r ? (
+      <ReconciliationCreate
+        onSubmit={(data) => resubmitRecon(r.id, data)}
+        onCancel={() => setPage("reconciliation")}
+        materials={materials}
+        returns={returns}
+        reconciliations={reconciliations}
+        homebases={homebases}
+        initialData={{ homebase: r.homebase, period: r.period, items: r.items }}
+        excludeId={r.id}
+        revisionNote={r.revisionNote}
+        currentUser={currentUser}
+        customers={customers}
+      />
+    ) : <ReconciliationList items={reconciliations} setSelected={setSelectedRecon} setPage={goto} role={role} />;
   }
   else if (page === "materialSwap") {
-    if (selectedSwap) {
-      const s = materialSwaps.find((x) => x.id === selectedSwap);
-      content = <MaterialSwapDetail swap={s} onBack={() => setSelectedSwap(null)} setPage={goto} setReturnPrefill={setReturnPrefill} />;
-    } else content = <MaterialSwapPage swaps={materialSwaps} api={api} materials={materials} sites={sites} homebases={homebases} onSubmit={submitMaterialSwap} showToast={showToast} setPage={goto} setReturnPrefill={setReturnPrefill} setSelectedSwap={setSelectedSwap} role={role} />;
+    const s = selectedSwap && materialSwaps.find((x) => x.id === selectedSwap);
+    content = s
+      ? <MaterialSwapDetail swap={s} onBack={() => setSelectedSwap(null)} setPage={goto} setReturnPrefill={setReturnPrefill} />
+      : <MaterialSwapPage swaps={materialSwaps} api={api} materials={materials} sites={sites} homebases={homebases} onSubmit={submitMaterialSwap} showToast={showToast} setPage={goto} setReturnPrefill={setReturnPrefill} setSelectedSwap={setSelectedSwap} role={role} />;
   }
   else if (page === "stock") content = <WarehouseStock materials={materials} setPage={goto} setMovementFilter={setMovementFilter} setSerialMaterial={setSerialMaterial} onSubmitReceipt={createReceipt} showToast={showToast} clearSerialHighlight={() => setHighlightSerial("")} currentUser={currentUser} customers={customers} role={role} api={api} />;
   else if (page === "movement") content = <StockMovement movements={movements} filter={movementFilter} setFilter={setMovementFilter} deliveries={deliveries} />;
