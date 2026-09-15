@@ -446,7 +446,11 @@ const NAV_TREE = [
   {
     key: "material", label: "Request", icon: ClipboardList,
     children: [
-      { key: "delivery", label: "Delivery" },
+      // groupWith: hidden pages reachable only via RequestTabs from this
+      // row's own page — the sidebar row stays highlighted while on any
+      // of them too, since they read as "part of Delivery" to the user
+      // even though they don't get their own row.
+      { key: "delivery", label: "Delivery", groupWith: ["returnFaulty", "clusterTransfer"] },
       { key: "materialSwap", label: "Replacement" },
       { key: "stockTransfer", label: "Transfer Stock" },
       { key: "reconciliation", label: "Reconciliation" },
@@ -587,7 +591,7 @@ function Sidebar({ page, setPage, role, userName, userCustomers, mobileOpen, onC
                       key={c.key}
                       onClick={() => navigate(c.key)}
                       className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                        page === c.key ? "bg-emerald-50 text-emerald-800 font-medium" : "text-gray-500 hover:bg-gray-50"
+                        page === c.key || c.groupWith?.includes(page) ? "bg-emerald-50 text-emerald-800 font-medium" : "text-gray-500 hover:bg-gray-50"
                       }`}
                     >
                       {c.label}
