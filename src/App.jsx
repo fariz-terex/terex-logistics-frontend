@@ -444,23 +444,23 @@ function sortRows(rows, sort) {
 const NAV_TREE = [
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   {
-    key: "material", label: "Material", icon: Package,
+    key: "material", label: "Request", icon: ClipboardList,
     children: [
       { key: "delivery", label: "Delivery Request" },
       { key: "returnFaulty", label: "Return Material Faulty" },
       { key: "reconciliation", label: "Reconciliation" },
       { key: "materialSwap", label: "Penggantian Material" },
+      { key: "stockTransfer", label: "Transfer Stock" },
+      { key: "clusterTransfer", label: "Transfer Antar Cluster" },
     ],
   },
   {
-    key: "inventory", label: "Inventory", icon: Boxes,
+    key: "inventory", label: "Inventory", icon: Package,
     children: [
       { key: "stock", label: "Warehouse Stock" },
       { key: "movement", label: "Stock Movement", hidden: true },
       { key: "toolStock", label: "Stock Alat" },
       { key: "consumableStock", label: "Stock Consumable" },
-      { key: "stockTransfer", label: "Transfer Stock" },
-      { key: "clusterTransfer", label: "Transfer Antar Cluster" },
     ],
   },
   {
