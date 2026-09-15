@@ -6739,6 +6739,8 @@ function createApiClient(baseUrl, getToken) {
     getPhantomStockRows: () => request("/stock/phantom-check"),
     cleanupPhantomStockRows: () => request("/stock/phantom-cleanup", { method: "POST" }),
     getStockConsistency: () => request("/stock/consistency"),
+    getPimImportPreview: () => request("/admin/pim-import/preview"),
+    commitPimImport: () => request("/admin/pim-import/commit", { method: "POST" }),
     rebuildGlobalStock: (commit) => request("/stock/rebuild-global", { method: "POST", body: { commit: !!commit } }),
     rebuildSerialBuckets: (commit) => request("/stock/rebuild-serial-buckets", { method: "POST", body: { commit: !!commit } }),
     getMovements: (material) => request(`/stock/movements${material ? `?material=${encodeURIComponent(material)}` : ""}`),
@@ -7192,6 +7194,123 @@ function RebuildAction({ label, title, confirmMessage, run, onDone, showToast })
         onCancel={() => setConfirm(false)}
       />
     </>
+  );
+}
+
+// TEMP one-off tool — import PIM historical unit data from the "Update
+// Material VSAT TEREX" Google Sheet (see routes/adminImportPim.js on the
+// backend). Preview is always safe (read-only); Commit is a real write,
+// gated behind a confirm dialog. Remove this component (and its Settings
+// entry) once the import is done and confirmed.
+function PimImportTool({ api, showToast }) {
+  const [preview, setPreview] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [committing, setCommitting] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [result, setResult] = useState(null);
+
+  const loadPreview = async () => {
+    setLoading(true);
+    try {
+      setPreview(await api.getPimImportPreview());
+    } catch (err) {
+      showToast(err.message || "Gagal memuat preview import");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const commit = async () => {
+    setCommitting(true);
+    try {
+      const r = await api.commitPimImport();
+      setResult(r);
+      setPreview(null);
+      showToast(`Import selesai — ${r.inserted} unit baru ditambahkan`);
+    } catch (err) {
+      showToast(err.message || "Gagal menjalankan import");
+    } finally {
+      setCommitting(false);
+      setConfirmOpen(false);
+    }
+  };
+
+  const List = ({ items, render }) => (
+    <div className="max-h-40 overflow-y-auto border border-gray-100 rounded-lg divide-y divide-gray-50">
+      {items.map((r, i) => <div key={i} className="px-3 py-1.5 text-xs text-gray-600">{render(r)}</div>)}
+    </div>
+  );
+
+  return (
+    <Card className="p-5 space-y-3 text-sm">
+      <div>
+        <div className="font-semibold text-gray-800">Import Data Historis PIM</div>
+        <div className="text-gray-500 text-xs mt-1">
+          Import satu kali dari sheet "Update Material VSAT TEREX" — akan membuat Master Material baru yang belum
+          ada, menambahkan unit dengan Serial Number, lalu menyinkronkan stok PIM. Preview di bawah selalu aman
+          (tidak menulis apa pun) — hanya tombol "Jalankan Import" yang benar-benar mengubah data.
+        </div>
+      </div>
+
+      <GhostButton onClick={loadPreview} disabled={loading}>{loading ? "Memuat..." : "Muat Preview"}</GhostButton>
+
+      {preview && (
+        <div className="pt-2 border-t border-gray-50 space-y-3">
+          <div className="text-xs text-gray-700">
+            Akan ditambahkan: <span className="font-semibold">{preview.willInsert}</span> unit baru
+            {preview.willSkip > 0 && <span className="text-gray-400"> · {preview.willSkip} dilewati (SN sudah ada di sistem)</span>}
+          </div>
+
+          <div className="grid grid-cols-3 gap-2 text-xs">
+            {Object.entries(preview.byStatus).map(([k, v]) => (
+              <div key={k} className="bg-gray-50 rounded-lg px-3 py-2">
+                <div className="text-gray-400">{k}</div>
+                <div className="font-semibold text-gray-800">{v}</div>
+              </div>
+            ))}
+          </div>
+
+          {preview.materialsToCreate.length > 0 && (
+            <div>
+              <div className="text-xs font-medium text-gray-700 mb-1">Master Material baru yang akan dibuat ({preview.materialsToCreate.length})</div>
+              <List items={preview.materialsToCreate} render={(m) => <>{m.name} <span className="text-gray-400">· {m.category}</span></>} />
+            </div>
+          )}
+
+          {preview.willSkip > 0 && (
+            <div>
+              <div className="text-xs font-medium text-gray-700 mb-1">Dilewati — SN sudah ada di sistem ({preview.willSkip})</div>
+              <List items={preview.skippedSns} render={(s) => <>{s.sn} · {s.material}</>} />
+            </div>
+          )}
+
+          <div>
+            <div className="text-xs font-medium text-gray-700 mb-1">Unit per material</div>
+            <List items={Object.entries(preview.byMaterial)} render={([m, n]) => <>{m} — {n} unit</>} />
+          </div>
+
+          <GhostButton onClick={() => setConfirmOpen(true)} className="border-red-200 text-red-600 hover:bg-red-50">
+            Jalankan Import
+          </GhostButton>
+        </div>
+      )}
+
+      {result && (
+        <div className="pt-2 border-t border-gray-50 text-xs text-emerald-700">
+          ✓ Selesai — {result.inserted} unit ditambahkan, {result.materialsToCreate.length} Master Material baru dibuat.
+        </div>
+      )}
+
+      <ConfirmDialog
+        open={confirmOpen}
+        title="Jalankan Import PIM"
+        message={preview ? `${preview.willInsert} unit baru akan ditambahkan ke sistem dan ${preview.materialsToCreate.length} Master Material baru akan dibuat. Tindakan ini mengubah data produksi. Lanjutkan?` : ""}
+        confirmLabel={committing ? "Menjalankan..." : "Ya, Jalankan Import"}
+        danger
+        onConfirm={commit}
+        onCancel={() => setConfirmOpen(false)}
+      />
+    </Card>
   );
 }
 
@@ -8496,6 +8615,7 @@ export default function App() {
       <TelegramLink api={api} showToast={showToast} />
       {role === ROLES.MANAGER && <PhantomStockCleanup api={api} showToast={showToast} />}
       {role === ROLES.MANAGER && <StockConsistencyCheck api={api} showToast={showToast} />}
+      {role === ROLES.MANAGER && <PimImportTool api={api} showToast={showToast} />}
       <AppVersionInfo api={api} />
     </div>
   );
