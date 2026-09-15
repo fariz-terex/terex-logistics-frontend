@@ -1083,24 +1083,27 @@ function HelpPage({ role }) {
 // so it hides entirely in that case.
 function RequestTabs({ page, setPage, role, userCustomers }) {
   const tabs = [
-    { key: "delivery", label: "Delivery Request" },
+    { key: "delivery", label: "Delivery" },
     { key: "returnFaulty", label: "Return Material Faulty" },
     { key: "clusterTransfer", label: "Transfer Antar Cluster" },
   ].filter((t) => hasAccess(t.key, role, userCustomers));
   if (tabs.length <= 1) return null;
   return (
-    <div className="flex gap-1 border-b border-gray-100">
-      {tabs.map((t) => (
-        <button
-          key={t.key}
-          onClick={() => setPage(t.key)}
-          className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
-            page === t.key ? "border-emerald-800 text-emerald-800" : "border-transparent text-gray-500 hover:text-gray-700"
-          }`}
-        >
-          {t.label}
-        </button>
-      ))}
+    <div>
+      <div className="text-xs text-gray-400 mb-1.5">Sedang di:</div>
+      <div className="flex gap-2 flex-wrap">
+        {tabs.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setPage(t.key)}
+            className={`px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${
+              page === t.key ? "bg-emerald-800 text-white border-emerald-800" : "border-gray-200 text-gray-600 hover:bg-gray-50"
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
