@@ -2212,6 +2212,19 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast, currentUse
   const clusterOk = !clusterRequired || !!cluster;
   const valid = mat && !!effectiveCustomer && clusterOk && (mat.serialized ? trimmedSerials.length > 0 && !hasDuplicates : qty > 0);
 
+  // If a serialized unit's SN already exists in the system, that's usually
+  // a genuine mistake (typo, already-received unit) — but it can also mean
+  // this "new" unit is actually one that was Sent to Customer for repair
+  // and is now physically back, which staff might reach for Goods Receipt
+  // to log since it's arriving at the warehouse door either way. Rather
+  // than a dedicated separate flow for that (rare) case, catch it right
+  // here: on the exact "already registered" rejection, check whether that
+  // SN's current status is "Sent to Customer" and offer to complete the
+  // real receive-back transition (same underlying action as the Return
+  // Material page) instead of just showing an opaque error.
+  const [returnConfirm, setReturnConfirm] = useState(null); // { sn, material, ref, note }
+  const [confirmingReturn, setConfirmingReturn] = useState(false);
+
   const submit = async () => {
     setSaving(true); setError("");
     const submittedMaterial = material;
@@ -2225,9 +2238,42 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast, currentUse
       // Reset fields for the next entry, but keep the form open.
       setMaterial(""); setSerials([""]); setQty(1); setNote(""); setBulkText(""); setCluster("");
     } catch (err) {
-      setError(err.message || "Gagal menyimpan penerimaan barang");
+      const msg = err.message || "";
+      const conflict = mat.serialized ? /Serial Number sudah terdaftar di sistem: (\S+)/.exec(msg) : null;
+      if (conflict) {
+        const conflictSn = conflict[1];
+        try {
+          const matches = await api.searchSerials(conflictSn);
+          const row = matches.find((r) => r.sn === conflictSn);
+          if (row && row.status === "Sent to Customer") {
+            setReturnConfirm({ sn: conflictSn, material: row.material, ref: "", note: "" });
+            return;
+          }
+        } catch {
+          // fall through to the plain error below
+        }
+      }
+      setError(msg || "Gagal menyimpan penerimaan barang");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const confirmReturn = async () => {
+    if (!returnConfirm?.ref?.trim()) return;
+    setConfirmingReturn(true);
+    try {
+      await api.receiveSerialFromCustomer(returnConfirm.sn, returnConfirm.ref.trim(), returnConfirm.note);
+      showToast(`${returnConfirm.sn} diterima kembali dari customer — status Ready, tidak perlu Terima Barang lagi`);
+      // Drop it from the batch and leave the rest for the user to resubmit
+      // (typically empty, since most receipts are one SN at a time).
+      if (bulkMode) setBulkText((prev) => prev.split(/[\n,;\t]+/).map((s) => s.trim()).filter((s) => s && s !== returnConfirm.sn).join("\n"));
+      else setSerials((prev) => { const next = prev.filter((s) => s.trim() !== returnConfirm.sn); return next.length ? next : [""]; });
+      setReturnConfirm(null);
+    } catch (err) {
+      showToast(err.message || "Gagal memproses penerimaan dari customer");
+    } finally {
+      setConfirmingReturn(false);
     }
   };
 
@@ -2324,6 +2370,26 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast, currentUse
           )}
           {hasDuplicates && <div className="text-xs text-red-600">Ada Serial Number duplikat dalam daftar ini.</div>}
           <div className="text-xs text-gray-400">Total unit: {trimmedSerials.length}</div>
+        </div>
+      )}
+
+      {returnConfirm && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-3 space-y-2.5">
+          <div className="text-xs text-amber-800">
+            Serial Number <span className="font-mono font-medium">{returnConfirm.sn}</span> ({returnConfirm.material}) sudah terdaftar dan sedang berstatus <span className="font-medium">Sent to Customer</span> (dikirim ke customer untuk diperbaiki). Apakah ini unit yang <span className="font-medium">diterima kembali</span> dari customer? Kalau bukan, SN-nya kemungkinan salah ketik.
+          </div>
+          <input
+            value={returnConfirm.ref}
+            onChange={(e) => setReturnConfirm({ ...returnConfirm, ref: e.target.value })}
+            placeholder="Nomor Surat Penerimaan (wajib, beda dari nomor saat dikirim)"
+            className="w-full border border-amber-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-amber-500"
+          />
+          <div className="flex justify-end gap-2">
+            <GhostButton onClick={() => setReturnConfirm(null)}>Bukan, Perbaiki SN</GhostButton>
+            <PrimaryButton disabled={!returnConfirm.ref.trim() || confirmingReturn} onClick={confirmReturn}>
+              {confirmingReturn ? "Memproses..." : "Ya, Ini Unit Kembali"}
+            </PrimaryButton>
+          </div>
         </div>
       )}
 
@@ -3093,15 +3159,15 @@ function MaterialSerialDetail({ material, customer, customerOptions, materials, 
 }
 
 // Dedicated menu for the real "return to customer" cycle (a Faulty unit
-// gets sent to the customer/division to be repaired, then received back as
-// Ready) — distinct from Return Material Faulty, which is a technician
-// returning a broken unit from a site into the TEREX warehouse and has
-// nothing to do with any customer. The underlying route handlers/business
-// logic (sendToCustomer/receiveFromCustomer) already existed — this is a
-// form, not a browse-a-table page: pick the mode (Kirim/Terima), pick the
-// one unit it applies to from a short candidate list (Faulty units for
-// Kirim, Sent to Customer units for Terima — never the other way around,
-// so there's nothing to pick wrong), fill in the surat/BA number, submit.
+// gets sent to the customer/division to be repaired) — distinct from
+// Return Material Faulty, which is a technician returning a broken unit
+// from a site into the TEREX warehouse and has nothing to do with any
+// customer. The receive-back half of this cycle (unit physically comes
+// back from the customer) is rare enough that it doesn't get its own
+// dedicated flow here — see GoodsReceiptForm's returnConfirm handling
+// instead, which catches it right where staff would naturally try to log
+// the unit's arrival (Goods Receipt) and offers to complete the real
+// receiveFromCustomer transition there.
 function ReturnToCustomerPage({ api, showToast, currentUser, customers, onBack }) {
   const isManager = currentUser?.role === ROLES.MANAGER;
   const myDivisions = currentUser?.customers || [];
@@ -3109,7 +3175,6 @@ function ReturnToCustomerPage({ api, showToast, currentUser, customers, onBack }
   const divisionOptions = isManager ? customers.filter((c) => c.status === "Active").map((c) => c.name) : myDivisions;
 
   const [customer, setCustomer] = useState(!needsDivisionPicker ? (myDivisions[0] || "") : "");
-  const [mode, setMode] = useState("send"); // "send" | "receive"
   const [candidates, setCandidates] = useState([]);
   const [loadingCandidates, setLoadingCandidates] = useState(false);
   const [sn, setSn] = useState("");
@@ -3124,12 +3189,12 @@ function ReturnToCustomerPage({ api, showToast, currentUser, customers, onBack }
     setSn(""); setError("");
     if (!effectiveCustomer) { setCandidates([]); return; }
     setLoadingCandidates(true);
-    api.getSerials(undefined, mode === "send" ? "Faulty" : "Sent to Customer", effectiveCustomer)
+    api.getSerials(undefined, "Faulty", effectiveCustomer)
       .then(setCandidates)
       .catch(() => setCandidates([]))
       .finally(() => setLoadingCandidates(false));
   };
-  React.useEffect(loadCandidates, [effectiveCustomer, mode]); // eslint-disable-line react-hooks/exhaustive-deps
+  React.useEffect(loadCandidates, [effectiveCustomer]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const selected = candidates.find((c) => c.sn === sn);
   const valid = effectiveCustomer && sn && ref.trim();
@@ -3137,9 +3202,8 @@ function ReturnToCustomerPage({ api, showToast, currentUser, customers, onBack }
   const submit = async () => {
     setSaving(true); setError("");
     try {
-      if (mode === "send") await api.sendSerialToCustomer(sn, ref.trim(), note);
-      else await api.receiveSerialFromCustomer(sn, ref.trim(), note);
-      showToast(mode === "send" ? `${sn} dikirim ke customer` : `${sn} diterima kembali, status Ready`);
+      await api.sendSerialToCustomer(sn, ref.trim(), note);
+      showToast(`${sn} dikirim ke customer`);
       setRef(""); setNote("");
       loadCandidates();
     } catch (err) {
@@ -3152,17 +3216,9 @@ function ReturnToCustomerPage({ api, showToast, currentUser, customers, onBack }
   return (
     <div className="p-4 sm:p-8 max-w-2xl mx-auto space-y-6">
       <button onClick={onBack} className="text-sm text-gray-500 flex items-center gap-1 hover:text-gray-800"><ChevronLeft size={16} /> Kembali</button>
-      <SectionTitle title="Return Material" subtitle="Kirim unit Faulty ke customer untuk diperbaiki, lalu terima kembali setelah selesai" />
+      <SectionTitle title="Return Material" subtitle="Kirim unit Faulty ke customer untuk diperbaiki" />
 
       <Card className="p-5 space-y-4">
-        <div className="flex gap-2">
-          {[{ key: "send", label: "Kirim ke Customer" }, { key: "receive", label: "Terima Kembali" }].map((m) => (
-            <button key={m.key} onClick={() => setMode(m.key)} className={`px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${mode === m.key ? "bg-emerald-800 text-white border-emerald-800" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}>
-              {m.label}
-            </button>
-          ))}
-        </div>
-
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {needsDivisionPicker ? (
             <div>
@@ -3182,10 +3238,10 @@ function ReturnToCustomerPage({ api, showToast, currentUser, customers, onBack }
           <div className="sm:col-span-2">
             <label className="text-sm font-medium text-gray-700">
               Serial Number <span className="text-red-500">*</span>
-              <span className="text-gray-400 font-normal"> — {mode === "send" ? "unit Faulty yang siap dikirim" : "unit yang sedang di customer"}</span>
+              <span className="text-gray-400 font-normal"> — unit Faulty yang siap dikirim</span>
             </label>
             <select value={sn} onChange={(e) => setSn(e.target.value)} disabled={!effectiveCustomer || loadingCandidates} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600 disabled:bg-gray-50">
-              <option value="">{loadingCandidates ? "Memuat..." : candidates.length === 0 ? "Tidak ada unit tersedia" : "Pilih Serial Number..."}</option>
+              <option value="">{loadingCandidates ? "Memuat..." : candidates.length === 0 ? "Tidak ada unit Faulty tersedia" : "Pilih Serial Number..."}</option>
               {candidates.map((c) => <option key={c.sn} value={c.sn}>{c.sn} — {c.material}</option>)}
             </select>
             {selected && <div className="text-xs text-gray-500 mt-1">Material: <span className="font-medium text-gray-700">{selected.material}</span></div>}
@@ -3193,7 +3249,7 @@ function ReturnToCustomerPage({ api, showToast, currentUser, customers, onBack }
 
           <div className="sm:col-span-2">
             <label className="text-sm font-medium text-gray-700">Nomor Surat/BA <span className="text-red-500">*</span></label>
-            <input value={ref} onChange={(e) => setRef(e.target.value)} placeholder={mode === "send" ? "mis. BA-OUT-001" : "Nomor surat baru, beda dari saat dikirim"} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+            <input value={ref} onChange={(e) => setRef(e.target.value)} placeholder="mis. BA-OUT-001" className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
           </div>
 
           <div className="sm:col-span-2">
@@ -3205,7 +3261,7 @@ function ReturnToCustomerPage({ api, showToast, currentUser, customers, onBack }
         {error && <div className="bg-red-50 border border-red-100 text-red-700 text-sm rounded-lg px-3 py-2">{error}</div>}
 
         <div className="flex justify-end">
-          <PrimaryButton onClick={submit} disabled={!valid || saving}>{saving ? "Menyimpan..." : mode === "send" ? "Kirim ke Customer" : "Terima Kembali"}</PrimaryButton>
+          <PrimaryButton onClick={submit} disabled={!valid || saving}>{saving ? "Menyimpan..." : "Kirim ke Customer"}</PrimaryButton>
         </div>
       </Card>
     </div>
