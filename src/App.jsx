@@ -2979,7 +2979,7 @@ function SerialDateTimeline({ serial }) {
 // `material`/`customer` are just the INITIAL filter values — both stay
 // live React state the user can change from here, so "locked" only means
 // "that's where you start," never "that's the only thing you can see."
-function MaterialSerialDetail({ material, customer, customerOptions, materials, api, onBack, highlightSerial, highlightToken, deliveries, role, showToast, title, subtitle, statusOptions: statusOptionsProp, showMaterialColumn }) {
+function MaterialSerialDetail({ material, customer, customerOptions, materials, api, onBack, highlightSerial, highlightToken, deliveries, role, showToast, title, subtitle, statusOptions: statusOptionsProp, showMaterialColumn, inlineDates }) {
   const [status, setStatus] = useState("All");
   const [materialFilter, setMaterialFilter] = useState(material || "");
   const [customerFilter, setCustomerFilter] = useState(customer || (customerOptions && customerOptions[0]) || "");
@@ -3024,7 +3024,8 @@ function MaterialSerialDetail({ material, customer, customerOptions, materials, 
   const filtered = search ? serials.filter((s) => s.sn.toLowerCase().includes(search.toLowerCase())) : serials;
   const statusOptions = statusOptionsProp || ["All", "Ready", "Reserved", "In Transit", "Delivered", "Installed", "Faulty", "Sent to Customer"];
   const withMaterialColumn = showMaterialColumn ?? !materialFilter;
-  const colCount = 3 + (withMaterialColumn ? 1 : 0) + (canManage ? 1 : 0);
+  const dateCols = ["Tanggal Terima", "Tanggal Install", "Tanggal Replacement", "Dikirim ke Warehouse Terex", "Return ke Customer"];
+  const colCount = 3 + (withMaterialColumn ? 1 : 0) + (canManage ? 1 : 0) + (inlineDates ? dateCols.length : 0);
 
   const submitDialog = async ({ ref, note }) => {
     setSaving(true); setDialogError("");
@@ -3091,6 +3092,7 @@ function MaterialSerialDetail({ material, customer, customerOptions, materials, 
               {withMaterialColumn && <th className="px-5 py-3 font-medium">Material</th>}
               <th className="px-5 py-3 font-medium">Status</th>
               <th className="px-5 py-3 font-medium">Referensi</th>
+              {inlineDates && dateCols.map((c) => <th key={c} className="px-5 py-3 font-medium whitespace-nowrap">{c}</th>)}
               {canManage && <th className="px-5 py-3 font-medium"></th>}
             </tr>
           </thead>
@@ -3101,23 +3103,36 @@ function MaterialSerialDetail({ material, customer, customerOptions, materials, 
               <tr><td colSpan={colCount}><EmptyState text="Tidak ada Serial Number untuk filter ini." /></td></tr>
             ) : (
               filtered.map((s) => {
-                const expanded = expandedSn === s.sn;
+                const expanded = !inlineDates && expandedSn === s.sn;
+                const val = (v) => (v == null || v === "" ? "—" : v);
                 return (
                 <React.Fragment key={s.sn}>
                 <tr
                   ref={(el) => { rowRefs.current[s.sn] = el; }}
-                  onClick={() => setExpandedSn(expanded ? null : s.sn)}
-                  className={`border-b border-gray-50 last:border-0 transition-colors duration-700 cursor-pointer hover:bg-gray-50/50 ${highlighted === s.sn ? "bg-emerald-100" : ""}`}
+                  onClick={inlineDates ? undefined : () => setExpandedSn(expanded ? null : s.sn)}
+                  className={`border-b border-gray-50 last:border-0 transition-colors duration-700 hover:bg-gray-50/50 ${inlineDates ? "" : "cursor-pointer"} ${highlighted === s.sn ? "bg-emerald-100" : ""}`}
                 >
                   <td className="px-5 py-3 font-medium text-gray-800">
                     <span className="flex items-center gap-1.5">
-                      {expanded ? <ChevronDown size={14} className="text-gray-400" /> : <ChevronRight size={14} className="text-gray-400" />}
+                      {!inlineDates && (expanded ? <ChevronDown size={14} className="text-gray-400" /> : <ChevronRight size={14} className="text-gray-400" />)}
                       {s.sn}
                     </span>
                   </td>
                   {withMaterialColumn && <td className="px-5 py-3 text-gray-600">{s.material}</td>}
                   <td className="px-5 py-3"><StatusBadge status={s.status} /></td>
                   <td className="px-5 py-3 text-gray-500 text-xs">{s.current_ref ? describeRef(s.current_ref, deliveries) : (s.received_ref || "-")}</td>
+                  {inlineDates && (
+                    <>
+                      <td className="px-5 py-3 text-gray-600 text-xs whitespace-nowrap">{val(s.received_date)}</td>
+                      <td className="px-5 py-3 text-gray-600 text-xs whitespace-nowrap">
+                        {val(s.installed_date)}
+                        {s.install_site && <div className="text-[11px] text-emerald-700">{s.install_site}</div>}
+                      </td>
+                      <td className="px-5 py-3 text-gray-600 text-xs whitespace-nowrap">{val(s.replacement_date)}</td>
+                      <td className="px-5 py-3 text-gray-600 text-xs whitespace-nowrap">{val(s.shipped_to_warehouse_date)}</td>
+                      <td className="px-5 py-3 text-gray-600 text-xs whitespace-nowrap">{val(s.returned_to_customer_date)}</td>
+                    </>
+                  )}
                   {canManage && (
                     <td className="px-5 py-3" onClick={(e) => e.stopPropagation()}>
                       {s.status === "Faulty" && (
@@ -3278,6 +3293,7 @@ function DivisionDatabasePage({ customer, api, deliveries, role, showToast, mate
       customer={customer}
       title={`Database — ${customer}`}
       subtitle={`Seluruh unit dengan Serial Number milik divisi ${customer}`}
+      inlineDates
       onBack={onBack}
     />
   );
