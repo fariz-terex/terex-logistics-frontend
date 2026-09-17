@@ -191,6 +191,8 @@ const NAV_ACCESS = {
   movement: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV, ROLES.DIVISION_MANAGER],
   stockTransfer: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.DIVISION_MANAGER],
   clusterTransfer: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV, ROLES.DIVISION_MANAGER],
+  returnToCustomer: [ROLES.MANAGER, ROLES.LOGISTICS],
+  database: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV, ROLES.TECH, ROLES.DIVISION_MANAGER],
   receipts: [ROLES.MANAGER, ROLES.LOGISTICS],
   reports: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.DIVISION_MANAGER],
   reportsDeviceLocation: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV, ROLES.DIVISION_MANAGER],
@@ -453,6 +455,7 @@ const NAV_TREE = [
       { key: "delivery", label: "Delivery", groupWith: ["returnFaulty", "stockTransfer"] },
       { key: "materialSwap", label: "Replacement" },
       { key: "clusterTransfer", label: "Transfer Antar Cluster" },
+      { key: "returnToCustomer", label: "Pengembalian ke Customer" },
       { key: "reconciliation", label: "Reconciliation" },
       // Return Material Faulty & Transfer Stock no longer get their own
       // sidebar row — reachable as tabs from Delivery Request's list page
@@ -473,6 +476,15 @@ const NAV_TREE = [
       { key: "movement", label: "Stock Movement", hidden: true },
       { key: "toolStock", label: "Stock Alat" },
       { key: "consumableStock", label: "Stock Consumable" },
+    ],
+  },
+  {
+    key: "databaseGroup", label: "Database", icon: Boxes,
+    children: [
+      { key: "databaseMSG", label: "MSG" },
+      { key: "databaseRGR", label: "RGR" },
+      { key: "databasePIM", label: "PIM" },
+      { key: "databaseTeleglobal", label: "Teleglobal" },
     ],
   },
   {
@@ -510,9 +522,19 @@ function hasAccess(key, role, userCustomers = []) {
     if (role === ROLES.MANAGER) return true;
     return (userCustomers || []).includes("PIM");
   }
+  // Database sub-pages: one per division (databaseMSG, databaseRGR,
+  // databasePIM, databaseTeleglobal) — Manager sees all, everyone else
+  // only the division(s) they're actually assigned to. Checked before the
+  // role-only `map` below since this also depends on division membership.
+  if (key.startsWith("database") && key !== "databaseGroup") {
+    if (!NAV_ACCESS.database.includes(role)) return false;
+    if (role === ROLES.MANAGER) return true;
+    const division = key.slice("database".length);
+    return (userCustomers || []).includes(division);
+  }
   const map = {
     delivery: NAV_ACCESS.delivery, returnFaulty: NAV_ACCESS.returnFaulty, reconciliation: NAV_ACCESS.reconciliation,
-    materialSwap: NAV_ACCESS.materialSwap,
+    materialSwap: NAV_ACCESS.materialSwap, returnToCustomer: NAV_ACCESS.returnToCustomer,
     stock: NAV_ACCESS.stock, movement: NAV_ACCESS.movement,
     toolStock: NAV_ACCESS.toolStock, stockTransfer: NAV_ACCESS.stockTransfer, consumableStock: NAV_ACCESS.consumableStock,
     reports: NAV_ACCESS.reports, reportsFaulty: NAV_ACCESS.reports, reportsRecon: NAV_ACCESS.reports, reportsDeviceLocation: NAV_ACCESS.reportsDeviceLocation,
@@ -525,7 +547,7 @@ function hasAccess(key, role, userCustomers = []) {
 }
 
 function Sidebar({ page, setPage, role, userName, userCustomers, mobileOpen, onClose }) {
-  const [open, setOpen] = useState({ material: true, inventory: false, reportsGroup: false, masterGroup: false });
+  const [open, setOpen] = useState({ material: true, inventory: false, databaseGroup: false, reportsGroup: false, masterGroup: false });
 
   const toggle = (key) => setOpen((o) => ({ ...o, [key]: !o[key] }));
   const navigate = (key) => { setPage(key); onClose?.(); };
@@ -2605,7 +2627,7 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
   );
 }
 
-function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMaterial, onSubmitReceipt, showToast, clearSerialHighlight, currentUser, customers, role, api }) {
+function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMaterial, setSerialCustomer, onSubmitReceipt, showToast, clearSerialHighlight, currentUser, customers, role, api }) {
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("All");
   const [lowOnly, setLowOnly] = useState(false);
@@ -2679,6 +2701,14 @@ function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMateri
     : role === ROLES.MANAGER
       ? materials
       : loadingScoped ? [] : (scopedMaterials || materials);
+
+  // Which division to pre-filter "Lihat Detail" by: whatever division this
+  // table is already showing. A drilled-down Manager view or a scoped user
+  // pinned to exactly one division both have an unambiguous answer; an
+  // unscoped Manager with no drill-down, or a user covering several
+  // divisions at once, has none — leave it blank rather than guess, and
+  // the detail page's own division picker/filter takes it from there.
+  const effectiveSerialCustomer = divisionFilter || (role !== ROLES.MANAGER && currentUser?.customers?.length === 1 ? currentUser.customers[0] : "");
 
   const rows = displayMaterials.map((m) => ({
     ...m,
@@ -2777,7 +2807,7 @@ function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMateri
                   <td className="px-5 py-3 font-medium text-gray-800">{total}</td>
                   <td className="px-5 py-3">
                     <div className="flex items-center gap-3">
-                      {m.serialized && <button onClick={() => { setSerialMaterial(m.name); clearSerialHighlight?.(); setPage("serialDetail"); }} className="text-emerald-800 text-xs font-medium">Lihat SN</button>}
+                      {m.serialized && <button onClick={() => { setSerialMaterial(m.name); setSerialCustomer(effectiveSerialCustomer); clearSerialHighlight?.(); setPage("serialDetail"); }} className="text-emerald-800 text-xs font-medium">Lihat Detail</button>}
                       {/* "Riwayat" (Stock Movement) hidden while that feature is WIP — see NAV_TREE hidden flags */}
                     </div>
                   </td>
@@ -2868,8 +2898,25 @@ function SerialDateTimeline({ serial }) {
   );
 }
 
-function MaterialSerialDetail({ material, api, onBack, highlightSerial, highlightToken, deliveries, role, showToast }) {
+// Browses serial_numbers scoped by material and/or division ("customer").
+// Three entry points share this one component instead of near-duplicate
+// pages:
+//   - Warehouse Stock's "Lihat Detail" -> one material, customer pre-filled
+//     from whatever division context that row was viewed under (still
+//     editable — arriving pre-filtered isn't the same as being locked in).
+//   - The "Database" menu (one page per division: MSG/RGR/PIM/Teleglobal)
+//     -> customer fixed (no picker, it's the page identity), material
+//     defaults to "All" with a dropdown to narrow down.
+//   - "Pengembalian ke Customer" -> customer fixed to the current user's
+//     own division (or pickable for Manager/multi-division users), status
+//     defaults to the Faulty/Sent-to-Customer pair this flow is about.
+// `material`/`customer` are just the INITIAL filter values — both stay
+// live React state the user can change from here, so "locked" only means
+// "that's where you start," never "that's the only thing you can see."
+function MaterialSerialDetail({ material, customer, customerOptions, materials, api, onBack, highlightSerial, highlightToken, deliveries, role, showToast, title, subtitle, statusOptions: statusOptionsProp, showMaterialColumn }) {
   const [status, setStatus] = useState("All");
+  const [materialFilter, setMaterialFilter] = useState(material || "");
+  const [customerFilter, setCustomerFilter] = useState(customer || (customerOptions && customerOptions[0]) || "");
   const [serials, setSerials] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -2883,12 +2930,12 @@ function MaterialSerialDetail({ material, api, onBack, highlightSerial, highligh
 
   const reload = () => {
     setLoading(true);
-    api.getSerials(material, status === "All" ? undefined : status)
+    api.getSerials(materialFilter || undefined, status === "All" ? undefined : status, customerFilter || undefined)
       .then((data) => setSerials(data))
       .catch(() => {})
       .finally(() => setLoading(false));
   };
-  React.useEffect(reload, [material, status]); // eslint-disable-line react-hooks/exhaustive-deps
+  React.useEffect(reload, [materialFilter, customerFilter, status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Re-sync from the prop on every new search selection — not just on first
   // mount. Without this, clicking a second SN result while already on this
@@ -2909,7 +2956,9 @@ function MaterialSerialDetail({ material, api, onBack, highlightSerial, highligh
   }, [loading, highlighted]);
 
   const filtered = search ? serials.filter((s) => s.sn.toLowerCase().includes(search.toLowerCase())) : serials;
-  const statusOptions = ["All", "Ready", "Reserved", "In Transit", "Delivered", "Installed", "Faulty", "Sent to Customer"];
+  const statusOptions = statusOptionsProp || ["All", "Ready", "Reserved", "In Transit", "Delivered", "Installed", "Faulty", "Sent to Customer"];
+  const withMaterialColumn = showMaterialColumn ?? !materialFilter;
+  const colCount = 3 + (withMaterialColumn ? 1 : 0) + (canManage ? 1 : 0);
 
   const submitDialog = async ({ ref, note }) => {
     setSaving(true); setDialogError("");
@@ -2928,8 +2977,31 @@ function MaterialSerialDetail({ material, api, onBack, highlightSerial, highligh
 
   return (
     <div className="p-4 sm:p-8 space-y-5">
-      <button onClick={onBack} className="text-sm text-gray-500 flex items-center gap-1 hover:text-gray-800"><ChevronLeft size={16} /> Kembali ke Warehouse Stock</button>
-      <SectionTitle title={`Serial Number — ${material}`} subtitle="Daftar unit per Serial Number dan status terkininya" />
+      <button onClick={onBack} className="text-sm text-gray-500 flex items-center gap-1 hover:text-gray-800"><ChevronLeft size={16} /> Kembali</button>
+      <SectionTitle
+        title={title || (materialFilter ? `Serial Number — ${materialFilter}` : `Serial Number — ${customerFilter || "Semua Divisi"}`)}
+        subtitle={subtitle || "Daftar unit per Serial Number dan status terkininya"}
+      />
+
+      <div className="flex flex-wrap gap-3 items-end">
+        {customerOptions && customerOptions.length > 0 && (
+          <div>
+            <label className="text-xs font-medium text-gray-500">Divisi</label>
+            <select value={customerFilter} onChange={(e) => setCustomerFilter(e.target.value)} className="mt-1 block border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600 bg-white">
+              {customerOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+        )}
+        {materials && (
+          <div>
+            <label className="text-xs font-medium text-gray-500">Material</label>
+            <select value={materialFilter} onChange={(e) => setMaterialFilter(e.target.value)} className="mt-1 block border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600 bg-white min-w-[12rem]">
+              <option value="">Semua Material</option>
+              {materials.filter((m) => m.status === "Active").map((m) => <option key={m.id} value={m.name}>{m.name}</option>)}
+            </select>
+          </div>
+        )}
+      </div>
 
       <div className="flex flex-wrap gap-2">
         {statusOptions.map((s) => (
@@ -2950,6 +3022,7 @@ function MaterialSerialDetail({ material, api, onBack, highlightSerial, highligh
           <thead>
             <tr className="text-left text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
               <th className="px-5 py-3 font-medium">Serial Number</th>
+              {withMaterialColumn && <th className="px-5 py-3 font-medium">Material</th>}
               <th className="px-5 py-3 font-medium">Status</th>
               <th className="px-5 py-3 font-medium">Referensi</th>
               {canManage && <th className="px-5 py-3 font-medium"></th>}
@@ -2957,9 +3030,9 @@ function MaterialSerialDetail({ material, api, onBack, highlightSerial, highligh
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={4}><div className="py-10 text-center text-sm text-gray-400">Memuat...</div></td></tr>
+              <tr><td colSpan={colCount}><div className="py-10 text-center text-sm text-gray-400">Memuat...</div></td></tr>
             ) : filtered.length === 0 ? (
-              <tr><td colSpan={4}><EmptyState text="Tidak ada Serial Number untuk filter ini." /></td></tr>
+              <tr><td colSpan={colCount}><EmptyState text="Tidak ada Serial Number untuk filter ini." /></td></tr>
             ) : (
               filtered.map((s) => {
                 const expanded = expandedSn === s.sn;
@@ -2976,6 +3049,7 @@ function MaterialSerialDetail({ material, api, onBack, highlightSerial, highligh
                       {s.sn}
                     </span>
                   </td>
+                  {withMaterialColumn && <td className="px-5 py-3 text-gray-600">{s.material}</td>}
                   <td className="px-5 py-3"><StatusBadge status={s.status} /></td>
                   <td className="px-5 py-3 text-gray-500 text-xs">{s.current_ref ? describeRef(s.current_ref, deliveries) : (s.received_ref || "-")}</td>
                   {canManage && (
@@ -2991,7 +3065,7 @@ function MaterialSerialDetail({ material, api, onBack, highlightSerial, highligh
                 </tr>
                 {expanded && (
                   <tr className="bg-gray-50/60 border-b border-gray-50 last:border-0">
-                    <td colSpan={canManage ? 4 : 3} className="px-5 py-4">
+                    <td colSpan={colCount} className="px-5 py-4">
                       <SerialDateTimeline serial={s} />
                     </td>
                   </tr>
@@ -3015,6 +3089,48 @@ function MaterialSerialDetail({ material, api, onBack, highlightSerial, highligh
         error={dialogError}
       />
     </div>
+  );
+}
+
+// Dedicated menu for the real "return to customer" cycle (a Faulty unit
+// gets sent to the customer/division to be repaired, then received back as
+// Ready) — distinct from Return Material Faulty, which is a technician
+// returning a broken unit from a site into the TEREX warehouse and has
+// nothing to do with any customer. Both existing route handlers/business
+// logic (sendToCustomer/receiveFromCustomer) already existed — this is a
+// focused entry point onto them (status narrowed to just the two that
+// matter here) instead of hunting through a full per-material SN list.
+function ReturnToCustomerPage({ api, deliveries, role, showToast, currentUser, customers, materials, onBack }) {
+  const isManager = role === ROLES.MANAGER;
+  const myDivisions = currentUser?.customers || [];
+  const needsDivisionPicker = isManager || myDivisions.length > 1;
+  const divisionOptions = isManager ? customers.filter((c) => c.status === "Active").map((c) => c.name) : myDivisions;
+
+  return (
+    <MaterialSerialDetail
+      api={api} deliveries={deliveries} role={role} showToast={showToast} materials={materials}
+      customer={!needsDivisionPicker ? (myDivisions[0] || "") : undefined}
+      customerOptions={needsDivisionPicker ? divisionOptions : undefined}
+      statusOptions={["All", "Faulty", "Sent to Customer"]}
+      title="Pengembalian Material ke Customer"
+      subtitle="Kirim unit Faulty ke customer untuk diperbaiki, lalu terima kembali setelah selesai"
+      onBack={onBack}
+    />
+  );
+}
+
+// "Database" menu — one page per division (MSG/RGR/PIM/Teleglobal), each a
+// full serial-number browser fixed to that division with every material
+// shown by default (no picker — the division is the page itself).
+function DivisionDatabasePage({ customer, api, deliveries, role, showToast, materials, onBack }) {
+  return (
+    <MaterialSerialDetail
+      api={api} deliveries={deliveries} role={role} showToast={showToast} materials={materials}
+      customer={customer}
+      title={`Database — ${customer}`}
+      subtitle={`Seluruh unit dengan Serial Number milik divisi ${customer}`}
+      onBack={onBack}
+    />
   );
 }
 
@@ -6298,6 +6414,15 @@ function MasterCrudTable({ title, subtitle, entityLabel, fields, items, idField 
     if (requiredMissing) return;
     setSaving(true); setError("");
     try {
+      // select-create fields: a typed value that isn't one of the known
+      // options gets created first (e.g. a new Area typed straight into
+      // Master Homebase's Area field) so the main onCreate/onUpdate below
+      // never hits a "not found in master" rejection from the backend.
+      for (const f of fields) {
+        if (f.type !== "select-create") continue;
+        const val = (form[f.key] || "").trim();
+        if (val && !f.options.includes(val)) await f.onCreateOption(val);
+      }
       if (editingId) {
         await onUpdate(editingId, form);
         showToast(`${label} berhasil diperbarui`);
@@ -6384,6 +6509,22 @@ function MasterCrudTable({ title, subtitle, entityLabel, fields, items, idField 
                     <option value="">Pilih...</option>
                     {f.options.map((o) => <option key={o} value={o}>{o}</option>)}
                   </select>
+                ) : f.type === "select-create" ? (
+                  <>
+                    <input
+                      list={`${f.key}-datalist`}
+                      value={form[f.key]}
+                      onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
+                      placeholder={f.placeholder || `Pilih yang sudah ada, atau ketik nama baru...`}
+                      className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600"
+                    />
+                    <datalist id={`${f.key}-datalist`}>
+                      {f.options.map((o) => <option key={o} value={o} />)}
+                    </datalist>
+                    {form[f.key]?.trim() && !f.options.includes(form[f.key].trim()) && (
+                      <div className="text-xs text-emerald-700 mt-1">+ akan dibuat baru: "{form[f.key].trim()}"</div>
+                    )}
+                  </>
                 ) : f.type === "multiselect" ? (
                   <div className="mt-1 border border-gray-200 rounded-lg p-2.5 max-h-40 overflow-y-auto space-y-1.5">
                     {f.options.length === 0 ? (
@@ -7610,6 +7751,7 @@ export default function App() {
   const [selectedRecon, setSelectedRecon] = useState(null);
   const [movementFilter, setMovementFilter] = useState("");
   const [serialMaterial, setSerialMaterial] = useState("");
+  const [serialCustomer, setSerialCustomer] = useState("");
   const [highlightSerial, setHighlightSerial] = useState("");
   const [highlightToken, setHighlightToken] = useState(0);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -7960,7 +8102,7 @@ export default function App() {
             onSelect = () => gotoDetail("returnFaulty", "return", r.current_ref);
           } else {
             sub = `${r.material} · ${r.status} · di Warehouse`;
-            onSelect = () => { setSerialMaterial(r.material); setHighlightSerial(r.sn); setHighlightToken((t) => t + 1); goto("serialDetail"); };
+            onSelect = () => { setSerialMaterial(r.material); setSerialCustomer(""); setHighlightSerial(r.sn); setHighlightToken((t) => t + 1); goto("serialDetail"); };
           }
           return { type: "Serial Number", icon: Package, label: r.sn, sub, onSelect };
         }));
@@ -8453,6 +8595,8 @@ export default function App() {
     stockTransfer: ["Transfer Stock", "Pindahkan stock antar homebase"],
     consumableStock: ["Stock Consumable", ""],
     serialDetail: ["Warehouse Stock", "Detail Serial Number"],
+    returnToCustomer: ["Pengembalian ke Customer", ""],
+    databaseMSG: ["Database — MSG", ""], databaseRGR: ["Database — RGR", ""], databasePIM: ["Database — PIM", ""], databaseTeleglobal: ["Database — Teleglobal", ""],
     reports: ["Reports", ""], reportsFaulty: ["Reports", ""], reportsRecon: ["Reports", ""],
     masterMaterial: ["Master Data", ""], masterSite: ["Master Data", ""], masterHomebase: ["Master Data", ""], masterArea: ["Master Data", ""], masterCustomer: ["Master Data", ""], masterConsumable: ["Master Data", ""],
     users: ["User Management", ""], settings: ["Settings", ""],
@@ -8536,9 +8680,14 @@ export default function App() {
       ? <MaterialSwapDetail swap={s} onBack={() => setSelectedSwap(null)} setPage={goto} setReturnPrefill={setReturnPrefill} />
       : <MaterialSwapPage swaps={materialSwaps} api={api} materials={materials} sites={sites} homebases={homebases} onSubmit={submitMaterialSwap} showToast={showToast} setPage={goto} setReturnPrefill={setReturnPrefill} setSelectedSwap={setSelectedSwap} role={role} />;
   }
-  else if (page === "stock") content = <WarehouseStock materials={materials} setPage={goto} setMovementFilter={setMovementFilter} setSerialMaterial={setSerialMaterial} onSubmitReceipt={createReceipt} showToast={showToast} clearSerialHighlight={() => setHighlightSerial("")} currentUser={currentUser} customers={customers} role={role} api={api} />;
+  else if (page === "stock") content = <WarehouseStock materials={materials} setPage={goto} setMovementFilter={setMovementFilter} setSerialMaterial={setSerialMaterial} setSerialCustomer={setSerialCustomer} onSubmitReceipt={createReceipt} showToast={showToast} clearSerialHighlight={() => setHighlightSerial("")} currentUser={currentUser} customers={customers} role={role} api={api} />;
+  else if (page === "returnToCustomer") content = <ReturnToCustomerPage api={api} deliveries={deliveries} role={role} showToast={showToast} currentUser={currentUser} customers={customers} materials={materials} onBack={() => goto("delivery")} />;
+  else if (page === "databaseMSG") content = <DivisionDatabasePage customer="MSG" api={api} deliveries={deliveries} role={role} showToast={showToast} materials={materials} onBack={() => goto("dashboard")} />;
+  else if (page === "databaseRGR") content = <DivisionDatabasePage customer="RGR" api={api} deliveries={deliveries} role={role} showToast={showToast} materials={materials} onBack={() => goto("dashboard")} />;
+  else if (page === "databasePIM") content = <DivisionDatabasePage customer="PIM" api={api} deliveries={deliveries} role={role} showToast={showToast} materials={materials} onBack={() => goto("dashboard")} />;
+  else if (page === "databaseTeleglobal") content = <DivisionDatabasePage customer="Teleglobal" api={api} deliveries={deliveries} role={role} showToast={showToast} materials={materials} onBack={() => goto("dashboard")} />;
   else if (page === "movement") content = <StockMovement movements={movements} filter={movementFilter} setFilter={setMovementFilter} deliveries={deliveries} />;
-  else if (page === "serialDetail") content = <MaterialSerialDetail material={serialMaterial} api={api} onBack={() => goto("stock")} highlightSerial={highlightSerial} highlightToken={highlightToken} deliveries={deliveries} role={role} showToast={showToast} />;
+  else if (page === "serialDetail") content = <MaterialSerialDetail material={serialMaterial} customer={serialCustomer || undefined} materials={materials} api={api} onBack={() => goto("stock")} highlightSerial={highlightSerial} highlightToken={highlightToken} deliveries={deliveries} role={role} showToast={showToast} />;
   else if (page === "toolStock") content = <ToolStockPage tools={tools} setPage={goto} setToolSerialName={setToolSerialName} onSubmitReceipt={createToolReceipt} showToast={showToast} role={role} />;
   else if (page === "consumableStock") content = <ConsumableStockPage consumables={consumables} onSubmitReceipt={createConsumableReceipt} showToast={showToast} role={role} />;
   else if (page === "stockTransfer") content = <TransferStockPage materials={materials} homebases={homebases} customers={customers} currentUser={currentUser} role={role} api={api} showToast={showToast} setPage={goto} page={page} userCustomers={currentUser?.customers} />;
@@ -8618,7 +8767,7 @@ export default function App() {
     onCreate={createHomebase} onToggle={toggleHomebase} onDelete={deleteHomebaseFromServer} onBulkDelete={bulkDeleteHomebasesFromServer}
     fields={[
       { key: "name", label: "Nama Homebase", required: true },
-      { key: "area", label: "Area", type: "select", options: areas.filter((a) => a.status === "Active").map((a) => a.name), required: true },
+      { key: "area", label: "Area", type: "select-create", options: areas.filter((a) => a.status === "Active").map((a) => a.name), onCreateOption: (name) => createArea({ name }), required: true },
       { key: "address", label: "Alamat", fullWidth: true },
       { key: "pic", label: "PIC" },
       { key: "phone", label: "Phone" },
