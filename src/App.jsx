@@ -2878,18 +2878,32 @@ function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMateri
                   <td className="px-5 py-3 font-medium text-gray-800">{total}</td>
                   <td className="px-5 py-3">
                     <div className="flex items-center gap-3">
-                      {m.serialized && <button onClick={() => {
+                      {m.serialized && <button onClick={async () => {
                         clearSerialHighlight?.();
-                        if (DATABASE_DIVISIONS.has(effectiveSerialCustomer)) {
-                          // Unambiguous division — go straight into that
-                          // division's Database page, pre-filtered to this
-                          // material.
-                          setPage(`database${effectiveSerialCustomer}`);
+                        let target = effectiveSerialCustomer;
+                        if (!DATABASE_DIVISIONS.has(target)) {
+                          // No division context from the table itself
+                          // (unscoped Manager with no drill-down, or a
+                          // multi-division user) — look up which division(s)
+                          // actually hold this material and route to the one
+                          // with the most units, so "Lihat Detail" still
+                          // lands in the Database menu instead of the old
+                          // generic page.
+                          try {
+                            const rows = await api.getSerials(m.name);
+                            const counts = {};
+                            rows.forEach((r) => { if (r.customer) counts[r.customer] = (counts[r.customer] || 0) + 1; });
+                            const best = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0];
+                            if (best && DATABASE_DIVISIONS.has(best)) target = best;
+                          } catch { /* fall through to generic page below */ }
+                        }
+                        if (DATABASE_DIVISIONS.has(target)) {
+                          setPage(`database${target}`);
                           setDbMaterialFilter(m.name);
                         } else {
-                          // No single division to route to (unscoped Manager
-                          // with no drill-down, or a multi-division user) —
-                          // fall back to the generic cross-division view.
+                          // Still nothing to route to (e.g. no serial rows
+                          // found at all) — fall back to the generic
+                          // cross-division view.
                           setSerialMaterial(m.name);
                           setSerialCustomer(effectiveSerialCustomer);
                           setPage("serialDetail");
