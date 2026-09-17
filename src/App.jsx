@@ -2693,7 +2693,12 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
   );
 }
 
-function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMaterial, setSerialCustomer, onSubmitReceipt, showToast, clearSerialHighlight, currentUser, customers, role, api }) {
+// Divisions with their own "Database" sub-page (matches NAV_TREE's
+// databaseGroup children) — "Lihat Detail" routes straight there when the
+// division is unambiguous, instead of the generic Serial Number page.
+const DATABASE_DIVISIONS = new Set(["MSG", "RGR", "PIM", "Teleglobal"]);
+
+function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMaterial, setSerialCustomer, setDbMaterialFilter, onSubmitReceipt, showToast, clearSerialHighlight, currentUser, customers, role, api }) {
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("All");
   const [lowOnly, setLowOnly] = useState(false);
@@ -2873,7 +2878,23 @@ function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMateri
                   <td className="px-5 py-3 font-medium text-gray-800">{total}</td>
                   <td className="px-5 py-3">
                     <div className="flex items-center gap-3">
-                      {m.serialized && <button onClick={() => { setSerialMaterial(m.name); setSerialCustomer(effectiveSerialCustomer); clearSerialHighlight?.(); setPage("serialDetail"); }} className="text-emerald-800 text-xs font-medium">Lihat Detail</button>}
+                      {m.serialized && <button onClick={() => {
+                        clearSerialHighlight?.();
+                        if (DATABASE_DIVISIONS.has(effectiveSerialCustomer)) {
+                          // Unambiguous division — go straight into that
+                          // division's Database page, pre-filtered to this
+                          // material.
+                          setPage(`database${effectiveSerialCustomer}`);
+                          setDbMaterialFilter(m.name);
+                        } else {
+                          // No single division to route to (unscoped Manager
+                          // with no drill-down, or a multi-division user) —
+                          // fall back to the generic cross-division view.
+                          setSerialMaterial(m.name);
+                          setSerialCustomer(effectiveSerialCustomer);
+                          setPage("serialDetail");
+                        }
+                      }} className="text-emerald-800 text-xs font-medium">Lihat Detail</button>}
                       {/* "Riwayat" (Stock Movement) hidden while that feature is WIP — see NAV_TREE hidden flags */}
                     </div>
                   </td>
@@ -3286,11 +3307,18 @@ function ReturnToCustomerPage({ api, showToast, currentUser, customers, onBack }
 // "Database" menu — one page per division (MSG/RGR/PIM/Teleglobal), each a
 // full serial-number browser fixed to that division with every material
 // shown by default (no picker — the division is the page itself).
-function DivisionDatabasePage({ customer, api, deliveries, role, showToast, materials, onBack }) {
+function DivisionDatabasePage({ customer, material, api, deliveries, role, showToast, materials, onBack }) {
   return (
     <MaterialSerialDetail
+      // Forces a fresh mount whenever the division or the incoming material
+      // pre-filter changes (e.g. jumping here via "Lihat Detail" for a
+      // different material) — otherwise MaterialSerialDetail's internal
+      // filter state, seeded once via useState, would keep showing the
+      // previous visit's filter.
+      key={`${customer}|${material || ""}`}
       api={api} deliveries={deliveries} role={role} showToast={showToast} materials={materials}
       customer={customer}
+      material={material}
       title={`Database — ${customer}`}
       subtitle={`Seluruh unit dengan Serial Number milik divisi ${customer}`}
       inlineDates
@@ -7917,6 +7945,7 @@ export default function App() {
   const [movementFilter, setMovementFilter] = useState("");
   const [serialMaterial, setSerialMaterial] = useState("");
   const [serialCustomer, setSerialCustomer] = useState("");
+  const [dbMaterialFilter, setDbMaterialFilter] = useState("");
   const [highlightSerial, setHighlightSerial] = useState("");
   const [highlightToken, setHighlightToken] = useState(0);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -8163,6 +8192,12 @@ export default function App() {
     setPage(p);
     setSelectedDelivery(null); setSelectedReturn(null); setSelectedRecon(null); setSelectedSwap(null);
     if (p !== "returnFaultyCreate") setReturnPrefill(null); // only meant for the one navigation right after a swap
+    // Cleared on every navigation; "Lihat Detail" (Warehouse Stock) sets it
+    // right after calling goto(), so within the same handler its value wins
+    // over this clear (React batches same-state updates in one handler) —
+    // otherwise a stale filter from a prior "Lihat Detail" click would leak
+    // into a direct sidebar visit to a Database page.
+    setDbMaterialFilter("");
   };
 
   /* Navigates directly to a specific record's detail view — clears the other
@@ -8845,12 +8880,12 @@ export default function App() {
       ? <MaterialSwapDetail swap={s} onBack={() => setSelectedSwap(null)} setPage={goto} setReturnPrefill={setReturnPrefill} />
       : <MaterialSwapPage swaps={materialSwaps} api={api} materials={materials} sites={sites} homebases={homebases} onSubmit={submitMaterialSwap} showToast={showToast} setPage={goto} setReturnPrefill={setReturnPrefill} setSelectedSwap={setSelectedSwap} role={role} />;
   }
-  else if (page === "stock") content = <WarehouseStock materials={materials} setPage={goto} setMovementFilter={setMovementFilter} setSerialMaterial={setSerialMaterial} setSerialCustomer={setSerialCustomer} onSubmitReceipt={createReceipt} showToast={showToast} clearSerialHighlight={() => setHighlightSerial("")} currentUser={currentUser} customers={customers} role={role} api={api} />;
+  else if (page === "stock") content = <WarehouseStock materials={materials} setPage={goto} setMovementFilter={setMovementFilter} setSerialMaterial={setSerialMaterial} setSerialCustomer={setSerialCustomer} setDbMaterialFilter={setDbMaterialFilter} onSubmitReceipt={createReceipt} showToast={showToast} clearSerialHighlight={() => setHighlightSerial("")} currentUser={currentUser} customers={customers} role={role} api={api} />;
   else if (page === "returnToCustomer") content = <ReturnToCustomerPage api={api} showToast={showToast} currentUser={currentUser} customers={customers} onBack={() => goto("delivery")} />;
-  else if (page === "databaseMSG") content = <DivisionDatabasePage customer="MSG" api={api} deliveries={deliveries} role={role} showToast={showToast} materials={materials} onBack={() => goto("dashboard")} />;
-  else if (page === "databaseRGR") content = <DivisionDatabasePage customer="RGR" api={api} deliveries={deliveries} role={role} showToast={showToast} materials={materials} onBack={() => goto("dashboard")} />;
-  else if (page === "databasePIM") content = <DivisionDatabasePage customer="PIM" api={api} deliveries={deliveries} role={role} showToast={showToast} materials={materials} onBack={() => goto("dashboard")} />;
-  else if (page === "databaseTeleglobal") content = <DivisionDatabasePage customer="Teleglobal" api={api} deliveries={deliveries} role={role} showToast={showToast} materials={materials} onBack={() => goto("dashboard")} />;
+  else if (page === "databaseMSG") content = <DivisionDatabasePage customer="MSG" material={dbMaterialFilter} api={api} deliveries={deliveries} role={role} showToast={showToast} materials={materials} onBack={() => goto("dashboard")} />;
+  else if (page === "databaseRGR") content = <DivisionDatabasePage customer="RGR" material={dbMaterialFilter} api={api} deliveries={deliveries} role={role} showToast={showToast} materials={materials} onBack={() => goto("dashboard")} />;
+  else if (page === "databasePIM") content = <DivisionDatabasePage customer="PIM" material={dbMaterialFilter} api={api} deliveries={deliveries} role={role} showToast={showToast} materials={materials} onBack={() => goto("dashboard")} />;
+  else if (page === "databaseTeleglobal") content = <DivisionDatabasePage customer="Teleglobal" material={dbMaterialFilter} api={api} deliveries={deliveries} role={role} showToast={showToast} materials={materials} onBack={() => goto("dashboard")} />;
   else if (page === "movement") content = <StockMovement movements={movements} filter={movementFilter} setFilter={setMovementFilter} deliveries={deliveries} />;
   else if (page === "serialDetail") content = <MaterialSerialDetail material={serialMaterial} customer={serialCustomer || undefined} materials={materials} api={api} onBack={() => goto("stock")} highlightSerial={highlightSerial} highlightToken={highlightToken} deliveries={deliveries} role={role} showToast={showToast} />;
   else if (page === "toolStock") content = <ToolStockPage tools={tools} setPage={goto} setToolSerialName={setToolSerialName} onSubmitReceipt={createToolReceipt} showToast={showToast} role={role} />;
