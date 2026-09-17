@@ -6741,6 +6741,8 @@ function createApiClient(baseUrl, getToken) {
     getStockConsistency: () => request("/stock/consistency"),
     getPimImportPreview: () => request("/admin/pim-import/preview"),
     commitPimImport: () => request("/admin/pim-import/commit", { method: "POST" }),
+    getPimFaultyFixPreview: () => request("/admin/pim-import/fix-faulty/preview"),
+    commitPimFaultyFix: () => request("/admin/pim-import/fix-faulty/commit", { method: "POST" }),
     rebuildGlobalStock: (commit) => request("/stock/rebuild-global", { method: "POST", body: { commit: !!commit } }),
     rebuildSerialBuckets: (commit) => request("/stock/rebuild-serial-buckets", { method: "POST", body: { commit: !!commit } }),
     getMovements: (material) => request(`/stock/movements${material ? `?material=${encodeURIComponent(material)}` : ""}`),
@@ -7306,6 +7308,105 @@ function PimImportTool({ api, showToast }) {
         title="Jalankan Import PIM"
         message={preview ? `${preview.willInsert} unit baru akan ditambahkan ke sistem dan ${preview.materialsToCreate.length} Master Material baru akan dibuat. Tindakan ini mengubah data produksi. Lanjutkan?` : ""}
         confirmLabel={committing ? "Menjalankan..." : "Ya, Jalankan Import"}
+        danger
+        onConfirm={commit}
+        onCancel={() => setConfirmOpen(false)}
+      />
+    </Card>
+  );
+}
+
+// TEMP one-off tool — corrects a gap found after the PIM import above: a
+// "Replacement" row in the sheet carries two SNs (the new unit installed,
+// already imported as Installed, AND the old unit pulled out because it
+// was faulty — never imported at all). See routes/adminImportPim.js for
+// the full derivation. Remove alongside PimImportTool once confirmed done.
+function PimFaultyFixTool({ api, showToast }) {
+  const [preview, setPreview] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [committing, setCommitting] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [result, setResult] = useState(null);
+
+  const loadPreview = async () => {
+    setLoading(true);
+    try {
+      setPreview(await api.getPimFaultyFixPreview());
+    } catch (err) {
+      showToast(err.message || "Gagal memuat preview koreksi");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const commit = async () => {
+    setCommitting(true);
+    try {
+      const r = await api.commitPimFaultyFix();
+      setResult(r);
+      setPreview(null);
+      showToast(`Koreksi selesai — ${r.inserted} unit Faulty baru, ${r.updated} status diperbaiki`);
+    } catch (err) {
+      showToast(err.message || "Gagal menjalankan koreksi");
+    } finally {
+      setCommitting(false);
+      setConfirmOpen(false);
+    }
+  };
+
+  const List = ({ items, render }) => (
+    <div className="max-h-40 overflow-y-auto border border-gray-100 rounded-lg divide-y divide-gray-50">
+      {items.map((r, i) => <div key={i} className="px-3 py-1.5 text-xs text-gray-600">{render(r)}</div>)}
+    </div>
+  );
+
+  return (
+    <Card className="p-5 space-y-3 text-sm">
+      <div>
+        <div className="font-semibold text-gray-800">Koreksi Faulty PIM (unit dari Replacement)</div>
+        <div className="text-gray-500 text-xs mt-1">
+          Setiap baris "Replacement" di sheet punya 2 unit: yang baru terpasang (sudah masuk sebagai Installed) dan
+          yang lama/rusak dilepas (belum pernah diimport). Sebagian unit lama itu ternyata sudah diperbaiki dan
+          muncul lagi belakangan — jadi ini bukan sekadar tandai semua sebagai Faulty, tapi menelusuri kejadian
+          terakhir tiap unit dari tanggalnya. Preview selalu aman; hanya "Jalankan Koreksi" yang menulis data.
+        </div>
+      </div>
+
+      <GhostButton onClick={loadPreview} disabled={loading}>{loading ? "Memuat..." : "Muat Preview"}</GhostButton>
+
+      {preview && (
+        <div className="pt-2 border-t border-gray-50 space-y-3">
+          <div className="text-xs text-gray-700 space-y-1">
+            <div>Unit Faulty baru yang akan ditambahkan: <span className="font-semibold">{preview.willInsert}</span>
+              {preview.willSkipInsert > 0 && <span className="text-gray-400"> · {preview.willSkipInsert} dilewati (SN sudah ada)</span>}
+            </div>
+            <div>Status yang akan diperbaiki (Installed → Faulty): <span className="font-semibold">{preview.willUpdate}</span>
+              {preview.willSkipUpdate > 0 && <span className="text-gray-400"> · {preview.willSkipUpdate} dilewati (status sudah berubah sejak import pertama)</span>}
+            </div>
+          </div>
+
+          <div>
+            <div className="text-xs font-medium text-gray-700 mb-1">Unit Faulty baru per material</div>
+            <List items={Object.entries(preview.byMaterial)} render={([m, n]) => <>{m} — {n} unit</>} />
+          </div>
+
+          <GhostButton onClick={() => setConfirmOpen(true)} className="border-red-200 text-red-600 hover:bg-red-50">
+            Jalankan Koreksi
+          </GhostButton>
+        </div>
+      )}
+
+      {result && (
+        <div className="pt-2 border-t border-gray-50 text-xs text-emerald-700">
+          ✓ Selesai — {result.inserted} unit Faulty baru, {result.updated} status diperbaiki.
+        </div>
+      )}
+
+      <ConfirmDialog
+        open={confirmOpen}
+        title="Jalankan Koreksi Faulty PIM"
+        message={preview ? `${preview.willInsert} unit Faulty baru akan ditambahkan dan ${preview.willUpdate} unit akan diubah statusnya dari Installed ke Faulty. Tindakan ini mengubah data produksi. Lanjutkan?` : ""}
+        confirmLabel={committing ? "Menjalankan..." : "Ya, Jalankan Koreksi"}
         danger
         onConfirm={commit}
         onCancel={() => setConfirmOpen(false)}
@@ -8616,6 +8717,7 @@ export default function App() {
       {role === ROLES.MANAGER && <PhantomStockCleanup api={api} showToast={showToast} />}
       {role === ROLES.MANAGER && <StockConsistencyCheck api={api} showToast={showToast} />}
       {role === ROLES.MANAGER && <PimImportTool api={api} showToast={showToast} />}
+      {role === ROLES.MANAGER && <PimFaultyFixTool api={api} showToast={showToast} />}
       <AppVersionInfo api={api} />
     </div>
   );
