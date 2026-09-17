@@ -455,7 +455,7 @@ const NAV_TREE = [
       { key: "delivery", label: "Delivery", groupWith: ["returnFaulty", "stockTransfer"] },
       { key: "materialSwap", label: "Replacement" },
       { key: "clusterTransfer", label: "Transfer Antar Cluster" },
-      { key: "returnToCustomer", label: "Pengembalian ke Customer" },
+      { key: "returnToCustomer", label: "Return Material" },
       { key: "reconciliation", label: "Reconciliation" },
       // Return Material Faulty & Transfer Stock no longer get their own
       // sidebar row — reachable as tabs from Delivery Request's list page
@@ -3096,26 +3096,119 @@ function MaterialSerialDetail({ material, customer, customerOptions, materials, 
 // gets sent to the customer/division to be repaired, then received back as
 // Ready) — distinct from Return Material Faulty, which is a technician
 // returning a broken unit from a site into the TEREX warehouse and has
-// nothing to do with any customer. Both existing route handlers/business
+// nothing to do with any customer. The underlying route handlers/business
 // logic (sendToCustomer/receiveFromCustomer) already existed — this is a
-// focused entry point onto them (status narrowed to just the two that
-// matter here) instead of hunting through a full per-material SN list.
-function ReturnToCustomerPage({ api, deliveries, role, showToast, currentUser, customers, materials, onBack }) {
-  const isManager = role === ROLES.MANAGER;
+// form, not a browse-a-table page: pick the mode (Kirim/Terima), pick the
+// one unit it applies to from a short candidate list (Faulty units for
+// Kirim, Sent to Customer units for Terima — never the other way around,
+// so there's nothing to pick wrong), fill in the surat/BA number, submit.
+function ReturnToCustomerPage({ api, showToast, currentUser, customers, onBack }) {
+  const isManager = currentUser?.role === ROLES.MANAGER;
   const myDivisions = currentUser?.customers || [];
   const needsDivisionPicker = isManager || myDivisions.length > 1;
   const divisionOptions = isManager ? customers.filter((c) => c.status === "Active").map((c) => c.name) : myDivisions;
 
+  const [customer, setCustomer] = useState(!needsDivisionPicker ? (myDivisions[0] || "") : "");
+  const [mode, setMode] = useState("send"); // "send" | "receive"
+  const [candidates, setCandidates] = useState([]);
+  const [loadingCandidates, setLoadingCandidates] = useState(false);
+  const [sn, setSn] = useState("");
+  const [ref, setRef] = useState("");
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const effectiveCustomer = needsDivisionPicker ? customer : myDivisions[0];
+
+  const loadCandidates = () => {
+    setSn(""); setError("");
+    if (!effectiveCustomer) { setCandidates([]); return; }
+    setLoadingCandidates(true);
+    api.getSerials(undefined, mode === "send" ? "Faulty" : "Sent to Customer", effectiveCustomer)
+      .then(setCandidates)
+      .catch(() => setCandidates([]))
+      .finally(() => setLoadingCandidates(false));
+  };
+  React.useEffect(loadCandidates, [effectiveCustomer, mode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const selected = candidates.find((c) => c.sn === sn);
+  const valid = effectiveCustomer && sn && ref.trim();
+
+  const submit = async () => {
+    setSaving(true); setError("");
+    try {
+      if (mode === "send") await api.sendSerialToCustomer(sn, ref.trim(), note);
+      else await api.receiveSerialFromCustomer(sn, ref.trim(), note);
+      showToast(mode === "send" ? `${sn} dikirim ke customer` : `${sn} diterima kembali, status Ready`);
+      setRef(""); setNote("");
+      loadCandidates();
+    } catch (err) {
+      setError(err.message || "Gagal menyimpan");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
-    <MaterialSerialDetail
-      api={api} deliveries={deliveries} role={role} showToast={showToast} materials={materials}
-      customer={!needsDivisionPicker ? (myDivisions[0] || "") : undefined}
-      customerOptions={needsDivisionPicker ? divisionOptions : undefined}
-      statusOptions={["All", "Faulty", "Sent to Customer"]}
-      title="Pengembalian Material ke Customer"
-      subtitle="Kirim unit Faulty ke customer untuk diperbaiki, lalu terima kembali setelah selesai"
-      onBack={onBack}
-    />
+    <div className="p-4 sm:p-8 max-w-2xl mx-auto space-y-6">
+      <button onClick={onBack} className="text-sm text-gray-500 flex items-center gap-1 hover:text-gray-800"><ChevronLeft size={16} /> Kembali</button>
+      <SectionTitle title="Return Material" subtitle="Kirim unit Faulty ke customer untuk diperbaiki, lalu terima kembali setelah selesai" />
+
+      <Card className="p-5 space-y-4">
+        <div className="flex gap-2">
+          {[{ key: "send", label: "Kirim ke Customer" }, { key: "receive", label: "Terima Kembali" }].map((m) => (
+            <button key={m.key} onClick={() => setMode(m.key)} className={`px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${mode === m.key ? "bg-emerald-800 text-white border-emerald-800" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}>
+              {m.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {needsDivisionPicker ? (
+            <div>
+              <label className="text-sm font-medium text-gray-700">Divisi <span className="text-red-500">*</span></label>
+              <select value={customer} onChange={(e) => setCustomer(e.target.value)} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600">
+                <option value="">Pilih divisi...</option>
+                {divisionOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+          ) : (
+            <div>
+              <label className="text-sm font-medium text-gray-700">Divisi</label>
+              <div className="mt-1.5 w-full border border-gray-100 bg-gray-50 rounded-lg px-3 py-2.5 text-sm text-gray-600">{myDivisions[0] || "—"}</div>
+            </div>
+          )}
+
+          <div className="sm:col-span-2">
+            <label className="text-sm font-medium text-gray-700">
+              Serial Number <span className="text-red-500">*</span>
+              <span className="text-gray-400 font-normal"> — {mode === "send" ? "unit Faulty yang siap dikirim" : "unit yang sedang di customer"}</span>
+            </label>
+            <select value={sn} onChange={(e) => setSn(e.target.value)} disabled={!effectiveCustomer || loadingCandidates} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600 disabled:bg-gray-50">
+              <option value="">{loadingCandidates ? "Memuat..." : candidates.length === 0 ? "Tidak ada unit tersedia" : "Pilih Serial Number..."}</option>
+              {candidates.map((c) => <option key={c.sn} value={c.sn}>{c.sn} — {c.material}</option>)}
+            </select>
+            {selected && <div className="text-xs text-gray-500 mt-1">Material: <span className="font-medium text-gray-700">{selected.material}</span></div>}
+          </div>
+
+          <div className="sm:col-span-2">
+            <label className="text-sm font-medium text-gray-700">Nomor Surat/BA <span className="text-red-500">*</span></label>
+            <input value={ref} onChange={(e) => setRef(e.target.value)} placeholder={mode === "send" ? "mis. BA-OUT-001" : "Nomor surat baru, beda dari saat dikirim"} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+          </div>
+
+          <div className="sm:col-span-2">
+            <label className="text-sm font-medium text-gray-700">Catatan <span className="text-gray-400 font-normal">(opsional)</span></label>
+            <input value={note} onChange={(e) => setNote(e.target.value)} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+          </div>
+        </div>
+
+        {error && <div className="bg-red-50 border border-red-100 text-red-700 text-sm rounded-lg px-3 py-2">{error}</div>}
+
+        <div className="flex justify-end">
+          <PrimaryButton onClick={submit} disabled={!valid || saving}>{saving ? "Menyimpan..." : mode === "send" ? "Kirim ke Customer" : "Terima Kembali"}</PrimaryButton>
+        </div>
+      </Card>
+    </div>
   );
 }
 
@@ -8681,7 +8774,7 @@ export default function App() {
       : <MaterialSwapPage swaps={materialSwaps} api={api} materials={materials} sites={sites} homebases={homebases} onSubmit={submitMaterialSwap} showToast={showToast} setPage={goto} setReturnPrefill={setReturnPrefill} setSelectedSwap={setSelectedSwap} role={role} />;
   }
   else if (page === "stock") content = <WarehouseStock materials={materials} setPage={goto} setMovementFilter={setMovementFilter} setSerialMaterial={setSerialMaterial} setSerialCustomer={setSerialCustomer} onSubmitReceipt={createReceipt} showToast={showToast} clearSerialHighlight={() => setHighlightSerial("")} currentUser={currentUser} customers={customers} role={role} api={api} />;
-  else if (page === "returnToCustomer") content = <ReturnToCustomerPage api={api} deliveries={deliveries} role={role} showToast={showToast} currentUser={currentUser} customers={customers} materials={materials} onBack={() => goto("delivery")} />;
+  else if (page === "returnToCustomer") content = <ReturnToCustomerPage api={api} showToast={showToast} currentUser={currentUser} customers={customers} onBack={() => goto("delivery")} />;
   else if (page === "databaseMSG") content = <DivisionDatabasePage customer="MSG" api={api} deliveries={deliveries} role={role} showToast={showToast} materials={materials} onBack={() => goto("dashboard")} />;
   else if (page === "databaseRGR") content = <DivisionDatabasePage customer="RGR" api={api} deliveries={deliveries} role={role} showToast={showToast} materials={materials} onBack={() => goto("dashboard")} />;
   else if (page === "databasePIM") content = <DivisionDatabasePage customer="PIM" api={api} deliveries={deliveries} role={role} showToast={showToast} materials={materials} onBack={() => goto("dashboard")} />;
