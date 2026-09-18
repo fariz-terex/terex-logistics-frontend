@@ -7953,6 +7953,10 @@ function IptMergeToTeleglobalTool({ api, showToast }) {
       setLoading(false);
     }
   };
+  // Loads automatically on mount (read-only, safe) so a Manager landing on
+  // Settings sees right away whether this still needs action, instead of
+  // needing to know to click "Muat Preview" first.
+  React.useEffect(() => { loadPreview(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const commit = async () => {
     setCommitting(true);
@@ -7975,10 +7979,15 @@ function IptMergeToTeleglobalTool({ api, showToast }) {
     </div>
   );
 
+  const needsAction = preview && preview.sourceExists;
+
   return (
-    <Card className="p-5 space-y-3 text-sm">
+    <Card className={`p-5 space-y-3 text-sm ${needsAction ? "border-2 border-amber-400" : ""}`}>
       <div>
-        <div className="font-semibold text-gray-800">Koreksi: Gabungkan IPT ke Teleglobal</div>
+        <div className="font-semibold text-gray-800 flex items-center gap-2">
+          {needsAction && <AlertTriangle size={16} className="text-amber-500" />}
+          Koreksi: Gabungkan IPT ke Teleglobal
+        </div>
         <div className="text-gray-500 text-xs mt-1">
           Import IPT sebelumnya salah membuat "IPT" sebagai divisi terpisah — IPT dan Teleglobal ternyata divisi
           yang sama. Ini memindahkan semua unit dan stok yang sudah dibuat ke divisi Teleglobal (digabung dengan
@@ -7987,14 +7996,19 @@ function IptMergeToTeleglobalTool({ api, showToast }) {
         </div>
       </div>
 
-      <GhostButton onClick={loadPreview} disabled={loading}>{loading ? "Memuat..." : "Muat Preview"}</GhostButton>
+      {loading && !preview && <div className="text-xs text-gray-400">Memeriksa...</div>}
 
-      {preview && !preview.sourceExists && (
+      <GhostButton onClick={loadPreview} disabled={loading}>{loading ? "Memuat..." : "Muat Ulang Preview"}</GhostButton>
+
+      {preview && !preview.sourceExists && !result && (
         <div className="text-xs text-emerald-700">✓ Tidak ada divisi "IPT" ditemukan — tidak ada yang perlu digabungkan.</div>
       )}
 
-      {preview && preview.sourceExists && (
+      {needsAction && (
         <div className="pt-2 border-t border-gray-50 space-y-3">
+          <div className="bg-amber-50 border border-amber-200 text-amber-800 text-xs font-medium rounded-lg px-3 py-2">
+            Divisi "IPT" masih ada di sistem — masih akan muncul di semua dropdown divisi sampai ini dijalankan.
+          </div>
           <div className="text-xs text-gray-700 space-y-1">
             <div>Unit Serial Number akan dipindahkan ke Teleglobal: <span className="font-semibold">{preview.unitsToReassign}</span></div>
             <div>Stok non-serial akan digabung ke Teleglobal: <span className="font-semibold">{preview.nonSerialRows.length}</span> material</div>
@@ -8007,9 +8021,9 @@ function IptMergeToTeleglobalTool({ api, showToast }) {
             </div>
           )}
 
-          <GhostButton onClick={() => setConfirmOpen(true)} className="border-red-200 text-red-600 hover:bg-red-50">
-            Jalankan Merge
-          </GhostButton>
+          <PrimaryButton onClick={() => setConfirmOpen(true)}>
+            Jalankan Merge Sekarang
+          </PrimaryButton>
         </div>
       )}
 
@@ -9369,12 +9383,12 @@ export default function App() {
           <DangerButton onClick={handleLogout}><LogOut size={14} /> Logout</DangerButton>
         </div>
       </Card>
+      {role === ROLES.MANAGER && <IptMergeToTeleglobalTool api={api} showToast={showToast} />}
       <TelegramLink api={api} showToast={showToast} />
       {role === ROLES.MANAGER && <PhantomStockCleanup api={api} showToast={showToast} />}
       {role === ROLES.MANAGER && <StockConsistencyCheck api={api} showToast={showToast} />}
       {role === ROLES.MANAGER && <PimImportTool api={api} showToast={showToast} />}
       {role === ROLES.MANAGER && <PimFaultyFixTool api={api} showToast={showToast} />}
-      {role === ROLES.MANAGER && <IptMergeToTeleglobalTool api={api} showToast={showToast} />}
       <AppVersionInfo api={api} />
     </div>
   );
