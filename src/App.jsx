@@ -3290,7 +3290,7 @@ function ReturnToCustomerPage({ api, showToast, currentUser, customers, onBack }
   const [customer, setCustomer] = useState(!needsDivisionPicker ? (myDivisions[0] || "") : "");
   const [candidates, setCandidates] = useState([]);
   const [loadingCandidates, setLoadingCandidates] = useState(false);
-  const [sn, setSn] = useState("");
+  const [selectedSns, setSelectedSns] = useState([]);
   const [ref, setRef] = useState("");
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
@@ -3299,7 +3299,7 @@ function ReturnToCustomerPage({ api, showToast, currentUser, customers, onBack }
   const effectiveCustomer = needsDivisionPicker ? customer : myDivisions[0];
 
   const loadCandidates = () => {
-    setSn(""); setError("");
+    setSelectedSns([]); setError("");
     if (!effectiveCustomer) { setCandidates([]); return; }
     setLoadingCandidates(true);
     api.getSerials(undefined, "Faulty", effectiveCustomer)
@@ -3309,14 +3309,14 @@ function ReturnToCustomerPage({ api, showToast, currentUser, customers, onBack }
   };
   React.useEffect(loadCandidates, [effectiveCustomer]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const selected = candidates.find((c) => c.sn === sn);
-  const valid = effectiveCustomer && sn && ref.trim();
+  const toggleSn = (s) => setSelectedSns((prev) => prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]);
+  const valid = effectiveCustomer && selectedSns.length > 0 && ref.trim();
 
   const submit = async () => {
     setSaving(true); setError("");
     try {
-      await api.sendSerialToCustomer(sn, ref.trim(), note);
-      showToast(`${sn} dikirim ke customer`);
+      await api.sendSerialsToCustomerBatch(selectedSns, ref.trim(), note);
+      showToast(selectedSns.length > 1 ? `${selectedSns.length} unit dikirim ke customer` : `${selectedSns[0]} dikirim ke customer`);
       setRef(""); setNote("");
       loadCandidates();
     } catch (err) {
@@ -3351,13 +3351,33 @@ function ReturnToCustomerPage({ api, showToast, currentUser, customers, onBack }
           <div className="sm:col-span-2">
             <label className="text-sm font-medium text-gray-700">
               Serial Number <span className="text-red-500">*</span>
-              <span className="text-gray-400 font-normal"> — unit Faulty yang siap dikirim</span>
+              <span className="text-gray-400 font-normal"> — unit Faulty yang siap dikirim, bisa pilih lebih dari satu untuk dikirim bersamaan dalam satu Surat/BA</span>
             </label>
-            <select value={sn} onChange={(e) => setSn(e.target.value)} disabled={!effectiveCustomer || loadingCandidates} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600 disabled:bg-gray-50">
-              <option value="">{loadingCandidates ? "Memuat..." : candidates.length === 0 ? "Tidak ada unit Faulty tersedia" : "Pilih Serial Number..."}</option>
-              {candidates.map((c) => <option key={c.sn} value={c.sn}>{c.sn} — {c.material}</option>)}
-            </select>
-            {selected && <div className="text-xs text-gray-500 mt-1">Material: <span className="font-medium text-gray-700">{selected.material}</span></div>}
+            {loadingCandidates ? (
+              <div className="mt-1.5 text-sm text-gray-400">Memuat...</div>
+            ) : !effectiveCustomer ? (
+              <div className="mt-1.5 bg-gray-50 border border-gray-100 text-gray-500 text-sm rounded-lg px-4 py-3">Pilih divisi terlebih dahulu.</div>
+            ) : candidates.length === 0 ? (
+              <div className="mt-1.5 bg-gray-50 border border-gray-100 text-gray-500 text-sm rounded-lg px-4 py-3">Tidak ada unit Faulty tersedia.</div>
+            ) : (
+              <>
+                <div className="mt-1.5 flex items-center gap-3 text-xs">
+                  <button type="button" onClick={() => setSelectedSns(candidates.map((c) => c.sn))} className="text-emerald-800 font-medium hover:underline">Pilih Semua</button>
+                  <button type="button" onClick={() => setSelectedSns([])} className="text-gray-500 hover:underline">Kosongkan</button>
+                  {selectedSns.length > 0 && <span className="text-gray-400">{selectedSns.length} dipilih</span>}
+                </div>
+                <div className="mt-1.5 border border-gray-200 rounded-lg divide-y divide-gray-100 max-h-72 overflow-y-auto">
+                  {candidates.map((c) => (
+                    <label key={c.sn} className="flex items-center gap-3 px-3 py-2.5 text-sm cursor-pointer hover:bg-gray-50">
+                      <input type="checkbox" checked={selectedSns.includes(c.sn)} onChange={() => toggleSn(c.sn)} className="accent-emerald-700" />
+                      <span className="font-mono text-gray-800">{c.sn}</span>
+                      <span className="text-gray-400">·</span>
+                      <span className="text-gray-600">{c.material}</span>
+                    </label>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
 
           <div className="sm:col-span-2">
@@ -3374,7 +3394,9 @@ function ReturnToCustomerPage({ api, showToast, currentUser, customers, onBack }
         {error && <div className="bg-red-50 border border-red-100 text-red-700 text-sm rounded-lg px-3 py-2">{error}</div>}
 
         <div className="flex justify-end">
-          <PrimaryButton onClick={submit} disabled={!valid || saving}>{saving ? "Menyimpan..." : "Kirim ke Customer"}</PrimaryButton>
+          <PrimaryButton onClick={submit} disabled={!valid || saving}>
+            {saving ? "Menyimpan..." : selectedSns.length > 1 ? `Kirim ${selectedSns.length} Unit ke Customer` : "Kirim ke Customer"}
+          </PrimaryButton>
         </div>
       </Card>
     </div>
@@ -7228,6 +7250,7 @@ function createApiClient(baseUrl, getToken) {
     },
     searchSerials: (q) => request(`/stock/serials?q=${encodeURIComponent(q)}`),
     sendSerialToCustomer: (sn, ref, note) => request(`/stock/serials/${encodeURIComponent(sn)}/send-to-customer`, { method: "POST", body: { ref, note } }),
+    sendSerialsToCustomerBatch: (sns, ref, note) => request("/stock/serials/send-to-customer-batch", { method: "POST", body: { sns, ref, note } }),
     receiveSerialFromCustomer: (sn, ref, note) => request(`/stock/serials/${encodeURIComponent(sn)}/receive-from-customer`, { method: "POST", body: { ref, note } }),
     getSerialCustomerReturnHistory: (sn) => request(`/stock/serials/${encodeURIComponent(sn)}/customer-return-history`),
     createReceipt: (payload) => request("/stock/receipts", { method: "POST", body: payload }),
