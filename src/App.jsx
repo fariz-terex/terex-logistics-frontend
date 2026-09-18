@@ -7093,6 +7093,7 @@ function createApiClient(baseUrl, getToken) {
     commitPimFaultyFix: () => request("/admin/pim-import/fix-faulty/commit", { method: "POST" }),
     rebuildGlobalStock: (commit) => request("/stock/rebuild-global", { method: "POST", body: { commit: !!commit } }),
     rebuildSerialBuckets: (commit) => request("/stock/rebuild-serial-buckets", { method: "POST", body: { commit: !!commit } }),
+    fixInstalledStatus: (commit) => request("/stock/fix-installed-status", { method: "POST", body: { commit: !!commit } }),
     getMovements: (material) => request(`/stock/movements${material ? `?material=${encodeURIComponent(material)}` : ""}`),
     getSerials: (material, status, customer, homebase) => {
       const params = new URLSearchParams();
@@ -7547,6 +7548,46 @@ function RebuildAction({ label, title, confirmMessage, run, onDone, showToast })
   );
 }
 
+// One-click fix for the "status stuck at Delivered despite a complete
+// install record" case (see stockConsistency.js planInstalledStatusFix) —
+// no separate preview step since StockConsistencyCheck already lists the
+// exact units above this button before it's shown.
+function InstalledStatusFixAction({ api, showToast, onDone, count }) {
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const apply = async () => {
+    setBusy(true);
+    try {
+      const res = await api.fixInstalledStatus(true);
+      showToast(`${res.count} unit diperbaiki ke status Installed`);
+      await onDone();
+    } catch (err) {
+      showToast(err.message || "Gagal menerapkan perbaikan");
+    } finally {
+      setBusy(false);
+      setConfirm(false);
+    }
+  };
+
+  return (
+    <>
+      <GhostButton onClick={() => setConfirm(true)} disabled={busy} className="mt-2 border-red-200 text-red-600 hover:bg-red-50">
+        {busy ? "Menerapkan..." : "Perbaiki ke Installed"}
+      </GhostButton>
+      <ConfirmDialog
+        open={confirm}
+        title="Perbaiki Status ke Installed"
+        message={`${count} unit berstatus "Delivered" akan diubah menjadi "Installed" (install_site & installed_date sudah lengkap dan tidak diubah). Tindakan ini mengubah data produksi. Lanjutkan?`}
+        confirmLabel={busy ? "Menerapkan..." : "Ya, Perbaiki"}
+        danger
+        onConfirm={apply}
+        onCancel={() => setConfirm(false)}
+      />
+    </>
+  );
+}
+
 // TEMP one-off tool — import PIM historical unit data from the "Update
 // Material VSAT TEREX" Google Sheet (see routes/adminImportPim.js on the
 // backend). Preview is always safe (read-only); Commit is a real write,
@@ -7785,7 +7826,7 @@ function StockConsistencyCheck({ api, showToast }) {
   );
 
   const s = report?.summary;
-  const realCount = s ? s.globalVsDivisionSum + s.serialVsMaterialStock + s.negatives + s.orphans : 0;
+  const realCount = s ? s.globalVsDivisionSum + s.serialVsMaterialStock + s.negatives + s.orphans + s.installedStatusFixable + s.installedStatusNeedsReview : 0;
 
   return (
     <Card className="p-5 space-y-3 text-sm">
@@ -7887,6 +7928,30 @@ function StockConsistencyCheck({ api, showToast }) {
               <div className="text-xs font-medium text-gray-500 mb-1">Stok "Unassigned" ({report.unassignedStock.length}) — bukan error</div>
               <div className="text-[11px] text-gray-400 mb-1">Stok lama sebelum fitur divisi. Terhitung di total global, tapi tidak terlihat divisi manapun sampai diterima ulang ke divisi asli.</div>
               <List items={report.unassignedStock} render={(r) => <>{r.material} — ready {r.ready}, faulty {r.faulty}, reserved {r.reserved}, transit {r.in_transit}</>} />
+            </div>
+          )}
+
+          {(report.installedStatusFixable?.length > 0 || report.installedStatusNeedsReview?.length > 0) && (
+            <div>
+              <div className="text-xs font-medium text-gray-700 mb-1">
+                Status belum "Installed" padahal sudah ada catatan instalasi ({report.installedStatusFixable.length + report.installedStatusNeedsReview.length})
+              </div>
+              <div className="text-[11px] text-gray-400 mb-1">
+                install_site &amp; installed_date hanya pernah diisi bersamaan dengan status "Installed" oleh alur konfirmasi instalasi normal — biasanya ini sisa import historis yang tidak sempat mengubah status.
+              </div>
+              {report.installedStatusFixable.length > 0 && (
+                <div className="mb-2">
+                  <div className="text-[11px] text-gray-500 mb-1">Bisa diperbaiki otomatis — status "Delivered", lokasi & tanggal instalasi sudah lengkap ({report.installedStatusFixable.length})</div>
+                  <List items={report.installedStatusFixable} render={(r) => <>{r.sn} · {r.material} <span className="text-gray-400">({r.customer})</span> — Delivered → <span className="text-emerald-700 font-medium">Installed</span></>} />
+                  <InstalledStatusFixAction api={api} showToast={showToast} onDone={check} count={report.installedStatusFixable.length} />
+                </div>
+              )}
+              {report.installedStatusNeedsReview.length > 0 && (
+                <div>
+                  <div className="text-[11px] text-amber-600 mb-1">Perlu ditinjau manual — kombinasi status/data tidak jelas ({report.installedStatusNeedsReview.length})</div>
+                  <List items={report.installedStatusNeedsReview} render={(r) => <>{r.sn} · {r.material} <span className="text-gray-400">({r.customer})</span> — status {r.status}, site {r.install_site || "—"}, tanggal install {r.installed_date || "—"}</>} />
+                </div>
+              )}
             </div>
           )}
         </div>
