@@ -244,6 +244,8 @@ const STATUS_STYLES = {
   "Under Repair": "bg-red-50 text-red-700",
   "Installed": "bg-emerald-100 text-emerald-800",
   "Sent to Customer": "bg-purple-50 text-purple-700",
+  "Pending": "bg-amber-50 text-amber-700",
+  "Approved": "bg-emerald-50 text-emerald-700",
 };
 
 function StatusBadge({ status }) {
@@ -251,6 +253,46 @@ function StatusBadge({ status }) {
     <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${STATUS_STYLES[status] || "bg-gray-100 text-gray-600"}`}>
       {status}
     </span>
+  );
+}
+
+// Non-interactive summary tiles — total per column (Ready/Faulty/dst) across
+// whatever rows a stock table is currently showing. Colors mirror the same
+// column's text color in the table body so the summary reads as "this row,
+// added up" rather than a separate legend.
+function StatTiles({ items }) {
+  return (
+    <div className="flex flex-wrap gap-3">
+      {items.map((it) => (
+        <div key={it.label} className="bg-white border border-gray-100 rounded-xl px-4 py-2.5 min-w-[6.5rem]">
+          <div className="text-xs text-gray-400">{it.label}</div>
+          <div className={`text-lg font-semibold mt-0.5 ${it.colorClass || "text-gray-800"}`}>{it.value}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Clickable status filter pills with a live count per status, reusing
+// STATUS_STYLES so a status's pill color always matches its StatusBadge
+// color elsewhere in the app. `options`: [{ key, label?, count }].
+function StatusFilterPills({ options, value, onChange }) {
+  return (
+    <div className="flex gap-2 flex-wrap">
+      {options.map((o) => {
+        const active = value === o.key;
+        const activeStyle = o.key === "All" ? "bg-emerald-800 text-white border-emerald-800" : `${STATUS_STYLES[o.key] || "bg-gray-100 text-gray-600"} border-transparent ring-2 ring-emerald-700`;
+        return (
+          <button
+            key={o.key}
+            onClick={() => onChange(o.key)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${active ? activeStyle : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}
+          >
+            {o.label || o.key} <span className={active ? "opacity-90" : "text-gray-400"}>({o.count})</span>
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -1143,6 +1185,7 @@ function RequestTabs({ page, setPage, role, userCustomers }) {
 function DeliveryList({ deliveries, setSelected, setPage, role, page, userCustomers }) {
   const [filter, setFilter] = useState("All");
   const statuses = ["All", "Waiting Logistics Approval", "In Progress", "Selesai Dikirim", "Rejected"];
+  const countFor = (s) => s === "All" ? deliveries.length : deliveries.filter((d) => d.status === s || (s === "In Progress" && ["In Progress", "Preparing", "Shipped", "Waiting Stock Assignment"].includes(d.status))).length;
   const filtered = filter === "All" ? deliveries : deliveries.filter((d) => d.status === filter || (filter === "In Progress" && ["In Progress", "Preparing", "Shipped", "Waiting Stock Assignment"].includes(d.status)));
 
   return (
@@ -1155,13 +1198,7 @@ function DeliveryList({ deliveries, setSelected, setPage, role, page, userCustom
           <PrimaryButton onClick={() => setPage("deliveryCreate")}><Plus size={16} /> Buat Request</PrimaryButton>
         ) : null}
       />
-      <div className="flex gap-2 flex-wrap">
-        {statuses.map((s) => (
-          <button key={s} onClick={() => setFilter(s)} className={`px-3 py-1.5 rounded-lg text-xs font-medium border ${filter === s ? "bg-emerald-800 text-white border-emerald-800" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}>
-            {s}
-          </button>
-        ))}
-      </div>
+      <StatusFilterPills options={statuses.map((s) => ({ key: s, count: countFor(s) }))} value={filter} onChange={setFilter} />
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">
         <table className="w-full text-sm">
@@ -2793,6 +2830,10 @@ function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMateri
   );
   const lowCount = base.filter((m) => m.low).length;
   const filtered = sortRows(lowOnly ? base.filter((m) => m.low) : base, sort);
+  const totals = filtered.reduce((acc, m) => {
+    acc.ready += m.ready || 0; acc.faulty += m.faulty || 0; acc.reserved += m.reserved || 0; acc.transit += m.transit || 0; acc.total += m.total || 0;
+    return acc;
+  }, { ready: 0, faulty: 0, reserved: 0, transit: 0, total: 0 });
 
   return (
     <div className="p-4 sm:p-8 space-y-5">
@@ -2841,6 +2882,13 @@ function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMateri
           </select>
         )}
       />
+      <StatTiles items={[
+        { label: "Ready", value: totals.ready, colorClass: "text-emerald-700" },
+        { label: "Faulty", value: totals.faulty, colorClass: "text-amber-600" },
+        { label: "Reserved", value: totals.reserved, colorClass: "text-blue-600" },
+        { label: "In Transit", value: totals.transit, colorClass: "text-indigo-600" },
+        { label: "Total", value: totals.total, colorClass: "text-gray-800" },
+      ]} />
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">
         <table className="w-full text-sm">
@@ -3038,6 +3086,20 @@ function MaterialSerialDetail({ material, customer, customerOptions, materials, 
   };
   React.useEffect(reload, [materialFilter, customerFilter, status]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Per-status totals for the filter pills below — fetched independently of
+  // `status` (unfiltered by it) so every pill shows its own true count
+  // instead of just the count for whichever status happens to be active.
+  const [statusCounts, setStatusCounts] = useState({});
+  React.useEffect(() => {
+    api.getSerials(materialFilter || undefined, undefined, customerFilter || undefined)
+      .then((rows) => {
+        const c = {};
+        rows.forEach((r) => { c[r.status] = (c[r.status] || 0) + 1; });
+        setStatusCounts(c);
+      })
+      .catch(() => setStatusCounts({}));
+  }, [materialFilter, customerFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Re-sync from the prop on every new search selection — not just on first
   // mount. Without this, clicking a second SN result while already on this
   // page (same material, component never unmounts) silently did nothing,
@@ -3105,13 +3167,14 @@ function MaterialSerialDetail({ material, customer, customerOptions, materials, 
         )}
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        {statusOptions.map((s) => (
-          <button key={s} onClick={() => setStatus(s)} className={`px-3 py-1.5 rounded-lg text-xs font-medium border ${status === s ? "bg-emerald-800 text-white border-emerald-800" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}>
-            {s}
-          </button>
-        ))}
-      </div>
+      <StatusFilterPills
+        options={statusOptions.map((s) => ({
+          key: s,
+          count: s === "All" ? Object.values(statusCounts).reduce((a, b) => a + b, 0) : (statusCounts[s] || 0),
+        }))}
+        value={status}
+        onChange={setStatus}
+      />
 
       <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2.5 w-80">
         <Search size={16} className="text-gray-400" />
@@ -3410,6 +3473,11 @@ function StockMovement({ movements, filter, setFilter, deliveries }) {
    ============================================================ */
 
 function ReturnFaultyList({ returns, setSelected, setPage, role, page, userCustomers }) {
+  const [filter, setFilter] = useState("All");
+  const statuses = ["All", "Waiting Logistics Review", "Revision Required", "Ready to Ship", "On Delivery", "Received by Warehouse", "QC Checking", "Completed"];
+  const countFor = (s) => s === "All" ? returns.length : returns.filter((r) => r.status === s).length;
+  const filtered = filter === "All" ? returns : returns.filter((r) => r.status === filter);
+
   return (
     <div className="p-4 sm:p-8 space-y-5">
       <RequestTabs page={page} setPage={setPage} role={role} userCustomers={userCustomers} />
@@ -3418,6 +3486,7 @@ function ReturnFaultyList({ returns, setSelected, setPage, role, page, userCusto
         subtitle="Pengembalian material rusak oleh teknisi lapangan"
         right={role === ROLES.TECH || role === ROLES.MANAGER ? <PrimaryButton onClick={() => setPage("returnFaultyCreate")}><Plus size={16} /> Buat Return</PrimaryButton> : null}
       />
+      <StatusFilterPills options={statuses.map((s) => ({ key: s, count: countFor(s) }))} value={filter} onChange={setFilter} />
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">
         <table className="w-full text-sm">
@@ -3432,7 +3501,7 @@ function ReturnFaultyList({ returns, setSelected, setPage, role, page, userCusto
             </tr>
           </thead>
           <tbody>
-            {returns.map((r) => (
+            {filtered.map((r) => (
               <tr key={r.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/50">
                 <td className="px-5 py-3 font-medium text-gray-800">{r.id}</td>
                 <td className="px-5 py-3 text-gray-600">{r.technician}</td>
@@ -3447,6 +3516,7 @@ function ReturnFaultyList({ returns, setSelected, setPage, role, page, userCusto
                 </td>
               </tr>
             ))}
+            {filtered.length === 0 && <tr><td colSpan={6}><EmptyState text="Tidak ada data untuk filter ini." /></td></tr>}
           </tbody>
         </table>
         </div>
@@ -4003,6 +4073,11 @@ function ReturnFaultyDetail({ r, onBack, onApprove, onRevise, onShip, onAddResi,
    ============================================================ */
 
 function ReconciliationList({ items, setSelected, setPage, role }) {
+  const [filter, setFilter] = useState("All");
+  const statuses = ["All", "Waiting Logistics Review", "Revision Required", "Completed"];
+  const countFor = (s) => s === "All" ? items.length : items.filter((r) => r.status === s).length;
+  const filtered = filter === "All" ? items : items.filter((r) => r.status === filter);
+
   return (
     <div className="p-4 sm:p-8 space-y-5">
       <SectionTitle
@@ -4010,6 +4085,7 @@ function ReconciliationList({ items, setSelected, setPage, role }) {
         subtitle="Verifikasi fisik material yang dikuasai field team / homebase"
         right={role === ROLES.TECH || role === ROLES.MANAGER ? <PrimaryButton onClick={() => setPage("reconciliationCreate")}><Plus size={16} /> Buat Rekonsiliasi</PrimaryButton> : null}
       />
+      <StatusFilterPills options={statuses.map((s) => ({ key: s, count: countFor(s) }))} value={filter} onChange={setFilter} />
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">
         <table className="w-full text-sm">
@@ -4024,7 +4100,7 @@ function ReconciliationList({ items, setSelected, setPage, role }) {
             </tr>
           </thead>
           <tbody>
-            {items.map((r) => {
+            {filtered.map((r) => {
               const totalDisc = r.items.reduce((s, i) => s + (i.systemQty - i.actualQty), 0);
               return (
                 <tr key={r.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/50">
@@ -4042,6 +4118,7 @@ function ReconciliationList({ items, setSelected, setPage, role }) {
                 </tr>
               );
             })}
+            {filtered.length === 0 && <tr><td colSpan={6}><EmptyState text="Tidak ada data untuk filter ini." /></td></tr>}
           </tbody>
         </table>
         </div>
@@ -4495,6 +4572,11 @@ function MaterialSwapPage({ swaps, api, materials, sites, homebases, onSubmit, s
       </>
       )}
 
+      <StatTiles items={[
+        { label: "Instalasi Baru", value: swaps.filter((s) => !s.oldSn).length, colorClass: "text-emerald-700" },
+        { label: "Penggantian", value: swaps.filter((s) => !!s.oldSn).length, colorClass: "text-red-600" },
+        { label: "Total", value: swaps.length, colorClass: "text-gray-800" },
+      ]} />
       <Card className="overflow-hidden">
         <div className="px-5 py-4 border-b border-gray-50 text-sm font-semibold text-gray-800">Riwayat Instalasi & Penggantian</div>
         <div className="overflow-x-auto">
@@ -4626,6 +4708,10 @@ function ToolStockPage({ tools, setPage, setToolSerialName, onSubmitReceipt, sho
   );
   const lowCount = base.filter((t) => t.low).length;
   const filtered = sortRows(lowOnly ? base.filter((t) => t.low) : base, sort);
+  const totals = filtered.reduce((acc, t) => {
+    acc.available += t.available || 0; acc.checked_out += t.checked_out || 0; acc.under_repair += t.under_repair || 0; acc.total += t.total || 0;
+    return acc;
+  }, { available: 0, checked_out: 0, under_repair: 0, total: 0 });
 
   return (
     <div className="p-4 sm:p-8 space-y-5">
@@ -4643,6 +4729,12 @@ function ToolStockPage({ tools, setPage, setToolSerialName, onSubmitReceipt, sho
         categories={categories} categoryFilter={categoryFilter} setCategoryFilter={setCategoryFilter}
         lowOnly={lowOnly} setLowOnly={setLowOnly} lowCount={lowCount}
       />
+      <StatTiles items={[
+        { label: "Available", value: totals.available, colorClass: "text-emerald-700" },
+        { label: "Checked Out", value: totals.checked_out, colorClass: "text-indigo-600" },
+        { label: "Under Repair", value: totals.under_repair, colorClass: "text-red-600" },
+        { label: "Total", value: totals.total, colorClass: "text-gray-800" },
+      ]} />
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">
         <table className="w-full text-sm">
@@ -4714,6 +4806,7 @@ function ClusterTransferPage({ materials, customers, currentUser, role, api, sho
   const [transfers, setTransfers] = useState([]);
   const [loadingTransfers, setLoadingTransfers] = useState(true);
   const [decidingId, setDecidingId] = useState("");
+  const [statusFilter, setStatusFilter] = useState("All");
 
   const activeMaterials = materials.filter((m) => m.status === "Active" && m.serialized);
 
@@ -4780,6 +4873,8 @@ function ClusterTransferPage({ materials, customers, currentUser, role, api, sho
     const styles = { Pending: "bg-amber-100 text-amber-800", Approved: "bg-emerald-100 text-emerald-800", Rejected: "bg-red-100 text-red-700" };
     return <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${styles[s] || "bg-gray-100 text-gray-600"}`}>{s}</span>;
   };
+
+  const filteredTransfers = statusFilter === "All" ? transfers : transfers.filter((t) => t.status === statusFilter);
 
   return (
     <div className="p-4 sm:p-8 space-y-5">
@@ -4860,6 +4955,17 @@ function ClusterTransferPage({ materials, customers, currentUser, role, api, sho
         ) : transfers.length === 0 ? (
           <div className="px-6 py-8 text-sm text-gray-400 text-center">Belum ada transfer antar cluster.</div>
         ) : (
+          <>
+          <div className="px-6 pt-4">
+            <StatusFilterPills
+              options={["All", "Pending", "Approved", "Rejected"].map((s) => ({
+                key: s,
+                count: s === "All" ? transfers.length : transfers.filter((t) => t.status === s).length,
+              }))}
+              value={statusFilter}
+              onChange={setStatusFilter}
+            />
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -4874,7 +4980,7 @@ function ClusterTransferPage({ materials, customers, currentUser, role, api, sho
                 </tr>
               </thead>
               <tbody>
-                {transfers.map((t) => (
+                {filteredTransfers.map((t) => (
                   <tr key={t.id} className="border-b border-gray-50 last:border-0">
                     <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{t.requested_date}</td>
                     <td className="px-4 py-3 font-mono text-gray-800">{t.sn}</td>
@@ -4915,9 +5021,13 @@ function ClusterTransferPage({ materials, customers, currentUser, role, api, sho
                     </td>
                   </tr>
                 ))}
+                {filteredTransfers.length === 0 && (
+                  <tr><td colSpan={7}><EmptyState text="Tidak ada data untuk filter ini." /></td></tr>
+                )}
               </tbody>
             </table>
           </div>
+          </>
         )}
       </Card>
     </div>
@@ -6098,6 +6208,10 @@ function ConsumableStockPage({ consumables, onSubmitReceipt, showToast, role }) 
   );
   const lowCount = base.filter((c) => c.low).length;
   const filtered = sortRows(lowOnly ? base.filter((c) => c.low) : base, sort);
+  const totals = filtered.reduce((acc, c) => {
+    acc.ready += c.ready || 0; acc.reserved += c.reserved || 0; acc.in_transit += c.in_transit || 0; acc.total += c.total || 0;
+    return acc;
+  }, { ready: 0, reserved: 0, in_transit: 0, total: 0 });
 
   return (
     <div className="p-4 sm:p-8 space-y-5">
@@ -6115,6 +6229,12 @@ function ConsumableStockPage({ consumables, onSubmitReceipt, showToast, role }) 
         categories={categories} categoryFilter={categoryFilter} setCategoryFilter={setCategoryFilter}
         lowOnly={lowOnly} setLowOnly={setLowOnly} lowCount={lowCount}
       />
+      <StatTiles items={[
+        { label: "Ready", value: totals.ready, colorClass: "text-emerald-700" },
+        { label: "Reserved", value: totals.reserved, colorClass: "text-blue-600" },
+        { label: "In Transit", value: totals.in_transit, colorClass: "text-indigo-600" },
+        { label: "Total", value: totals.total, colorClass: "text-gray-800" },
+      ]} />
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">
         <table className="w-full text-sm">
