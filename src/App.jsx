@@ -527,6 +527,7 @@ const NAV_TREE = [
       { key: "databaseRGR", label: "RGR" },
       { key: "databasePIM", label: "PIM" },
       { key: "databaseTeleglobal", label: "Teleglobal" },
+      { key: "databaseIPT", label: "IPT" },
     ],
   },
   {
@@ -2733,7 +2734,7 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
 // Divisions with their own "Database" sub-page (matches NAV_TREE's
 // databaseGroup children) — "Lihat Detail" routes straight there when the
 // division is unambiguous, instead of the generic Serial Number page.
-const DATABASE_DIVISIONS = new Set(["MSG", "RGR", "PIM", "Teleglobal"]);
+const DATABASE_DIVISIONS = new Set(["MSG", "RGR", "PIM", "Teleglobal", "IPT"]);
 
 function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMaterial, setSerialCustomer, setDbMaterialFilter, onSubmitReceipt, showToast, clearSerialHighlight, currentUser, customers, role, api }) {
   const [search, setSearch] = useState("");
@@ -7211,6 +7212,8 @@ function createApiClient(baseUrl, getToken) {
     commitPimImport: () => request("/admin/pim-import/commit", { method: "POST" }),
     getPimFaultyFixPreview: () => request("/admin/pim-import/fix-faulty/preview"),
     commitPimFaultyFix: () => request("/admin/pim-import/fix-faulty/commit", { method: "POST" }),
+    getIptImportPreview: () => request("/admin/ipt-import/preview"),
+    commitIptImport: () => request("/admin/ipt-import/commit", { method: "POST" }),
     rebuildGlobalStock: (commit) => request("/stock/rebuild-global", { method: "POST", body: { commit: !!commit } }),
     rebuildSerialBuckets: (commit) => request("/stock/rebuild-serial-buckets", { method: "POST", body: { commit: !!commit } }),
     fixInstalledStatus: (commit) => request("/stock/fix-installed-status", { method: "POST", body: { commit: !!commit } }),
@@ -7916,6 +7919,145 @@ function PimFaultyFixTool({ api, showToast }) {
         title="Jalankan Koreksi Faulty PIM"
         message={preview ? `${preview.willInsert} unit Faulty baru akan ditambahkan dan ${preview.willUpdate} unit akan diubah statusnya dari Installed ke Faulty. Tindakan ini mengubah data produksi. Lanjutkan?` : ""}
         confirmLabel={committing ? "Menjalankan..." : "Ya, Jalankan Koreksi"}
+        danger
+        onConfirm={commit}
+        onCancel={() => setConfirmOpen(false)}
+      />
+    </Card>
+  );
+}
+
+// TEMP one-off tool — import IPT historical unit data, a brand-new division
+// (see routes/adminImportIpt.js for the full derivation and the filtering
+// decisions the user made: rows owned by "Terex" and rows with status
+// Return/Need QC were excluded entirely; a material with only "No SN" rows
+// becomes non-serialized stock instead of individual units; homebase is
+// only set for Installed units, matched against the 9 official homebases —
+// anything else stays Unassigned). Also creates the "IPT" customer/division
+// and its Master Area/Homebase entries if they don't already exist. Preview
+// is always safe (read-only); Commit is a real write. Remove this component
+// (and its Settings entry) once the import is done and confirmed.
+function IptImportTool({ api, showToast }) {
+  const [preview, setPreview] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [committing, setCommitting] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [result, setResult] = useState(null);
+
+  const loadPreview = async () => {
+    setLoading(true);
+    try {
+      setPreview(await api.getIptImportPreview());
+    } catch (err) {
+      showToast(err.message || "Gagal memuat preview import");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const commit = async () => {
+    setCommitting(true);
+    try {
+      const r = await api.commitIptImport();
+      setResult(r);
+      setPreview(null);
+      showToast(`Import IPT selesai — ${r.inserted} unit baru ditambahkan`);
+    } catch (err) {
+      showToast(err.message || "Gagal menjalankan import");
+    } finally {
+      setCommitting(false);
+      setConfirmOpen(false);
+    }
+  };
+
+  const List = ({ items, render }) => (
+    <div className="max-h-40 overflow-y-auto border border-gray-100 rounded-lg divide-y divide-gray-50">
+      {items.map((r, i) => <div key={i} className="px-3 py-1.5 text-xs text-gray-600">{render(r)}</div>)}
+    </div>
+  );
+
+  return (
+    <Card className="p-5 space-y-3 text-sm">
+      <div>
+        <div className="font-semibold text-gray-800">Import Data Historis IPT (divisi baru)</div>
+        <div className="text-gray-500 text-xs mt-1">
+          Import satu kali dari "Data Material MS IPT-Terex - Online.csv" — akan membuat divisi IPT, Master
+          Area/Homebase resminya (9 homebase), Master Material yang belum ada, lalu menambahkan unit dengan
+          Serial Number dan stok non-serial. Baris kepemilikan "Terex" dan berstatus "Return"/"Need QC" sudah
+          dikeluarkan sesuai instruksi. Preview di bawah selalu aman (tidak menulis apa pun) — hanya tombol
+          "Jalankan Import" yang benar-benar mengubah data.
+        </div>
+      </div>
+
+      <GhostButton onClick={loadPreview} disabled={loading}>{loading ? "Memuat..." : "Muat Preview"}</GhostButton>
+
+      {preview && (
+        <div className="pt-2 border-t border-gray-50 space-y-3">
+          <div className="text-xs text-gray-700 space-y-1">
+            <div>Divisi IPT: <span className="font-semibold">{preview.customerExists ? "sudah ada" : "akan dibuat"}</span></div>
+            <div>Master Area baru: <span className="font-semibold">{preview.areasToCreate.length}</span></div>
+            <div>
+              Master Homebase baru: <span className="font-semibold">{preview.homebasesToCreate.length}</span>
+              {preview.homebasesAlreadyExist.length > 0 && <span className="text-gray-400"> · {preview.homebasesAlreadyExist.length} sudah ada, dipakai ulang ({preview.homebasesAlreadyExist.join(", ")})</span>}
+            </div>
+            <div>Unit Serial Number baru: <span className="font-semibold">{preview.willInsert}</span>
+              {preview.willSkip > 0 && <span className="text-gray-400"> · {preview.willSkip} dilewati (SN sudah ada di sistem)</span>}
+            </div>
+            <div>Stok non-serial (material tanpa SN individual): <span className="font-semibold">{preview.nonSerialTotal}</span> unit di {Object.keys(preview.nonSerialStock).length} material</div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-2 text-xs">
+            {Object.entries(preview.byStatus).map(([k, v]) => (
+              <div key={k} className="bg-gray-50 rounded-lg px-3 py-2">
+                <div className="text-gray-400">{k}</div>
+                <div className="font-semibold text-gray-800">{v}</div>
+              </div>
+            ))}
+          </div>
+
+          {preview.materialsToCreate.length > 0 && (
+            <div>
+              <div className="text-xs font-medium text-gray-700 mb-1">Master Material baru yang akan dibuat ({preview.materialsToCreate.length})</div>
+              <List items={preview.materialsToCreate} render={(m) => <>{m.name} <span className="text-gray-400">· {m.category} · {m.serialized ? "serialized" : "non-serial"}</span></>} />
+            </div>
+          )}
+
+          {Object.keys(preview.nonSerialStock).length > 0 && (
+            <div>
+              <div className="text-xs font-medium text-gray-700 mb-1">Stok non-serial per material</div>
+              <List items={Object.entries(preview.nonSerialStock)} render={([m, s]) => <>{m} — ready {s.ready}, faulty {s.faulty}</>} />
+            </div>
+          )}
+
+          {preview.willSkip > 0 && (
+            <div>
+              <div className="text-xs font-medium text-gray-700 mb-1">Dilewati — SN sudah ada di sistem ({preview.willSkip})</div>
+              <List items={preview.skippedSns} render={(s) => <>{s.sn} · {s.material}</>} />
+            </div>
+          )}
+
+          <div>
+            <div className="text-xs font-medium text-gray-700 mb-1">Unit Serial Number per material</div>
+            <List items={Object.entries(preview.byMaterial)} render={([m, n]) => <>{m} — {n} unit</>} />
+          </div>
+
+          <GhostButton onClick={() => setConfirmOpen(true)} className="border-red-200 text-red-600 hover:bg-red-50">
+            Jalankan Import
+          </GhostButton>
+        </div>
+      )}
+
+      {result && (
+        <div className="pt-2 border-t border-gray-50 text-xs text-emerald-700">
+          ✓ Selesai — {result.inserted} unit Serial Number ditambahkan, {result.materialsToCreate.length} Master Material baru, {result.homebasesToCreate.length} Homebase baru.
+        </div>
+      )}
+
+      <ConfirmDialog
+        open={confirmOpen}
+        title="Jalankan Import IPT"
+        message={preview ? `Divisi IPT ${preview.customerExists ? "sudah ada" : "akan dibuat"}, ${preview.homebasesToCreate.length} Homebase baru dan ${preview.materialsToCreate.length} Master Material baru akan dibuat, ${preview.willInsert} unit Serial Number dan stok non-serial di ${Object.keys(preview.nonSerialStock).length} material akan ditambahkan. Tindakan ini mengubah data produksi. Lanjutkan?` : ""}
+        confirmLabel={committing ? "Menjalankan..." : "Ya, Jalankan Import"}
         danger
         onConfirm={commit}
         onCancel={() => setConfirmOpen(false)}
@@ -8995,7 +9137,7 @@ export default function App() {
     consumableStock: ["Stock Consumable", ""],
     serialDetail: ["Warehouse Stock", "Detail Serial Number"],
     returnToCustomer: ["Pengembalian ke Customer", ""],
-    databaseMSG: ["Database — MSG", ""], databaseRGR: ["Database — RGR", ""], databasePIM: ["Database — PIM", ""], databaseTeleglobal: ["Database — Teleglobal", ""],
+    databaseMSG: ["Database — MSG", ""], databaseRGR: ["Database — RGR", ""], databasePIM: ["Database — PIM", ""], databaseTeleglobal: ["Database — Teleglobal", ""], databaseIPT: ["Database — IPT", ""],
     reports: ["Reports", ""], reportsFaulty: ["Reports", ""], reportsRecon: ["Reports", ""],
     masterMaterial: ["Master Data", ""], masterSite: ["Master Data", ""], masterHomebase: ["Master Data", ""], masterArea: ["Master Data", ""], masterCustomer: ["Master Data", ""], masterConsumable: ["Master Data", ""],
     users: ["User Management", ""], settings: ["Settings", ""],
@@ -9085,6 +9227,7 @@ export default function App() {
   else if (page === "databaseRGR") content = <DivisionDatabasePage customer="RGR" material={dbMaterialFilter} api={api} deliveries={deliveries} role={role} showToast={showToast} materials={materials} onBack={() => goto("dashboard")} />;
   else if (page === "databasePIM") content = <DivisionDatabasePage customer="PIM" material={dbMaterialFilter} api={api} deliveries={deliveries} role={role} showToast={showToast} materials={materials} onBack={() => goto("dashboard")} />;
   else if (page === "databaseTeleglobal") content = <DivisionDatabasePage customer="Teleglobal" material={dbMaterialFilter} api={api} deliveries={deliveries} role={role} showToast={showToast} materials={materials} onBack={() => goto("dashboard")} />;
+  else if (page === "databaseIPT") content = <DivisionDatabasePage customer="IPT" material={dbMaterialFilter} api={api} deliveries={deliveries} role={role} showToast={showToast} materials={materials} onBack={() => goto("dashboard")} />;
   else if (page === "movement") content = <StockMovement movements={movements} filter={movementFilter} setFilter={setMovementFilter} deliveries={deliveries} />;
   else if (page === "serialDetail") content = <MaterialSerialDetail material={serialMaterial} customer={serialCustomer || undefined} materials={materials} api={api} onBack={() => goto("stock")} highlightSerial={highlightSerial} highlightToken={highlightToken} deliveries={deliveries} role={role} showToast={showToast} />;
   else if (page === "toolStock") content = <ToolStockPage tools={tools} setPage={goto} setToolSerialName={setToolSerialName} onSubmitReceipt={createToolReceipt} showToast={showToast} role={role} />;
@@ -9266,6 +9409,7 @@ export default function App() {
       {role === ROLES.MANAGER && <StockConsistencyCheck api={api} showToast={showToast} />}
       {role === ROLES.MANAGER && <PimImportTool api={api} showToast={showToast} />}
       {role === ROLES.MANAGER && <PimFaultyFixTool api={api} showToast={showToast} />}
+      {role === ROLES.MANAGER && <IptImportTool api={api} showToast={showToast} />}
       <AppVersionInfo api={api} />
     </div>
   );
