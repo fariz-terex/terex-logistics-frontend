@@ -10,7 +10,6 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
 } from "recharts";
 import Papa from "papaparse";
-import * as XLSX from "xlsx";
 
 /* ============================================================
    MOCK DATA LAYER (stand-in for backend/database)
@@ -365,6 +364,82 @@ function usePersistedState(key, initial) {
     return next;
   });
   return [value, set];
+}
+
+// Form drafts: the long create-forms (Delivery, Return, Reconciliation,
+// Replacement) lost everything on a refresh, a dropped connection mid-submit,
+// or an accidental navigation — painful for field staff on slow links. The
+// form's text/selection state is autosaved to localStorage per user (so it
+// also survives the tab closing) and offered back the next time the form
+// opens. Photos are deliberately NOT stored: they're large base64 blobs that
+// would blow the storage quota, so they have to be re-attached.
+const DRAFT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+function readDraft(key) {
+  try {
+    const d = JSON.parse(localStorage.getItem(key) || "null");
+    if (!d || !d.data || Date.now() - d.savedAt > DRAFT_TTL_MS) {
+      if (d) localStorage.removeItem(key);
+      return null;
+    }
+    return d;
+  } catch { return null; }
+}
+function formatAgo(ts) {
+  const mins = Math.max(0, Math.round((Date.now() - ts) / 60000));
+  if (mins < 1) return "baru saja";
+  if (mins < 60) return `${mins} menit lalu`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs} jam lalu`;
+  return `${Math.round(hrs / 24)} hari lalu`;
+}
+function useFormDraft({ userId, formKey, enabled = true, snapshot, isEmpty, onRestore }) {
+  const key = `terex_draft:${userId || "anon"}:${formKey}`;
+  const [offer, setOffer] = useState(() => (enabled ? readDraft(key) : null));
+  const doneRef = React.useRef(false); // set once submitted, so a late autosave can't resurrect the draft
+  const latest = React.useRef({});
+  latest.current = { snapshot, isEmpty, offer, enabled };
+
+  const write = () => {
+    const l = latest.current;
+    if (doneRef.current || !l.enabled || l.offer) return;
+    try {
+      if (l.isEmpty) localStorage.removeItem(key);
+      else localStorage.setItem(key, JSON.stringify({ savedAt: Date.now(), data: l.snapshot }));
+    } catch { /* storage full/unavailable — drafts are best-effort */ }
+  };
+  const json = JSON.stringify(snapshot);
+  React.useEffect(() => {
+    const t = setTimeout(write, 600);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [json, offer, enabled]);
+  // Flush on unmount so the last few edits aren't lost to the debounce.
+  React.useEffect(() => () => write(), []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const drop = () => { try { localStorage.removeItem(key); } catch { /* ignore */ } };
+  return {
+    offer,
+    restore: () => { onRestore(offer.data); setOffer(null); },
+    discard: () => { drop(); setOffer(null); },
+    // No-op when drafts are disabled (e.g. the Edit/resubmit mode of a form
+    // shares its create-mode key — must not wipe an unrelated draft).
+    clear: () => { if (!latest.current.enabled) return; doneRef.current = true; drop(); },
+  };
+}
+function DraftBanner({ draft, note }) {
+  if (!draft.offer) return null;
+  return (
+    <Card className="p-4 border-amber-200 bg-amber-50/60 flex flex-wrap items-center gap-3">
+      <div className="flex-1 min-w-[14rem] text-sm text-amber-900">
+        <span className="font-semibold">Draft tersimpan ({formatAgo(draft.offer.savedAt)}).</span> Lanjutkan pengisian sebelumnya?
+        {note && <div className="text-xs text-amber-700 mt-0.5">{note}</div>}
+      </div>
+      <div className="flex gap-2">
+        <PrimaryButton onClick={draft.restore}>Lanjutkan Draft</PrimaryButton>
+        <GhostButton onClick={draft.discard}>Buang</GhostButton>
+      </div>
+    </Card>
+  );
 }
 
 function Card({ children, className = "" }) {
@@ -1374,6 +1449,16 @@ function DeliveryCreate({ onSubmit, onCancel, materials, tools, consumables, sit
   const [matSearch, setMatSearch] = useState("");
   const [customer, setCustomer] = useState("");
 
+  const draft = useFormDraft({
+    userId: currentUser?.id, formKey: "deliveryCreate",
+    snapshot: { step, homebase, site, siteSearch, keperluan, otherDesc, note, cart, customer },
+    isEmpty: !homebase && !keperluan && !otherDesc && !note && !customer && !Object.values(cart).some((q) => q > 0),
+    onRestore: (d) => {
+      setStep(d.step || 1); setHomebase(d.homebase || ""); setSite(d.site || ""); setSiteSearch(d.siteSearch || "");
+      setKeperluan(d.keperluan || ""); setOtherDesc(d.otherDesc || ""); setNote(d.note || ""); setCart(d.cart || {}); setCustomer(d.customer || "");
+    },
+  });
+
   const isManager = currentUser?.role === ROLES.MANAGER;
   const myDivisions = currentUser?.customers || [];
   const needsDivisionPicker = isManager || myDivisions.length > 1;
@@ -1430,13 +1515,17 @@ function DeliveryCreate({ onSubmit, onCancel, materials, tools, consumables, sit
     setCart((c) => ({ ...c, [matId]: n }));
   };
 
-  const cartItems = Object.entries(cart).filter(([, q]) => q > 0).map(([id, q]) => ({ material: catalogItems.find((m) => m.id === id), qty: q }));
+  // `.filter(i => i.material)`: a restored draft can reference an item that
+  // has since been deactivated/removed from the catalog — drop it quietly
+  // rather than crash on `undefined.ready` below.
+  const cartItems = Object.entries(cart).filter(([, q]) => q > 0).map(([id, q]) => ({ material: catalogItems.find((m) => m.id === id), qty: q })).filter((i) => i.material);
   const step1Valid = homebase && keperluan && (keperluan !== "Other" || otherDesc.trim()) && (!needsDivisionPicker || (customer && divisionStock !== null));
   const step2Valid = cartItems.length > 0 && cartItems.every((i) => i.qty <= i.material.ready);
 
   return (
     <div className="p-4 sm:p-8 max-w-3xl mx-auto space-y-6">
       <SectionTitle title="Buat Request — Warehouse to Homebase" subtitle="Ajukan kebutuhan material untuk homebase / site Anda" />
+      <DraftBanner draft={draft} />
 
       <div className="flex items-center gap-2">
         {["Detail Kebutuhan", "Pilih Material", "Review & Submit"].map((label, i) => (
@@ -1600,7 +1689,7 @@ function DeliveryCreate({ onSubmit, onCancel, materials, tools, consumables, sit
           </div>
           <div className="flex justify-between pt-2">
             <GhostButton onClick={() => setStep(2)}><ChevronLeft size={16} /> Kembali</GhostButton>
-            <PrimaryButton onClick={() => onSubmit({ homebase, site: site ? sites.find((s) => s.code === site)?.name : "", keperluan: keperluan === "Other" ? `Other - ${otherDesc}` : keperluan, note, items: cartItems.map((i) => ({ material: i.material.name, qty: i.qty, type: i.material._type })), ...(needsDivisionPicker ? { customer } : {}) })}>
+            <PrimaryButton onClick={async () => { if (await onSubmit({ homebase, site: site ? sites.find((s) => s.code === site)?.name : "", keperluan: keperluan === "Other" ? `Other - ${otherDesc}` : keperluan, note, items: cartItems.map((i) => ({ material: i.material.name, qty: i.qty, type: i.material._type })), ...(needsDivisionPicker ? { customer } : {}) })) draft.clear(); }}>
               <Check size={16} /> Submit Request
             </PrimaryButton>
           </div>
@@ -3902,6 +3991,20 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
   );
   const [docs, setDocs] = useState(initialData?.docs ? { ...initialData.docs } : { beforePacking: "", afterPacking: "", weighing: "" });
 
+  // Prefilled-from-Replacement and Edit/resubmit runs start from real data,
+  // so only a plain blank "create" gets a draft. Photos aren't saved.
+  const stripPhotos = (list) => list.map((it) => ({ material: it.material, serials: it.serials.map((s) => ({ sn: s.sn, photo: "" })) }));
+  const draft = useFormDraft({
+    userId: currentUser?.id, formKey: "returnFaultyCreate",
+    enabled: !isEdit && !prefillItems?.length,
+    snapshot: { customer, items: stripPhotos(items) },
+    isEmpty: !customer && items.every((it) => !it.material && it.serials.every((s) => !s.sn.trim())),
+    onRestore: (d) => {
+      setCustomer(d.customer || "");
+      if (d.items?.length) setItems(d.items);
+    },
+  });
+
   const addItem = () => setItems([...items, { material: "", serials: [{ sn: "", photo: "" }] }]);
   const removeItem = (itemIdx) => setItems(items.filter((_, i) => i !== itemIdx));
   const updateItem = (itemIdx, field, val) => setItems(items.map((it, i) => (i === itemIdx ? { ...it, [field]: val } : it)));
@@ -3933,6 +4036,7 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
         title={isEdit ? `Perbaiki Request — Homebase to Warehouse — ${excludeId}` : "Buat Request — Homebase to Warehouse"}
         subtitle={isEdit ? "Perbarui data sesuai catatan revisi, lalu kirim ulang ke Logistics" : "Input Serial Number secara manual untuk setiap unit — bisa lebih dari satu material"}
       />
+      <DraftBanner draft={draft} note="Foto tidak ikut tersimpan — perlu diunggah ulang." />
 
       {!isEdit && needsDivisionPicker && (
         <Card className="p-5">
@@ -4027,7 +4131,7 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
 
       <div className="flex justify-between">
         <GhostButton onClick={onCancel}>Batal</GhostButton>
-        <PrimaryButton disabled={!valid} onClick={() => onSubmit(buildSubmission())}>
+        <PrimaryButton disabled={!valid} onClick={async () => { if (await onSubmit(buildSubmission())) draft.clear(); }}>
           <Check size={16} /> {isEdit ? "Kirim Ulang ke Logistics" : "Submit Return"}
         </PrimaryButton>
       </div>
@@ -4325,6 +4429,19 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
         }))
   );
 
+  const draft = useFormDraft({
+    userId: currentUser?.id, formKey: "reconciliationCreate",
+    enabled: !isEdit,
+    snapshot: { customer, homebase, period, rows: rows.map((r) => ({ ...r, photo: "" })) },
+    // The form opens pre-seeded with 3 default rows, so "empty" means nothing
+    // has been changed from those defaults, not that there are no rows.
+    isEmpty: !customer && !homebase && rows.every((r) => !r.reason && r.actualQty === r.systemQty && (r.serials || []).every((s) => !s)),
+    onRestore: (d) => {
+      setCustomer(d.customer || ""); setHomebase(d.homebase || ""); setPeriod(d.period || "");
+      if (d.rows?.length) setRows(d.rows);
+    },
+  });
+
   const updateRow = (idx, patch) => setRows(rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
   const updateSerial = (idx, si, val) => setRows(rows.map((r, i) => (i === idx ? { ...r, serials: r.serials.map((s, j) => (j === si ? val : s)) } : r)));
 
@@ -4337,6 +4454,7 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
         title={isEdit ? `Perbaiki Reconciliation — ${excludeId}` : "Buat Reconciliation"}
         subtitle={isEdit ? "Perbarui data sesuai catatan revisi, lalu kirim ulang ke Logistics" : "Verifikasi fisik material dan input SN secara manual"}
       />
+      <DraftBanner draft={draft} note="Foto tidak ikut tersimpan — perlu diunggah ulang." />
       {isEdit && revisionNote && (
         <Card className="p-4 border-red-200 bg-red-50/50 flex items-start gap-3">
           <AlertTriangle size={18} className="text-red-500 mt-0.5 shrink-0" />
@@ -4406,7 +4524,7 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
 
       <div className="flex justify-between">
         <GhostButton onClick={onCancel}>Batal</GhostButton>
-        <PrimaryButton disabled={!valid} onClick={() => onSubmit({ homebase, period, items: rows, ...(!isEdit && needsDivisionPicker ? { customer } : {}) })}>
+        <PrimaryButton disabled={!valid} onClick={async () => { if (await onSubmit({ homebase, period, items: rows, ...(!isEdit && needsDivisionPicker ? { customer } : {}) })) draft.clear(); }}>
           <Check size={16} /> {isEdit ? "Kirim Ulang ke Logistics" : "Submit Reconciliation"}
         </PrimaryButton>
       </div>
@@ -4518,7 +4636,7 @@ function ReconciliationDetail({ r, onBack, onApprove, onRevise, onEdit, role }) 
    replace that flow — it just feeds into it).
    ============================================================ */
 
-function MaterialSwapPage({ swaps, api, materials, sites, homebases, onSubmit, showToast, setPage, setReturnPrefill, setSelectedSwap, role }) {
+function MaterialSwapPage({ swaps, api, materials, sites, homebases, onSubmit, showToast, setPage, setReturnPrefill, setSelectedSwap, role, userId }) {
   const [newSn, setNewSn] = useState("");
   const [homebase, setHomebase] = useState("");
   const [site, setSite] = useState(""); // stores the site CODE, resolved to a name on submit — same pattern as Delivery Request
@@ -4526,6 +4644,18 @@ function MaterialSwapPage({ swaps, api, materials, sites, homebases, onSubmit, s
   const [oldSn, setOldSn] = useState("");
   const [oldMaterial, setOldMaterial] = useState("");
   const [note, setNote] = useState("");
+  // This form stays on screen after a successful submit (it just resets), so
+  // the draft is never explicitly cleared — resetting the fields makes the
+  // snapshot empty, and the autosave removes the stored draft on its own.
+  const draft = useFormDraft({
+    userId, formKey: "materialSwap",
+    snapshot: { newSn, homebase, site, siteSearch, oldSn, oldMaterial, note },
+    isEmpty: !newSn && !homebase && !site && !siteSearch && !oldSn && !oldMaterial && !note,
+    onRestore: (d) => {
+      setNewSn(d.newSn || ""); setHomebase(d.homebase || ""); setSite(d.site || ""); setSiteSearch(d.siteSearch || "");
+      setOldSn(d.oldSn || ""); setOldMaterial(d.oldMaterial || ""); setNote(d.note || "");
+    },
+  });
   const [photo, setPhoto] = useState("");
   const [oldPhoto, setOldPhoto] = useState("");
   const [newInfo, setNewInfo] = useState(undefined); // undefined = not checked, null = invalid, object = valid
@@ -4639,6 +4769,8 @@ function MaterialSwapPage({ swaps, api, materials, sites, homebases, onSubmit, s
   return (
     <div className="p-4 sm:p-8 space-y-5">
       <SectionTitle title="Replacement" subtitle={canSubmit ? "Konfirmasi unit yang dipasang di site — isi unit lama hanya jika ini penggantian karena rusak" : "Riwayat instalasi & penggantian material"} />
+
+      {canSubmit && <DraftBanner draft={draft} note="Foto tidak ikut tersimpan — perlu diunggah ulang." />}
 
       {canSubmit && lastSwap && lastSwap.oldSn && (
         <Card className="p-4 border-emerald-200 bg-emerald-50/50 flex items-center justify-between">
@@ -6557,7 +6689,12 @@ function parseSpreadsheetFile(file, { complete }) {
     return;
   }
   const reader = new FileReader();
-  reader.onload = (e) => {
+  reader.onload = async (e) => {
+    // Loaded on demand: the Excel parser is a big library only needed the
+    // moment someone actually imports a spreadsheet, so it stays out of the
+    // initial download (matters on slow connections).
+    const mod = await import("xlsx");
+    const XLSX = mod.default || mod;
     const wb = XLSX.read(e.target.result, { type: "array" });
     const sheet = wb.Sheets[wb.SheetNames[0]];
     const data = XLSX.utils.sheet_to_json(sheet, { defval: "", raw: false });
@@ -8436,6 +8573,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(initialSession?.user || null);
   const [routeInit, setRouteInit] = useState(false); // true once the URL hash has been applied after login/restore
   const [sessionNotice, setSessionNotice] = useState(""); // shown on the Login screen after an expired/rejected session
+  const [online, setOnline] = useState(() => navigator.onLine !== false);
   const [dataLoading, setDataLoading] = useState(false);
   const [apiError, setApiError] = useState("");
   const [toast, setToast] = useState(null); // { message }
@@ -8774,6 +8912,19 @@ export default function App() {
     return () => { window.removeEventListener("popstate", onNav); window.removeEventListener("hashchange", onNav); };
   }, [authToken]);
 
+  // Connectivity: tell people plainly when the device is offline (instead of
+  // every action just failing with a vague error), and refresh the data the
+  // moment the connection comes back.
+  const silentReloadRef = React.useRef(null);
+  silentReloadRef.current = () => loadAllData({ silent: true });
+  React.useEffect(() => {
+    const goOnline = () => { setOnline(true); if (authToken) silentReloadRef.current?.(); };
+    const goOffline = () => setOnline(false);
+    window.addEventListener("online", goOnline);
+    window.addEventListener("offline", goOffline);
+    return () => { window.removeEventListener("online", goOnline); window.removeEventListener("offline", goOffline); };
+  }, [authToken]);
+
   /* Navigates directly to a specific record's detail view — clears the other
      two selection states in the same pass so stale selections from a previous
      module don't linger (goto() alone would race with setting the new id). */
@@ -9030,7 +9181,8 @@ export default function App() {
       setDeliveries((prev) => [created, ...prev]);
       showToast(`Delivery Request ${created.id} berhasil dibuat`);
       goto("delivery");
-    } catch (err) { setApiError(err.message); }
+      return true; // lets the form know it can drop its saved draft
+    } catch (err) { setApiError(err.message); return false; }
   };
 
   const approveDelivery = async (id) => {
@@ -9106,7 +9258,8 @@ export default function App() {
       const created = await api.createReturn(data);
       setReturns((prev) => [created, ...prev]);
       goto("returnFaulty");
-    } catch (err) { setApiError(err.message); }
+      return true;
+    } catch (err) { setApiError(err.message); return false; }
   };
 
   const approveReturn = async (id) => {
@@ -9173,7 +9326,8 @@ export default function App() {
       const created = await api.createReconciliation(data);
       setReconciliations((prev) => [created, ...prev]);
       goto("reconciliation");
-    } catch (err) { setApiError(err.message); }
+      return true;
+    } catch (err) { setApiError(err.message); return false; }
   };
 
   const approveRecon = async (id) => {
@@ -9464,7 +9618,7 @@ export default function App() {
     const s = selectedSwap && materialSwaps.find((x) => x.id === selectedSwap);
     content = s
       ? <MaterialSwapDetail swap={s} onBack={() => setSelectedSwap(null)} setPage={goto} setReturnPrefill={setReturnPrefill} />
-      : <MaterialSwapPage swaps={materialSwaps} api={api} materials={materials} sites={sites} homebases={homebases} onSubmit={submitMaterialSwap} showToast={showToast} setPage={goto} setReturnPrefill={setReturnPrefill} setSelectedSwap={setSelectedSwap} role={role} />;
+      : <MaterialSwapPage userId={currentUser?.id} swaps={materialSwaps} api={api} materials={materials} sites={sites} homebases={homebases} onSubmit={submitMaterialSwap} showToast={showToast} setPage={goto} setReturnPrefill={setReturnPrefill} setSelectedSwap={setSelectedSwap} role={role} />;
   }
   else if (page === "stock") content = <WarehouseStock materials={materials} setPage={goto} setMovementFilter={setMovementFilter} setSerialMaterial={setSerialMaterial} setSerialCustomer={setSerialCustomer} setDbMaterialFilter={setDbMaterialFilter} onSubmitReceipt={createReceipt} showToast={showToast} clearSerialHighlight={() => setHighlightSerial("")} currentUser={currentUser} customers={customers} role={role} api={api} />;
   else if (page === "returnToCustomer") content = <ReturnToCustomerPage api={api} showToast={showToast} currentUser={currentUser} customers={customers} onBack={() => goto("delivery")} />;
@@ -9669,6 +9823,11 @@ export default function App() {
           unreadCount={unreadNotifCount} onMarkAllRead={markAllNotifsRead}
           onMenuClick={() => setMobileSidebarOpen(true)}
         />
+        {!online && (
+          <div className="bg-amber-50 border-b border-amber-200 text-amber-800 text-sm px-4 sm:px-8 py-2.5">
+            Tidak ada koneksi internet. Isian form tetap tersimpan sebagai draft di perangkat ini — kirim ulang setelah tersambung.
+          </div>
+        )}
         {apiError && (
           <div className="bg-red-50 border-b border-red-100 text-red-700 text-sm px-4 sm:px-8 py-2.5 flex items-center justify-between">
             <span>{apiError}</span>

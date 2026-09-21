@@ -19,6 +19,20 @@ export default defineConfig({
     __APP_COMMIT__: JSON.stringify(commitHash()),
     __APP_BUILD_DATE__: JSON.stringify(new Date().toISOString()),
   },
+  build: {
+    rollupOptions: {
+      output: {
+        // Third-party libraries change far less often than App.jsx. Keeping
+        // them in their own chunks means a normal deploy only makes people
+        // re-download the app chunk, not React + icons + CSV parser again.
+        manualChunks: {
+          react: ["react", "react-dom"],
+          icons: ["lucide-react"],
+          csv: ["papaparse"],
+        },
+      },
+    },
+  },
   server: {
     host: true,
     port: 5173,
