@@ -552,6 +552,50 @@ function sortRows(rows, sort) {
   });
 }
 
+// Client-side pagination for the long lists (Database, Delivery). `sig`
+// captures whatever filters/sort produced the rows — when it changes the
+// page snaps back to 1 without needing an effect, and the page/size are kept
+// in the persisted UI store so coming back from a detail view lands on the
+// same page.
+function usePagination(key, sig, total, defaultSize = 50) {
+  const [size, setSizeState] = usePersistedState(`${key}:size`, defaultSize);
+  const [pg, setPg] = usePersistedState(`${key}:page`, { sig, page: 1 });
+  const pageCount = Math.max(1, Math.ceil(total / size));
+  const page = Math.min(pg.sig === sig ? pg.page : 1, pageCount);
+  return {
+    page, size, pageCount,
+    setPage: (p) => setPg({ sig, page: p }),
+    setSize: (n) => { setSizeState(n); setPg({ sig, page: 1 }); },
+    slice: (rows) => rows.slice((page - 1) * size, page * size),
+  };
+}
+
+function Pagination({ total, pager, sizes = [25, 50, 100] }) {
+  if (total <= sizes[0]) return null;
+  const { page, size, pageCount, setPage, setSize } = pager;
+  const start = (page - 1) * size + 1;
+  const end = Math.min(total, page * size);
+  const btn = "w-7 h-7 rounded-md border border-gray-200 flex items-center justify-center text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed";
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 border-t border-gray-100 text-xs text-gray-500">
+      <div>Menampilkan {start}–{end} dari {total}</div>
+      <div className="flex items-center gap-4">
+        <label className="flex items-center gap-1.5">
+          Per halaman
+          <select value={size} onChange={(e) => setSize(Number(e.target.value))} className="border border-gray-200 rounded-md px-1.5 py-1 bg-white outline-none">
+            {sizes.map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </label>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setPage(page - 1)} disabled={page <= 1} className={btn} aria-label="Halaman sebelumnya"><ChevronLeft size={14} /></button>
+          <span>Hal. {page} / {pageCount}</span>
+          <button onClick={() => setPage(page + 1)} disabled={page >= pageCount} className={btn} aria-label="Halaman berikutnya"><ChevronRight size={14} /></button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ============================================================
    SIDEBAR
    ============================================================ */
@@ -1257,7 +1301,11 @@ function DeliveryList({ deliveries, setSelected, setPage, role, page, userCustom
   const [filter, setFilter] = usePersistedState("delivery:filter", "All");
   const statuses = ["All", "Waiting Logistics Approval", "In Progress", "Selesai Dikirim", "Rejected"];
   const countFor = (s) => s === "All" ? deliveries.length : deliveries.filter((d) => d.status === s || (s === "In Progress" && ["In Progress", "Preparing", "Shipped", "Waiting Stock Assignment"].includes(d.status))).length;
-  const filtered = filter === "All" ? deliveries : deliveries.filter((d) => d.status === filter || (filter === "In Progress" && ["In Progress", "Preparing", "Shipped", "Waiting Stock Assignment"].includes(d.status)));
+  const [sort, setSort] = usePersistedState("delivery:sort", { key: null, dir: "asc" });
+  const handleSort = (key) => setSort((prev) => (prev.key === key ? { key, dir: prev.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" }));
+  const filtered = sortRows(filter === "All" ? deliveries : deliveries.filter((d) => d.status === filter || (filter === "In Progress" && ["In Progress", "Preparing", "Shipped", "Waiting Stock Assignment"].includes(d.status))), sort);
+  const pager = usePagination("delivery", JSON.stringify([filter, sort]), filtered.length);
+  const visible = pager.slice(filtered);
 
   return (
     <div className="p-4 sm:p-8 space-y-5">
@@ -1275,18 +1323,18 @@ function DeliveryList({ deliveries, setSelected, setPage, role, page, userCustom
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
-              <th className="px-5 py-3 font-medium">No. Request</th>
-              <th className="px-5 py-3 font-medium">Requester</th>
-              <th className="px-5 py-3 font-medium">Homebase</th>
-              <th className="px-5 py-3 font-medium">Site</th>
-              <th className="px-5 py-3 font-medium">Keperluan</th>
-              <th className="px-5 py-3 font-medium">Tgl</th>
-              <th className="px-5 py-3 font-medium">Status</th>
+              <SortableHeader label="No. Request" sortKey="id" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Requester" sortKey="requester" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Homebase" sortKey="homebase" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Site" sortKey="site" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Keperluan" sortKey="keperluan" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Tgl" sortKey="date" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Status" sortKey="status" sort={sort} onSort={handleSort} />
               <th className="px-5 py-3 font-medium"></th>
             </tr>
           </thead>
           <tbody>
-            {filtered.map((d) => (
+            {visible.map((d) => (
               <tr key={d.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/50">
                 <td className="px-5 py-3 font-medium text-gray-800">{d.id}</td>
                 <td className="px-5 py-3 text-gray-600">{d.requester}</td>
@@ -1308,6 +1356,7 @@ function DeliveryList({ deliveries, setSelected, setPage, role, page, userCustom
           </tbody>
         </table>
         </div>
+        <Pagination total={filtered.length} pager={pager} />
       </Card>
     </div>
   );
@@ -3179,21 +3228,54 @@ function MaterialSerialDetail({ material, customer, customerOptions, materials, 
     if (highlightSerial) setHighlighted(highlightSerial);
   }, [highlightSerial, highlightToken]);
 
-  // Scroll the searched-for SN into view and briefly flash it once the list
-  // has actually loaded, so it's obvious which row is the one being looked for.
-  React.useEffect(() => {
-    if (loading || !highlighted) return;
-    const el = rowRefs.current[highlighted];
-    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
-    const timer = setTimeout(() => setHighlighted(null), 2200);
-    return () => clearTimeout(timer);
-  }, [loading, highlighted]);
-
   const filtered = search ? serials.filter((s) => s.sn.toLowerCase().includes(search.toLowerCase())) : serials;
   const statusOptions = statusOptionsProp || ["All", "Ready", "Reserved", "In Transit", "Delivered", "Installed", "Faulty", "Sent to Customer"];
   const withMaterialColumn = showMaterialColumn ?? !materialFilter;
   const dateCols = ["Tanggal Terima", "Tanggal Install", "Tanggal Replacement", "Dikirim ke Warehouse Terex", "Return ke Customer"];
   const colCount = 3 + (withMaterialColumn ? 1 : 0) + (canManage ? 1 : 0) + (inlineDates ? dateCols.length : 0);
+
+  const screenKey = `serial:${customer || ""}|${material || ""}`;
+  const [sort, setSort] = usePersistedState(`${screenKey}:sort`, { key: null, dir: "asc" });
+  const handleSort = (key) => setSort((prev) => (prev.key === key ? { key, dir: prev.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" }));
+  // `_ref` mirrors exactly what the Referensi column displays, so sorting by
+  // it matches what's on screen.
+  const sorted = sortRows(filtered.map((s) => ({ ...s, _ref: s.current_ref || s.received_ref || null })), sort);
+  const pager = usePagination(screenKey, JSON.stringify([status, search, materialFilter, customerFilter, sort]), sorted.length);
+  const visible = pager.slice(sorted);
+
+  // A SN picked from the global search may sit on a different page than the
+  // one showing — jump to it first, then scroll it into view and briefly
+  // flash it once the list has loaded, so it's obvious which row it is.
+  React.useEffect(() => {
+    if (loading || !highlighted) return;
+    const idx = sorted.findIndex((s) => s.sn === highlighted);
+    if (idx >= 0) {
+      const target = Math.floor(idx / pager.size) + 1;
+      if (target !== pager.page) { pager.setPage(target); return; }
+    }
+    const el = rowRefs.current[highlighted];
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    const timer = setTimeout(() => setHighlighted(null), 2200);
+    return () => clearTimeout(timer);
+  }, [loading, highlighted, pager.page]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleExport = () => {
+    const fields = ["Serial Number", "Material", "Divisi", "Status", "Referensi", "Tanggal Terima", "Tanggal Install", "Lokasi Install", "Tanggal Replacement", "Dikirim ke Warehouse Terex", "Return ke Customer", "Homebase"];
+    const data = sorted.map((s) => [
+      s.sn, s.material, s.customer || "", s.status,
+      s.current_ref ? describeRef(s.current_ref, deliveries) : (s.received_ref || ""),
+      s.received_date || "", s.installed_date || "", s.install_site || "", s.replacement_date || "",
+      s.shipped_to_warehouse_date || "", s.returned_to_customer_date || "", s.homebase || "",
+    ]);
+    // BOM so Excel reads the UTF-8 correctly (site names, punctuation).
+    const blob = new Blob(["﻿" + Papa.unparse({ fields, data })], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${(title || "serial_number").replace(/[^A-Za-z0-9]+/g, "_").toLowerCase()}_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   const submitDialog = async ({ ref, note }) => {
     setSaving(true); setDialogError("");
@@ -3216,6 +3298,7 @@ function MaterialSerialDetail({ material, customer, customerOptions, materials, 
       <SectionTitle
         title={title || (materialFilter ? `Serial Number — ${materialFilter}` : `Serial Number — ${customerFilter || "Semua Divisi"}`)}
         subtitle={subtitle || "Daftar unit per Serial Number dan status terkininya"}
+        right={<GhostButton onClick={handleExport}><Download size={15} /> Export CSV ({sorted.length})</GhostButton>}
       />
 
       <div className="flex flex-wrap gap-3 items-end">
@@ -3257,11 +3340,13 @@ function MaterialSerialDetail({ material, customer, customerOptions, materials, 
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
-              <th className="px-5 py-3 font-medium">Serial Number</th>
-              {withMaterialColumn && <th className="px-5 py-3 font-medium">Material</th>}
-              <th className="px-5 py-3 font-medium">Status</th>
-              <th className="px-5 py-3 font-medium">Referensi</th>
-              {inlineDates && dateCols.map((c) => <th key={c} className="px-5 py-3 font-medium whitespace-nowrap">{c}</th>)}
+              <SortableHeader label="Serial Number" sortKey="sn" sort={sort} onSort={handleSort} className="sticky left-0 z-10 bg-gray-50 border-r border-gray-100" />
+              {withMaterialColumn && <SortableHeader label="Material" sortKey="material" sort={sort} onSort={handleSort} />}
+              <SortableHeader label="Status" sortKey="status" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Referensi" sortKey="_ref" sort={sort} onSort={handleSort} />
+              {inlineDates && dateCols.map((c, i) => (
+                <SortableHeader key={c} label={c} sortKey={["received_date", "installed_date", "replacement_date", "shipped_to_warehouse_date", "returned_to_customer_date"][i]} sort={sort} onSort={handleSort} className="whitespace-nowrap" />
+              ))}
               {canManage && <th className="px-5 py-3 font-medium"></th>}
             </tr>
           </thead>
@@ -3271,7 +3356,7 @@ function MaterialSerialDetail({ material, customer, customerOptions, materials, 
             ) : filtered.length === 0 ? (
               <tr><td colSpan={colCount}><EmptyState text="Tidak ada Serial Number untuk filter ini." /></td></tr>
             ) : (
-              filtered.map((s) => {
+              visible.map((s) => {
                 const expanded = !inlineDates && expandedSn === s.sn;
                 const val = (v) => (v == null || v === "" ? "—" : v);
                 return (
@@ -3279,9 +3364,9 @@ function MaterialSerialDetail({ material, customer, customerOptions, materials, 
                 <tr
                   ref={(el) => { rowRefs.current[s.sn] = el; }}
                   onClick={inlineDates ? undefined : () => setExpandedSn(expanded ? null : s.sn)}
-                  className={`border-b border-gray-50 last:border-0 transition-colors duration-700 hover:bg-gray-50/50 ${inlineDates ? "" : "cursor-pointer"} ${highlighted === s.sn ? "bg-emerald-100" : ""}`}
+                  className={`group border-b border-gray-50 last:border-0 transition-colors duration-700 hover:bg-gray-50/50 ${inlineDates ? "" : "cursor-pointer"} ${highlighted === s.sn ? "bg-emerald-100" : ""}`}
                 >
-                  <td className="px-5 py-3 font-medium text-gray-800">
+                  <td className={`px-5 py-3 font-medium text-gray-800 sticky left-0 z-[1] border-r border-gray-100 transition-colors duration-700 ${highlighted === s.sn ? "bg-emerald-100" : "bg-white group-hover:bg-gray-50"}`}>
                     <span className="flex items-center gap-1.5">
                       {!inlineDates && (expanded ? <ChevronDown size={14} className="text-gray-400" /> : <ChevronRight size={14} className="text-gray-400" />)}
                       {s.sn}
@@ -3327,6 +3412,7 @@ function MaterialSerialDetail({ material, customer, customerOptions, materials, 
           </tbody>
         </table>
         </div>
+        {!loading && <Pagination total={sorted.length} pager={pager} />}
       </Card>
 
       <SendToCustomerDialog
