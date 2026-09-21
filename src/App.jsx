@@ -1192,8 +1192,8 @@ function DeliveryList({ deliveries, setSelected, setPage, role, page, userCustom
     <div className="p-4 sm:p-8 space-y-5">
       <RequestTabs page={page} setPage={setPage} role={role} userCustomers={userCustomers} />
       <SectionTitle
-        title="Delivery Request"
-        subtitle="Pengajuan dan pengiriman material ke homebase / site"
+        title="Warehouse to Homebase"
+        subtitle="Delivery Request — pengajuan dan pengiriman material ke homebase / site"
         right={role === ROLES.SPV || role === ROLES.MANAGER ? (
           <PrimaryButton onClick={() => setPage("deliveryCreate")}><Plus size={16} /> Buat Request</PrimaryButton>
         ) : null}
@@ -1316,7 +1316,7 @@ function DeliveryCreate({ onSubmit, onCancel, materials, tools, consumables, sit
 
   return (
     <div className="p-4 sm:p-8 max-w-3xl mx-auto space-y-6">
-      <SectionTitle title="Buat Delivery Request" subtitle="Ajukan kebutuhan material untuk homebase / site Anda" />
+      <SectionTitle title="Buat Request — Warehouse to Homebase" subtitle="Ajukan kebutuhan material untuk homebase / site Anda" />
 
       <div className="flex items-center gap-2">
         {["Detail Kebutuhan", "Pilih Material", "Review & Submit"].map((label, i) => (
@@ -2838,7 +2838,7 @@ function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMateri
   return (
     <div className="p-4 sm:p-8 space-y-5">
       <SectionTitle
-        title="Warehouse Stock" subtitle="Ketersediaan material di gudang pusat"
+        title="Stock Material" subtitle="Ketersediaan material di gudang pusat"
         right={canReceive ? (
           <div className="flex gap-2">
             <GhostButton onClick={() => { setShowBkbPanel(!showBkbPanel); setShowReceiptForm(false); }}><FileText size={15} /> Deteksi dari BKB</GhostButton>
@@ -3504,8 +3504,8 @@ function ReturnFaultyList({ returns, setSelected, setPage, role, page, userCusto
     <div className="p-4 sm:p-8 space-y-5">
       <RequestTabs page={page} setPage={setPage} role={role} userCustomers={userCustomers} />
       <SectionTitle
-        title="Return Material Faulty"
-        subtitle="Pengembalian material rusak oleh teknisi lapangan"
+        title="Homebase to Warehouse"
+        subtitle="Return Material Faulty — pengembalian material rusak oleh teknisi lapangan"
         right={role === ROLES.TECH || role === ROLES.MANAGER ? <PrimaryButton onClick={() => setPage("returnFaultyCreate")}><Plus size={16} /> Buat Return</PrimaryButton> : null}
       />
       <StatusFilterPills options={statuses.map((s) => ({ key: s, count: countFor(s) }))} value={filter} onChange={setFilter} />
@@ -3773,7 +3773,7 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
   return (
     <div className="p-4 sm:p-8 max-w-2xl mx-auto space-y-6">
       <SectionTitle
-        title={isEdit ? `Perbaiki Return Material Faulty — ${excludeId}` : "Buat Return Material Faulty"}
+        title={isEdit ? `Perbaiki Request — Homebase to Warehouse — ${excludeId}` : "Buat Request — Homebase to Warehouse"}
         subtitle={isEdit ? "Perbarui data sesuai catatan revisi, lalu kirim ulang ke Logistics" : "Input Serial Number secara manual untuk setiap unit — bisa lebih dari satu material"}
       />
 
@@ -4103,7 +4103,7 @@ function ReconciliationList({ items, setSelected, setPage, role }) {
   return (
     <div className="p-4 sm:p-8 space-y-5">
       <SectionTitle
-        title="Reconciliation Material"
+        title="Reconciliation"
         subtitle="Verifikasi fisik material yang dikuasai field team / homebase"
         right={role === ROLES.TECH || role === ROLES.MANAGER ? <PrimaryButton onClick={() => setPage("reconciliationCreate")}><Plus size={16} /> Buat Rekonsiliasi</PrimaryButton> : null}
       />
@@ -4481,7 +4481,7 @@ function MaterialSwapPage({ swaps, api, materials, sites, homebases, onSubmit, s
 
   return (
     <div className="p-4 sm:p-8 space-y-5">
-      <SectionTitle title="Penggantian Material" subtitle={canSubmit ? "Konfirmasi unit yang dipasang di site — isi unit lama hanya jika ini penggantian karena rusak" : "Riwayat instalasi & penggantian material"} />
+      <SectionTitle title="Replacement" subtitle={canSubmit ? "Konfirmasi unit yang dipasang di site — isi unit lama hanya jika ini penggantian karena rusak" : "Riwayat instalasi & penggantian material"} />
 
       {canSubmit && lastSwap && lastSwap.oldSn && (
         <Card className="p-4 border-emerald-200 bg-emerald-50/50 flex items-center justify-between">
@@ -5162,7 +5162,7 @@ function TransferStockPage({ materials, homebases, customers, currentUser, role,
   return (
     <div className="p-4 sm:p-8 space-y-5">
       <RequestTabs page={page} setPage={setPage} role={role} userCustomers={userCustomers} />
-      <SectionTitle title="Transfer Stock" subtitle={canSubmit ? "Pindahkan stock material yang sudah Delivered dari satu homebase ke homebase lain" : "Riwayat transfer stock antar homebase"} />
+      <SectionTitle title="Homebase to Homebase" subtitle={canSubmit ? "Transfer Stock — pindahkan stock material yang sudah Delivered dari satu homebase ke homebase lain" : "Transfer Stock — riwayat transfer stock antar homebase"} />
 
       {canSubmit && (
       <Card className="p-6 space-y-4 max-w-2xl">
@@ -9132,18 +9132,27 @@ export default function App() {
 
   const titles = {
     dashboard: ["Dashboard", "Ringkasan operasional logistics"],
-    delivery: ["Delivery Request", ""], deliveryCreate: ["Delivery Request", ""],
-    returnFaulty: ["Return Material Faulty", ""], returnFaultyCreate: ["Return Material Faulty", ""], returnFaultyEdit: ["Return Material Faulty", "Perbaiki & kirim ulang"],
+    // Every entry mirrors the sidebar label of the row that page lives
+    // under (Delivery's three tabs all sit under the "Delivery" row; the
+    // tab's own name is the in-page heading instead). Anything missing here
+    // falls back to "LMS Terex", which is how Replacement/Stock Alat/etc.
+    // used to end up with the wrong header.
+    delivery: ["Delivery", ""], deliveryCreate: ["Delivery", ""],
+    returnFaulty: ["Delivery", ""], returnFaultyCreate: ["Delivery", ""], returnFaultyEdit: ["Delivery", "Perbaiki & kirim ulang"],
+    stockTransfer: ["Delivery", ""],
+    materialSwap: ["Replacement", ""],
+    clusterTransfer: ["Transfer Antar Cluster", ""],
+    returnToCustomer: ["Return Material", ""],
     reconciliation: ["Reconciliation", ""], reconciliationCreate: ["Reconciliation", ""], reconciliationEdit: ["Reconciliation", "Perbaiki & kirim ulang"],
-    stock: ["Warehouse Stock", ""], movement: ["Stock Movement", ""],
-    stockTransfer: ["Transfer Stock", "Pindahkan stock antar homebase"],
+    stock: ["Stock Material", ""], movement: ["Stock Movement", ""],
+    serialDetail: ["Stock Material", "Detail Serial Number"],
+    toolStock: ["Stock Alat", ""], toolSerialDetail: ["Stock Alat", "Detail Serial Number"],
     consumableStock: ["Stock Consumable", ""],
-    serialDetail: ["Warehouse Stock", "Detail Serial Number"],
-    returnToCustomer: ["Pengembalian ke Customer", ""],
     databaseMSG: ["Database — MSG", ""], databaseRGR: ["Database — RGR", ""], databasePIM: ["Database — PIM", ""], databaseTeleglobal: ["Database — Teleglobal", ""],
-    reports: ["Reports", ""], reportsFaulty: ["Reports", ""], reportsRecon: ["Reports", ""],
-    masterMaterial: ["Master Data", ""], masterSite: ["Master Data", ""], masterHomebase: ["Master Data", ""], masterArea: ["Master Data", ""], masterCustomer: ["Master Data", ""], masterConsumable: ["Master Data", ""],
-    users: ["User Management", ""], settings: ["Settings", ""],
+    reports: ["Delivery Report", ""], reportsFaulty: ["Faulty Return Report", ""], reportsRecon: ["Reconciliation Report", ""], reportsDeviceLocation: ["Lokasi Perangkat", ""],
+    masterMaterial: ["Master Material", ""], masterSite: ["Master Site", ""], masterHomebase: ["Master Homebase", ""], masterArea: ["Master Area", ""], masterCustomer: ["Master Customer", ""],
+    masterTools: ["Master Alat", ""], masterConsumable: ["Master Consumable", ""],
+    users: ["User Management", ""], help: ["Panduan Penggunaan", ""], settings: ["Settings", ""],
   };
   const [titleMain, titleSub] = titles[page] || ["LMS Terex", ""];
 
