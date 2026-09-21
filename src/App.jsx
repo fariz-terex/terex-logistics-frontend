@@ -296,6 +296,77 @@ function StatusFilterPills({ options, value, onChange }) {
   );
 }
 
+/* ============================================================
+   SESSION, ROUTING & UI-STATE HELPERS
+   ============================================================ */
+
+// Login used to live only in React state, so any refresh logged you out and
+// no URL could ever survive it. The session is now kept in sessionStorage —
+// scoped to the tab, gone when the tab closes — and dropped once the JWT's
+// own expiry passes (backend issues 12h tokens) or the API answers 401.
+const SESSION_KEY = "terex_session";
+function readStoredSession() {
+  try {
+    const s = JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null");
+    if (!s?.token || !s?.user) return null;
+    const payload = JSON.parse(atob(s.token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+    if (payload.exp && payload.exp * 1000 <= Date.now()) { sessionStorage.removeItem(SESSION_KEY); return null; }
+    return s;
+  } catch { return null; }
+}
+function writeStoredSession(session) {
+  try {
+    if (session) sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    else sessionStorage.removeItem(SESSION_KEY);
+  } catch { /* storage unavailable — app still works, just won't survive a refresh */ }
+}
+
+// Hash routing (#/delivery/DR-260915-001): works on the static host with no
+// server rewrite rules, gives every page a real URL (Back/Forward, refresh,
+// shareable links). The optional id segment is whichever record/material a
+// page is showing; `c` carries the division for the generic serial browser.
+const KNOWN_PAGES = new Set([
+  "dashboard", "delivery", "deliveryCreate", "returnFaulty", "returnFaultyCreate", "returnFaultyEdit", "stockTransfer",
+  "materialSwap", "clusterTransfer", "returnToCustomer", "reconciliation", "reconciliationCreate", "reconciliationEdit",
+  "stock", "movement", "serialDetail", "toolStock", "toolSerialDetail", "consumableStock",
+  "databaseMSG", "databaseRGR", "databasePIM", "databaseTeleglobal",
+  "reports", "reportsFaulty", "reportsRecon", "reportsDeviceLocation",
+  "masterMaterial", "masterSite", "masterHomebase", "masterArea", "masterCustomer", "masterTools", "masterConsumable",
+  "users", "help", "settings",
+]);
+// Sub-pages take their access rule from the page they belong to.
+const ACCESS_PARENT = {
+  deliveryCreate: "delivery", returnFaultyCreate: "returnFaulty", returnFaultyEdit: "returnFaulty",
+  reconciliationCreate: "reconciliation", reconciliationEdit: "reconciliation",
+  serialDetail: "stock", toolSerialDetail: "toolStock",
+};
+function parseRoute(hash) {
+  const raw = (hash || "").replace(/^#\/?/, "");
+  const [pathPart, queryPart = ""] = raw.split("?");
+  const [pageKey = "", idPart = ""] = pathPart.split("/");
+  let id = "";
+  try { id = idPart ? decodeURIComponent(idPart) : ""; } catch { id = ""; }
+  return { page: pageKey, id, customer: new URLSearchParams(queryPart).get("c") || "" };
+}
+function buildHash(page, id, customer) {
+  return `#/${page}${id ? `/${encodeURIComponent(id)}` : ""}${customer ? `?c=${encodeURIComponent(customer)}` : ""}`;
+}
+
+// Filters, search, sort and the like used to live in each list component's
+// own useState, so opening a record and coming back reset all of them. This
+// keeps them in a module-level store keyed per screen: survives navigating
+// away and back, resets on reload, and is wiped on logout.
+const uiStateStore = new Map();
+function usePersistedState(key, initial) {
+  const [value, setValue] = useState(() => (uiStateStore.has(key) ? uiStateStore.get(key) : initial));
+  const set = (v) => setValue((prev) => {
+    const next = typeof v === "function" ? v(prev) : v;
+    uiStateStore.set(key, next);
+    return next;
+  });
+  return [value, set];
+}
+
 function Card({ children, className = "" }) {
   return <div className={`bg-white rounded-2xl border border-gray-100 shadow-sm ${className}`}>{children}</div>;
 }
@@ -1183,7 +1254,7 @@ function RequestTabs({ page, setPage, role, userCustomers }) {
 }
 
 function DeliveryList({ deliveries, setSelected, setPage, role, page, userCustomers }) {
-  const [filter, setFilter] = useState("All");
+  const [filter, setFilter] = usePersistedState("delivery:filter", "All");
   const statuses = ["All", "Waiting Logistics Approval", "In Progress", "Selesai Dikirim", "Rejected"];
   const countFor = (s) => s === "All" ? deliveries.length : deliveries.filter((d) => d.status === s || (s === "In Progress" && ["In Progress", "Preparing", "Shipped", "Waiting Stock Assignment"].includes(d.status))).length;
   const filtered = filter === "All" ? deliveries : deliveries.filter((d) => d.status === filter || (filter === "In Progress" && ["In Progress", "Preparing", "Shipped", "Waiting Stock Assignment"].includes(d.status)));
@@ -2736,10 +2807,10 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
 const DATABASE_DIVISIONS = new Set(["MSG", "RGR", "PIM", "Teleglobal"]);
 
 function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMaterial, setSerialCustomer, setDbMaterialFilter, onSubmitReceipt, showToast, clearSerialHighlight, currentUser, customers, role, api }) {
-  const [search, setSearch] = useState("");
-  const [categoryFilter, setCategoryFilter] = useState("All");
-  const [lowOnly, setLowOnly] = useState(false);
-  const [sort, setSort] = useState({ key: null, dir: "asc" });
+  const [search, setSearch] = usePersistedState("stock:search", "");
+  const [categoryFilter, setCategoryFilter] = usePersistedState("stock:category", "All");
+  const [lowOnly, setLowOnly] = usePersistedState("stock:lowOnly", false);
+  const [sort, setSort] = usePersistedState("stock:sort", { key: null, dir: "asc" });
   const handleSort = (key) => setSort((prev) => (prev.key === key ? { key, dir: prev.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" }));
   const [showReceiptForm, setShowReceiptForm] = useState(false);
   const [showBkbPanel, setShowBkbPanel] = useState(false);
@@ -2782,7 +2853,7 @@ function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMateri
   // (the grand total for Manager, or the summed total across every
   // division a scoped user covers). Reuses the same `customer` override
   // /api/stock already supports for the Delivery Request picker.
-  const [divisionFilter, setDivisionFilter] = useState("");
+  const [divisionFilter, setDivisionFilter] = usePersistedState("stock:division", "");
   const divisionOptions = role === ROLES.MANAGER ? customers.filter((c) => c.status === "Active").map((c) => c.name) : (currentUser?.customers || []);
   const [divisionMaterials, setDivisionMaterials] = useState(null);
   React.useEffect(() => {
@@ -3063,12 +3134,12 @@ function SerialDateTimeline({ serial }) {
 // live React state the user can change from here, so "locked" only means
 // "that's where you start," never "that's the only thing you can see."
 function MaterialSerialDetail({ material, customer, customerOptions, materials, api, onBack, highlightSerial, highlightToken, deliveries, role, showToast, title, subtitle, statusOptions: statusOptionsProp, showMaterialColumn, inlineDates }) {
-  const [status, setStatus] = useState("All");
+  const [status, setStatus] = usePersistedState(`serial:${customer || ""}|${material || ""}:status`, "All");
   const [materialFilter, setMaterialFilter] = useState(material || "");
   const [customerFilter, setCustomerFilter] = useState(customer || (customerOptions && customerOptions[0]) || "");
   const [serials, setSerials] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = usePersistedState(`serial:${customer || ""}|${material || ""}:search`, "");
   const [highlighted, setHighlighted] = useState(highlightSerial || null);
   const [expandedSn, setExpandedSn] = useState(null);
   const rowRefs = React.useRef({});
@@ -3495,7 +3566,7 @@ function StockMovement({ movements, filter, setFilter, deliveries }) {
    ============================================================ */
 
 function ReturnFaultyList({ returns, setSelected, setPage, role, page, userCustomers }) {
-  const [filter, setFilter] = useState("All");
+  const [filter, setFilter] = usePersistedState("returnFaulty:filter", "All");
   const statuses = ["All", "Waiting Logistics Review", "Revision Required", "Ready to Ship", "On Delivery", "Received by Warehouse", "QC Checking", "Completed"];
   const countFor = (s) => s === "All" ? returns.length : returns.filter((r) => r.status === s).length;
   const filtered = filter === "All" ? returns : returns.filter((r) => r.status === filter);
@@ -4095,7 +4166,7 @@ function ReturnFaultyDetail({ r, onBack, onApprove, onRevise, onShip, onAddResi,
    ============================================================ */
 
 function ReconciliationList({ items, setSelected, setPage, role }) {
-  const [filter, setFilter] = useState("All");
+  const [filter, setFilter] = usePersistedState("reconciliation:filter", "All");
   const statuses = ["All", "Waiting Logistics Review", "Revision Required", "Completed"];
   const countFor = (s) => s === "All" ? items.length : items.filter((r) => r.status === s).length;
   const filtered = filter === "All" ? items : items.filter((r) => r.status === filter);
@@ -4710,10 +4781,10 @@ function MaterialSwapDetail({ swap, onBack, setPage, setReturnPrefill }) {
    ============================================================ */
 
 function ToolStockPage({ tools, setPage, setToolSerialName, onSubmitReceipt, showToast, role }) {
-  const [search, setSearch] = useState("");
-  const [categoryFilter, setCategoryFilter] = useState("All");
-  const [lowOnly, setLowOnly] = useState(false);
-  const [sort, setSort] = useState({ key: null, dir: "asc" });
+  const [search, setSearch] = usePersistedState("toolStock:search", "");
+  const [categoryFilter, setCategoryFilter] = usePersistedState("toolStock:category", "All");
+  const [lowOnly, setLowOnly] = usePersistedState("toolStock:lowOnly", false);
+  const [sort, setSort] = usePersistedState("toolStock:sort", { key: null, dir: "asc" });
   const handleSort = (key) => setSort((prev) => (prev.key === key ? { key, dir: prev.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" }));
   const [showReceiptForm, setShowReceiptForm] = useState(false);
   const canReceive = role === ROLES.MANAGER || role === ROLES.LOGISTICS;
@@ -4828,7 +4899,7 @@ function ClusterTransferPage({ materials, customers, currentUser, role, api, sho
   const [transfers, setTransfers] = useState([]);
   const [loadingTransfers, setLoadingTransfers] = useState(true);
   const [decidingId, setDecidingId] = useState("");
-  const [statusFilter, setStatusFilter] = useState("All");
+  const [statusFilter, setStatusFilter] = usePersistedState("clusterTransfer:status", "All");
 
   const activeMaterials = materials.filter((m) => m.status === "Active" && m.serialized);
 
@@ -5317,10 +5388,10 @@ function TransferStockPage({ materials, homebases, customers, currentUser, role,
 }
 
 function ToolSerialDetail({ toolName, api, onBack }) {
-  const [status, setStatus] = useState("All");
+  const [status, setStatus] = usePersistedState(`toolSerial:${toolName}:status`, "All");
   const [serials, setSerials] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = usePersistedState(`toolSerial:${toolName}:search`, "");
 
   React.useEffect(() => {
     let cancelled = false;
@@ -6210,10 +6281,10 @@ function ConsumableReceiptForm({ consumables, onSubmit, onCancel, showToast }) {
 }
 
 function ConsumableStockPage({ consumables, onSubmitReceipt, showToast, role }) {
-  const [search, setSearch] = useState("");
-  const [categoryFilter, setCategoryFilter] = useState("All");
-  const [lowOnly, setLowOnly] = useState(false);
-  const [sort, setSort] = useState({ key: null, dir: "asc" });
+  const [search, setSearch] = usePersistedState("consumableStock:search", "");
+  const [categoryFilter, setCategoryFilter] = usePersistedState("consumableStock:category", "All");
+  const [lowOnly, setLowOnly] = usePersistedState("consumableStock:lowOnly", false);
+  const [sort, setSort] = usePersistedState("consumableStock:sort", { key: null, dir: "asc" });
   const handleSort = (key) => setSort((prev) => (prev.key === key ? { key, dir: prev.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" }));
   const [showReceiptForm, setShowReceiptForm] = useState(false);
   const canReceive = role === ROLES.MANAGER || role === ROLES.LOGISTICS;
@@ -7023,10 +7094,10 @@ function MasterCrudTable({ title, subtitle, entityLabel, fields, items, idField 
    (not pre-rendered rows) so date range, status, and search all actually work
    against real fields instead of decorating a static table. */
 function ReportsPage({ title, subtitle, data, columns, statusOf, dateOf, searchOf, statusLabel = "Status" }) {
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = usePersistedState(`report:${title}:search`, "");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [status, setStatus] = useState("All");
+  const [status, setStatus] = usePersistedState(`report:${title}:status`, "All");
 
   const statusOptions = ["All", ...Array.from(new Set(data.map(statusOf)))];
 
@@ -7103,7 +7174,7 @@ function ReportsPage({ title, subtitle, data, columns, statusOf, dateOf, searchO
 
 const DEFAULT_API_BASE = "https://backend-production-5543.up.railway.app/api";
 
-function createApiClient(baseUrl, getToken) {
+function createApiClient(baseUrl, getToken, onUnauthorized) {
   async function request(path, options = {}) {
     const token = getToken();
     const res = await fetch(`${baseUrl}${path}`, {
@@ -7118,6 +7189,9 @@ function createApiClient(baseUrl, getToken) {
     let parseError = null;
     try { data = await res.json(); } catch (e) { parseError = e; }
     if (!res.ok) {
+      // A rejected token (expired/invalid) can never recover by retrying —
+      // hand off to the app so it drops the stale session and shows Login.
+      if (res.status === 401 && token && onUnauthorized) onUnauthorized();
       // For 500s the top-level "error" is a deliberately generic message —
       // the actual cause is in "detail" (e.g. the raw DB error). Surface it
       // so it's visible in the UI instead of only in server logs.
@@ -7322,7 +7396,7 @@ function createApiClient(baseUrl, getToken) {
    LOGIN SCREEN
    ============================================================ */
 
-function LoginScreen({ apiBase, setApiBase, onLogin }) {
+function LoginScreen({ apiBase, setApiBase, onLogin, notice }) {
   const [username, setUsername] = useState(() => localStorage.getItem("terex_remembered_username") || "");
   const [password, setPassword] = useState("");
   const [rememberMe, setRememberMe] = useState(() => !!localStorage.getItem("terex_remembered_username"));
@@ -7412,6 +7486,7 @@ function LoginScreen({ apiBase, setApiBase, onLogin }) {
             <div className="text-sm text-gray-500 mt-1">Masuk untuk melanjutkan ke sistem</div>
           </div>
 
+          {notice && !error && <div className="bg-amber-50 border border-amber-100 text-amber-800 text-sm rounded-lg px-3 py-2 mb-3">{notice}</div>}
           {error && <div className="bg-red-50 border border-red-100 text-red-700 text-sm rounded-lg px-3 py-2 mb-3">{error}</div>}
 
           <form onSubmit={(e) => { e.preventDefault(); doLogin(username, password); }} className="space-y-3">
@@ -8269,9 +8344,12 @@ export class ErrorBoundary extends React.Component {
    ============================================================ */
 
 export default function App() {
-  const [apiBase, setApiBase] = useState(DEFAULT_API_BASE);
-  const [authToken, setAuthToken] = useState(null);
-  const [currentUser, setCurrentUser] = useState(null);
+  const [initialSession] = useState(readStoredSession);
+  const [apiBase, setApiBase] = useState(initialSession?.apiBase || DEFAULT_API_BASE);
+  const [authToken, setAuthToken] = useState(initialSession?.token || null);
+  const [currentUser, setCurrentUser] = useState(initialSession?.user || null);
+  const [routeInit, setRouteInit] = useState(false); // true once the URL hash has been applied after login/restore
+  const [sessionNotice, setSessionNotice] = useState(""); // shown on the Login screen after an expired/rejected session
   const [dataLoading, setDataLoading] = useState(false);
   const [apiError, setApiError] = useState("");
   const [toast, setToast] = useState(null); // { message }
@@ -8315,7 +8393,8 @@ export default function App() {
 
   const role = currentUser?.role;
 
-  const api = useMemo(() => createApiClient(apiBase, () => authToken), [apiBase, authToken]);
+  const unauthorizedRef = React.useRef(null);
+  const api = useMemo(() => createApiClient(apiBase, () => authToken, () => unauthorizedRef.current?.()), [apiBase, authToken]);
 
   // Poll the backend for new notifications: on login, every 45s, and whenever
   // the tab regains focus (so it feels fresh when you come back to it).
@@ -8411,8 +8490,17 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authToken]);
 
-  const handleLogin = (token, user) => { setAuthToken(token); setCurrentUser(user); };
+  const handleLogin = (token, user) => {
+    writeStoredSession({ token, user, apiBase });
+    setSessionNotice("");
+    setAuthToken(token); setCurrentUser(user);
+  };
+  unauthorizedRef.current = () => { setSessionNotice("Sesi Anda telah berakhir, silakan login kembali."); handleLogout(); };
   const handleLogout = () => {
+    writeStoredSession(null);
+    uiStateStore.clear();
+    setRouteInit(false);
+    try { window.history.replaceState(null, "", window.location.pathname + window.location.search); } catch { /* ignore */ }
     setAuthToken(null); setCurrentUser(null);
     setMaterials([]); setMovements([]); setDeliveries([]); setReturns([]); setReconciliations([]);
     setSites([]); setHomebases([]); setAreas([]); setCustomers([]); setUsers([]); setConsumables([]);
@@ -8543,6 +8631,62 @@ export default function App() {
     // into a direct sidebar visit to a Database page.
     setDbMaterialFilter("");
   };
+
+  // ---- URL <-> page state ------------------------------------------------
+  // The URL hash is the persisted form of (page + whichever record/material
+  // that page is showing). State -> URL: any change pushes a history entry.
+  // URL -> state: on login/refresh and on Back/Forward/manual edits.
+  const routeIdFor = (p) => {
+    if (p === "delivery") return selectedDelivery;
+    if (p === "returnFaulty" || p === "returnFaultyEdit") return selectedReturn;
+    if (p === "reconciliation" || p === "reconciliationEdit") return selectedRecon;
+    if (p === "materialSwap") return selectedSwap;
+    if (p === "serialDetail") return serialMaterial;
+    if (p === "toolSerialDetail") return toolSerialName;
+    if (p.startsWith("database")) return dbMaterialFilter;
+    return "";
+  };
+  const applyRouteRef = React.useRef(null);
+  applyRouteRef.current = (hash) => {
+    const r = parseRoute(hash);
+    let p = KNOWN_PAGES.has(r.page) ? r.page : "dashboard";
+    if (HIDDEN_PAGES.has(p) || !hasAccess(ACCESS_PARENT[p] || p, role, currentUser?.customers)) p = "dashboard";
+    const id = r.id;
+    setPage(p);
+    setSelectedDelivery(p === "delivery" ? id || null : null);
+    setSelectedReturn(p === "returnFaulty" || p === "returnFaultyEdit" ? id || null : null);
+    setSelectedRecon(p === "reconciliation" || p === "reconciliationEdit" ? id || null : null);
+    setSelectedSwap(p === "materialSwap" ? id || null : null);
+    setSerialMaterial(p === "serialDetail" ? id : "");
+    setSerialCustomer(p === "serialDetail" ? r.customer : "");
+    setToolSerialName(p === "toolSerialDetail" ? id : "");
+    setDbMaterialFilter(p.startsWith("database") ? id : "");
+    // An unknown/forbidden hash gets corrected in place rather than pushed,
+    // otherwise Back would land on it again and loop.
+    const canonical = buildHash(p, ["delivery", "returnFaulty", "returnFaultyEdit", "reconciliation", "reconciliationEdit", "materialSwap", "serialDetail", "toolSerialDetail"].includes(p) || p.startsWith("database") ? id : "", p === "serialDetail" ? r.customer : "");
+    if (window.location.hash !== canonical) window.history.replaceState(null, "", canonical);
+  };
+
+  React.useEffect(() => {
+    if (!authToken) { setRouteInit(false); return; }
+    applyRouteRef.current(window.location.hash);
+    setRouteInit(true);
+  }, [authToken]);
+
+  React.useEffect(() => {
+    if (!authToken || !routeInit) return;
+    const hash = buildHash(page, routeIdFor(page), page === "serialDetail" ? serialCustomer : "");
+    if (window.location.hash !== hash) window.history.pushState(null, "", hash);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeInit, page, selectedDelivery, selectedReturn, selectedRecon, selectedSwap, serialMaterial, serialCustomer, toolSerialName, dbMaterialFilter]);
+
+  React.useEffect(() => {
+    if (!authToken) return;
+    const onNav = () => applyRouteRef.current(window.location.hash);
+    window.addEventListener("popstate", onNav);
+    window.addEventListener("hashchange", onNav);
+    return () => { window.removeEventListener("popstate", onNav); window.removeEventListener("hashchange", onNav); };
+  }, [authToken]);
 
   /* Navigates directly to a specific record's detail view — clears the other
      two selection states in the same pass so stale selections from a previous
@@ -9155,9 +9299,12 @@ export default function App() {
     users: ["User Management", ""], help: ["Panduan Penggunaan", ""], settings: ["Settings", ""],
   };
   const [titleMain, titleSub] = titles[page] || ["LMS Terex", ""];
+  React.useEffect(() => {
+    document.title = authToken ? `${titleMain} · LMS Terex` : "LMS Terex";
+  }, [titleMain, authToken]);
 
   if (!authToken) {
-    return <LoginScreen apiBase={apiBase} setApiBase={setApiBase} onLogin={handleLogin} />;
+    return <LoginScreen apiBase={apiBase} setApiBase={setApiBase} onLogin={handleLogin} notice={sessionNotice} />;
   }
 
   let content = null;
