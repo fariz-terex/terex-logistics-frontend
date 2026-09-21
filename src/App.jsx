@@ -7530,8 +7530,6 @@ function createApiClient(baseUrl, getToken, onUnauthorized) {
     commitPimImport: () => request("/admin/pim-import/commit", { method: "POST" }),
     getPimFaultyFixPreview: () => request("/admin/pim-import/fix-faulty/preview"),
     commitPimFaultyFix: () => request("/admin/pim-import/fix-faulty/commit", { method: "POST" }),
-    getIptMergePreview: () => request("/admin/ipt-merge-into-teleglobal/preview"),
-    commitIptMerge: () => request("/admin/ipt-merge-into-teleglobal/commit", { method: "POST" }),
     rebuildGlobalStock: (commit) => request("/stock/rebuild-global", { method: "POST", body: { commit: !!commit } }),
     rebuildSerialBuckets: (commit) => request("/stock/rebuild-serial-buckets", { method: "POST", body: { commit: !!commit } }),
     fixInstalledStatus: (commit) => request("/stock/fix-installed-status", { method: "POST", body: { commit: !!commit } }),
@@ -7761,6 +7759,26 @@ function LoginScreen({ apiBase, setApiBase, onLogin, notice }) {
 // deploy independently on Railway, so this doubles as a quick way to tell
 // whether a change has actually rolled out yet, or whether frontend/backend
 // have drifted out of sync with each other.
+// Manager-only data check/correction tools, kept out of the way on Settings
+// (collapsed by default): they're rarely needed and several rewrite
+// production data, so they shouldn't sit at the same level as a person's own
+// account settings.
+function DataMaintenanceSection({ children }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="space-y-3">
+      <button onClick={() => setOpen(!open)} className="w-full flex items-center justify-between gap-3 px-5 py-3.5 bg-white rounded-2xl border border-gray-100 shadow-sm text-left hover:bg-gray-50/60">
+        <div>
+          <div className="text-sm font-semibold text-gray-800">Pemeliharaan Data</div>
+          <div className="text-xs text-gray-500 mt-0.5">Khusus Manager — alat pengecekan dan koreksi data. Sebagian mengubah data produksi.</div>
+        </div>
+        {open ? <ChevronDown size={16} className="shrink-0 text-gray-400" /> : <ChevronRight size={16} className="shrink-0 text-gray-400" />}
+      </button>
+      {open && children}
+    </div>
+  );
+}
+
 function AppVersionInfo({ api }) {
   const [backend, setBackend] = useState(null); // { commit, startedAt } | "error" | null (loading)
   React.useEffect(() => {
@@ -8239,126 +8257,6 @@ function PimFaultyFixTool({ api, showToast }) {
         title="Jalankan Koreksi Faulty PIM"
         message={preview ? `${preview.willInsert} unit Faulty baru akan ditambahkan dan ${preview.willUpdate} unit akan diubah statusnya dari Installed ke Faulty. Tindakan ini mengubah data produksi. Lanjutkan?` : ""}
         confirmLabel={committing ? "Menjalankan..." : "Ya, Jalankan Koreksi"}
-        danger
-        onConfirm={commit}
-        onCancel={() => setConfirmOpen(false)}
-      />
-    </Card>
-  );
-}
-
-// TEMP one-off correction — the IPT import above (still on record here for
-// history) wrongly created "IPT" as a 5th division. It isn't one: IPT and
-// Teleglobal are the same division, confirmed by the user after seeing the
-// import create a separate Database menu entry for it. This reassigns every
-// unit and stock row the import created from customer='IPT' to
-// customer='Teleglobal' (merging into whatever Teleglobal already had,
-// never overwriting it) and removes the phantom "IPT" customer row. Areas
-// and homebases are untouched — they're global, not per-division, so
-// nothing to undo there. Preview is always safe; Commit is a real write.
-// Remove this component (and its Settings entry) once run and confirmed.
-function IptMergeToTeleglobalTool({ api, showToast }) {
-  const [preview, setPreview] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [committing, setCommitting] = useState(false);
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const [result, setResult] = useState(null);
-
-  const loadPreview = async () => {
-    setLoading(true);
-    try {
-      setPreview(await api.getIptMergePreview());
-    } catch (err) {
-      showToast(err.message || "Gagal memuat preview merge");
-    } finally {
-      setLoading(false);
-    }
-  };
-  // Loads automatically on mount (read-only, safe) so a Manager landing on
-  // Settings sees right away whether this still needs action, instead of
-  // needing to know to click "Muat Preview" first.
-  React.useEffect(() => { loadPreview(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const commit = async () => {
-    setCommitting(true);
-    try {
-      const r = await api.commitIptMerge();
-      setResult(r);
-      setPreview(null);
-      showToast(`Merge selesai — ${r.reassigned} unit dipindahkan ke Teleglobal`);
-    } catch (err) {
-      showToast(err.message || "Gagal menjalankan merge");
-    } finally {
-      setCommitting(false);
-      setConfirmOpen(false);
-    }
-  };
-
-  const List = ({ items, render }) => (
-    <div className="max-h-40 overflow-y-auto border border-gray-100 rounded-lg divide-y divide-gray-50">
-      {items.map((r, i) => <div key={i} className="px-3 py-1.5 text-xs text-gray-600">{render(r)}</div>)}
-    </div>
-  );
-
-  const needsAction = preview && preview.sourceExists;
-
-  return (
-    <Card className={`p-5 space-y-3 text-sm ${needsAction ? "border-2 border-amber-400" : ""}`}>
-      <div>
-        <div className="font-semibold text-gray-800 flex items-center gap-2">
-          {needsAction && <AlertTriangle size={16} className="text-amber-500" />}
-          Koreksi: Gabungkan IPT ke Teleglobal
-        </div>
-        <div className="text-gray-500 text-xs mt-1">
-          Import IPT sebelumnya salah membuat "IPT" sebagai divisi terpisah — IPT dan Teleglobal ternyata divisi
-          yang sama. Ini memindahkan semua unit dan stok yang sudah dibuat ke divisi Teleglobal (digabung dengan
-          stok Teleglobal yang sudah ada, tidak ditimpa), lalu menghapus divisi "IPT" yang salah. Preview di
-          bawah selalu aman — hanya tombol "Jalankan Merge" yang benar-benar mengubah data.
-        </div>
-      </div>
-
-      {loading && !preview && <div className="text-xs text-gray-400">Memeriksa...</div>}
-
-      <GhostButton onClick={loadPreview} disabled={loading}>{loading ? "Memuat..." : "Muat Ulang Preview"}</GhostButton>
-
-      {preview && !preview.sourceExists && !result && (
-        <div className="text-xs text-emerald-700">✓ Tidak ada divisi "IPT" ditemukan — tidak ada yang perlu digabungkan.</div>
-      )}
-
-      {needsAction && (
-        <div className="pt-2 border-t border-gray-50 space-y-3">
-          <div className="bg-amber-50 border border-amber-200 text-amber-800 text-xs font-medium rounded-lg px-3 py-2">
-            Divisi "IPT" masih ada di sistem — masih akan muncul di semua dropdown divisi sampai ini dijalankan.
-          </div>
-          <div className="text-xs text-gray-700 space-y-1">
-            <div>Unit Serial Number akan dipindahkan ke Teleglobal: <span className="font-semibold">{preview.unitsToReassign}</span></div>
-            <div>Stok non-serial akan digabung ke Teleglobal: <span className="font-semibold">{preview.nonSerialRows.length}</span> material</div>
-          </div>
-
-          {preview.nonSerialRows.length > 0 && (
-            <div>
-              <div className="text-xs font-medium text-gray-700 mb-1">Stok non-serial yang akan ditambahkan ke Teleglobal</div>
-              <List items={preview.nonSerialRows} render={(r) => <>{r.material} — +{r.ready} ready, +{r.faulty} faulty</>} />
-            </div>
-          )}
-
-          <PrimaryButton onClick={() => setConfirmOpen(true)}>
-            Jalankan Merge Sekarang
-          </PrimaryButton>
-        </div>
-      )}
-
-      {result && (
-        <div className="pt-2 border-t border-gray-50 text-xs text-emerald-700">
-          ✓ Selesai — {result.reassigned} unit dipindahkan ke Teleglobal, divisi "IPT" dihapus.
-        </div>
-      )}
-
-      <ConfirmDialog
-        open={confirmOpen}
-        title="Jalankan Merge IPT → Teleglobal"
-        message={preview ? `${preview.unitsToReassign} unit dan stok non-serial di ${preview.nonSerialRows.length} material akan dipindahkan ke Teleglobal, lalu divisi "IPT" dihapus. Tindakan ini mengubah data produksi. Lanjutkan?` : ""}
-        confirmLabel={committing ? "Menjalankan..." : "Ya, Jalankan Merge"}
         danger
         onConfirm={commit}
         onCancel={() => setConfirmOpen(false)}
@@ -9794,20 +9692,28 @@ export default function App() {
   else if (page === "help") content = <HelpPage role={role} />;
   else if (page === "settings") content = (
     <div className="p-4 sm:p-8 max-w-xl space-y-5">
-      <SectionTitle title="Settings" subtitle="Preferensi umum aplikasi" />
-      <Card className="p-5 space-y-4 text-sm text-gray-600">
-        <div className="flex items-center justify-between"><span>Notifikasi in-app</span><input type="checkbox" defaultChecked className="accent-emerald-800 w-4 h-4" /></div>
-        <div className="flex items-center justify-between"><span>Bahasa</span><span className="text-gray-800 font-medium">Bahasa Indonesia</span></div>
+      <SectionTitle title="Settings" subtitle="Akun dan pengaturan aplikasi" />
+      <Card className="p-5 space-y-4 text-sm">
+        <div className="grid grid-cols-[6rem_1fr] gap-y-2 text-gray-600">
+          <span className="text-gray-400">Nama</span><span className="text-gray-800 font-medium">{currentUser?.name || "—"}</span>
+          <span className="text-gray-400">Username</span><span className="text-gray-800">{currentUser?.username || "—"}</span>
+          <span className="text-gray-400">Role</span><span className="text-gray-800">{role || "—"}</span>
+          <span className="text-gray-400">Divisi</span><span className="text-gray-800">{role === ROLES.MANAGER ? "Semua divisi" : (currentUser?.customers || []).join(", ") || "—"}</span>
+        </div>
         <div className="pt-2 border-t border-gray-100">
           <DangerButton onClick={handleLogout}><LogOut size={14} /> Logout</DangerButton>
         </div>
       </Card>
-      {role === ROLES.MANAGER && <IptMergeToTeleglobalTool api={api} showToast={showToast} />}
       <TelegramLink api={api} showToast={showToast} />
-      {role === ROLES.MANAGER && <PhantomStockCleanup api={api} showToast={showToast} />}
-      {role === ROLES.MANAGER && <StockConsistencyCheck api={api} showToast={showToast} />}
-      {role === ROLES.MANAGER && <PimImportTool api={api} showToast={showToast} />}
-      {role === ROLES.MANAGER && <PimFaultyFixTool api={api} showToast={showToast} />}
+      {role === ROLES.MANAGER && (
+        <DataMaintenanceSection>
+          <StockConsistencyCheck api={api} showToast={showToast} />
+          <PhantomStockCleanup api={api} showToast={showToast} />
+          <div className="text-xs font-medium text-gray-400 pt-2">Alat sekali pakai — hapus dari sini setelah pekerjaannya selesai</div>
+          <PimImportTool api={api} showToast={showToast} />
+          <PimFaultyFixTool api={api} showToast={showToast} />
+        </DataMaintenanceSection>
+      )}
       <AppVersionInfo api={api} />
     </div>
   );
