@@ -1533,7 +1533,7 @@ function UnifiedRequestList({ deliveries, returns, transfers, gotoDetail, setPag
   );
 }
 
-function DeliveryCreate({ onSubmit, onCancel, materials, tools, consumables, sites, homebases, currentUser, customers, api, initialHomebase }) {
+function DeliveryCreate({ onSubmit, onCancel, materials, tools, consumables, sites, homebases, currentUser, customers, api, initialHomebase, onBack }) {
   const [step, setStep] = useState(1);
   const [homebase, setHomebase] = useState(initialHomebase || "");
   const [site, setSite] = useState("");
@@ -1620,6 +1620,7 @@ function DeliveryCreate({ onSubmit, onCancel, materials, tools, consumables, sit
 
   return (
     <div className="p-4 sm:p-8 max-w-3xl mx-auto space-y-6">
+      {onBack && <button onClick={onBack} className="text-sm text-gray-500 flex items-center gap-1 hover:text-gray-800"><ChevronLeft size={16} /> Ubah pengirim / tujuan</button>}
       <SectionTitle title="Buat Request — Warehouse to Homebase" subtitle="Ajukan kebutuhan material untuk homebase / site Anda" />
       <DraftBanner draft={draft} />
 
@@ -4117,7 +4118,7 @@ function findSNConflict(sn, { returns = [], reconciliations = [], excludeId = nu
   return null;
 }
 
-function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconciliations, initialData, excludeId, revisionNote, currentUser, customers, prefillItems, initialHomebase }) {
+function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconciliations, initialData, excludeId, revisionNote, currentUser, customers, prefillItems, initialHomebase, onBack }) {
   const isEdit = !!initialData;
   const isManager = currentUser?.role === ROLES.MANAGER;
   const myDivisions = currentUser?.customers || [];
@@ -4175,6 +4176,7 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
 
   return (
     <div className="p-4 sm:p-8 max-w-2xl mx-auto space-y-6">
+      {onBack && <button onClick={onBack} className="text-sm text-gray-500 flex items-center gap-1 hover:text-gray-800"><ChevronLeft size={16} /> Ubah pengirim / tujuan</button>}
       <SectionTitle
         title={isEdit ? `Perbaiki Request — Homebase to Warehouse — ${excludeId}` : "Buat Request — Homebase to Warehouse"}
         subtitle={isEdit ? "Perbarui data sesuai catatan revisi, lalu kirim ulang ke Logistics" : "Input Serial Number secara manual untuk setiap unit — bisa lebih dari satu material"}
@@ -5503,7 +5505,7 @@ function ClusterTransferPage({ materials, customers, currentUser, role, api, sho
 // from/to homebases already fixed by the sender/destination step —
 // history + approve/reject/cancel now live in TransferDetail /
 // UnifiedRequestList instead.
-function TransferCreate({ onSubmit, onCancel, materials, customers, currentUser, role, api, initialFrom, initialTo }) {
+function TransferCreate({ onSubmit, onCancel, materials, customers, currentUser, role, api, initialFrom, initialTo, onBack }) {
   const isManager = role === ROLES.MANAGER;
   const myDivisions = currentUser?.customers || [];
   const needsDivisionPicker = isManager || myDivisions.length > 1;
@@ -5567,6 +5569,7 @@ function TransferCreate({ onSubmit, onCancel, materials, customers, currentUser,
 
   return (
     <div className="p-4 sm:p-8 max-w-2xl mx-auto space-y-6">
+      {onBack && <button onClick={onBack} className="text-sm text-gray-500 flex items-center gap-1 hover:text-gray-800"><ChevronLeft size={16} /> Ubah pengirim / tujuan</button>}
       <SectionTitle title="Buat Request — Homebase to Homebase" subtitle="Transfer Stock — pindahkan stock material yang sudah Delivered dari satu homebase ke homebase lain" />
       <Card className="p-6 space-y-4">
         <div className="flex items-center gap-2 text-sm bg-emerald-50/60 border border-emerald-100 rounded-lg px-3 py-2.5">
@@ -5743,6 +5746,12 @@ function RequestCreate({ onSubmitDelivery, onSubmitReturn, onSubmitTransfer, onC
     : destination === WAREHOUSE ? "return"
     : "transfer";
 
+  // Returns to the sender/destination step without losing either choice —
+  // clearing just `destination` is enough to make `mode` null again (so
+  // step 0 re-renders) while `sender` stays picked, since a wrong pick is
+  // usually the second field (more options) rather than the first.
+  const backToStart = () => setDestination("");
+
   if (!mode) {
     return (
       <div className="p-4 sm:p-8 max-w-xl mx-auto space-y-6">
@@ -5790,19 +5799,22 @@ function RequestCreate({ onSubmitDelivery, onSubmitReturn, onSubmitTransfer, onC
         <SectionTitle title="Buat Request" subtitle="Akses tidak tersedia" />
         <Card className="p-6 space-y-4">
           <div className="text-sm text-gray-600">Role Anda tidak memiliki akses untuk membuat request jenis ini ({sender} → {destination}).</div>
-          <button onClick={onCancel} className="text-sm text-gray-500 hover:text-gray-800">Kembali</button>
+          <div className="flex gap-4">
+            <button onClick={backToStart} className="text-sm text-emerald-800 font-medium hover:text-emerald-900">Ubah pengirim / tujuan</button>
+            <button onClick={onCancel} className="text-sm text-gray-500 hover:text-gray-800">Batal</button>
+          </div>
         </Card>
       </div>
     );
   }
 
   if (mode === "delivery") {
-    return <DeliveryCreate onSubmit={onSubmitDelivery} onCancel={onCancel} materials={materials} tools={tools} consumables={consumables} sites={sites} homebases={homebases} currentUser={currentUser} customers={customers} api={api} initialHomebase={destination} />;
+    return <DeliveryCreate onSubmit={onSubmitDelivery} onCancel={onCancel} onBack={backToStart} materials={materials} tools={tools} consumables={consumables} sites={sites} homebases={homebases} currentUser={currentUser} customers={customers} api={api} initialHomebase={destination} />;
   }
   if (mode === "return") {
-    return <ReturnFaultyCreate onSubmit={onSubmitReturn} onCancel={onCancel} materials={materials} returns={returns} reconciliations={reconciliations} currentUser={currentUser} customers={customers} initialHomebase={sender} />;
+    return <ReturnFaultyCreate onSubmit={onSubmitReturn} onCancel={onCancel} onBack={backToStart} materials={materials} returns={returns} reconciliations={reconciliations} currentUser={currentUser} customers={customers} initialHomebase={sender} />;
   }
-  return <TransferCreate onSubmit={onSubmitTransfer} onCancel={onCancel} materials={materials} customers={customers} currentUser={currentUser} role={role} api={api} initialFrom={sender} initialTo={destination} />;
+  return <TransferCreate onSubmit={onSubmitTransfer} onCancel={onCancel} onBack={backToStart} materials={materials} customers={customers} currentUser={currentUser} role={role} api={api} initialFrom={sender} initialTo={destination} />;
 }
 
 function ToolSerialDetail({ toolName, api, onBack }) {
