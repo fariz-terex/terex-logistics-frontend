@@ -5738,8 +5738,25 @@ function RequestCreate({ onSubmitDelivery, onSubmitReturn, onSubmitTransfer, onC
 
   const activeHomebaseNames = homebases.filter((h) => h.status === "Active").map((h) => h.name);
   const WAREHOUSE = "Warehouse Pusat";
-  const senderOptions = [WAREHOUSE, ...activeHomebaseNames];
-  const destinationOptions = [WAREHOUSE, ...activeHomebaseNames].filter((o) => o !== sender);
+
+  // Same per-type gates the backend enforces (POST /deliveries, /returns,
+  // /stock/transfers) — mirrored here so the sender/destination dropdowns
+  // only ever offer combinations this role can actually submit, instead of
+  // letting them pick one and then hitting an "Akses tidak tersedia" wall.
+  const canDeliver = role === ROLES.SPV || role === ROLES.MANAGER;
+  const canReturn = role === ROLES.TECH || role === ROLES.MANAGER;
+  const canTransfer = role === ROLES.LOGISTICS || role === ROLES.MANAGER;
+
+  const senderOptions = [
+    ...(canDeliver ? [WAREHOUSE] : []),
+    ...(canReturn || canTransfer ? activeHomebaseNames : []),
+  ];
+  const destinationOptions = sender === WAREHOUSE
+    ? activeHomebaseNames
+    : [
+        ...(canReturn ? [WAREHOUSE] : []),
+        ...(canTransfer ? activeHomebaseNames.filter((h) => h !== sender) : []),
+      ];
 
   const mode = !sender || !destination ? null
     : sender === WAREHOUSE ? "delivery"
@@ -5751,6 +5768,18 @@ function RequestCreate({ onSubmitDelivery, onSubmitReturn, onSubmitTransfer, onC
   // step 0 re-renders) while `sender` stays picked, since a wrong pick is
   // usually the second field (more options) rather than the first.
   const backToStart = () => setDestination("");
+
+  if (senderOptions.length === 0) {
+    return (
+      <div className="p-4 sm:p-8 max-w-xl mx-auto space-y-6">
+        <SectionTitle title="Buat Request" subtitle="Akses tidak tersedia" />
+        <Card className="p-6 space-y-4">
+          <div className="text-sm text-gray-600">Role Anda tidak memiliki akses untuk membuat request jenis apapun di sini.</div>
+          <button onClick={onCancel} className="text-sm text-gray-500 hover:text-gray-800">Kembali</button>
+        </Card>
+      </div>
+    );
+  }
 
   if (!mode) {
     return (
