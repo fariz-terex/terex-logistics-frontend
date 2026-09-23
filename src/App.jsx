@@ -476,7 +476,7 @@ function DangerButton({ children, onClick, className = "" }) {
    reservation, shipping/delivery status changes) — a lightweight guard
    against mis-clicks, styled to match the rest of the app instead of a
    native browser confirm(). */
-function ConfirmDialog({ open, title, message, confirmLabel = "Konfirmasi", onConfirm, onCancel, danger }) {
+function ConfirmDialog({ open, title, message, confirmLabel = "Konfirmasi", onConfirm, onCancel, danger, children }) {
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -484,6 +484,7 @@ function ConfirmDialog({ open, title, message, confirmLabel = "Konfirmasi", onCo
       <Card className="relative w-full max-w-md p-6 space-y-4">
         <div className="text-base font-semibold text-gray-900">{title}</div>
         <div className="text-sm text-gray-600">{message}</div>
+        {children}
         <div className="flex justify-end gap-2 pt-2">
           <GhostButton onClick={onCancel}>Batal</GhostButton>
           {danger ? (
@@ -5579,6 +5580,11 @@ function TransferStockPage({ materials, homebases, customers, currentUser, role,
   const [loadingTransfers, setLoadingTransfers] = useState(true);
   const [confirmCancelId, setConfirmCancelId] = useState(null);
   const [cancellingId, setCancellingId] = useState(null);
+  const [approvingId, setApprovingId] = useState(null);
+  const [confirmApproveId, setConfirmApproveId] = useState(null);
+  const [rejectingId, setRejectingId] = useState(null);
+  const [rejectTargetId, setRejectTargetId] = useState(null);
+  const [rejectReason, setRejectReason] = useState("");
 
   const activeMaterials = materials.filter((m) => m.status === "Active");
   const selectedMaterial = activeMaterials.find((m) => m.name === material);
@@ -5601,6 +5607,35 @@ function TransferStockPage({ materials, homebases, customers, currentUser, role,
     } finally {
       setCancellingId(null);
       setConfirmCancelId(null);
+    }
+  };
+
+  const approveTransfer = async (id) => {
+    setApprovingId(id);
+    try {
+      await api.approveTransfer(id);
+      showToast("Transfer disetujui — stock sudah dipindahkan");
+      loadTransfers();
+    } catch (err) {
+      showToast(err.message || "Gagal approve transfer");
+    } finally {
+      setApprovingId(null);
+      setConfirmApproveId(null);
+    }
+  };
+
+  const rejectTransfer = async (id, reason) => {
+    setRejectingId(id);
+    try {
+      await api.rejectTransfer(id, reason);
+      showToast("Transfer ditolak");
+      loadTransfers();
+    } catch (err) {
+      showToast(err.message || "Gagal menolak transfer");
+    } finally {
+      setRejectingId(null);
+      setRejectTargetId(null);
+      setRejectReason("");
     }
   };
 
@@ -5647,7 +5682,7 @@ function TransferStockPage({ materials, homebases, customers, currentUser, role,
         qty: isSerialized ? undefined : Number(qty),
         note: note || undefined,
       });
-      showToast(`Transfer ${material} dari ${homebaseFrom} ke ${homebaseTo} berhasil dicatat`);
+      showToast(`Transfer ${material} dari ${homebaseFrom} ke ${homebaseTo} diajukan — menunggu approval Logistics`);
       setHomebaseTo(""); setSelectedSerials(new Set()); setQty(""); setNote("");
       api.getTransferOptions(material, customer).then(setTransferOptions).catch(() => {});
       if (isSerialized) api.getSerials(material, "Delivered", customer, homebaseFrom).then(setAvailableSerials).catch(() => {});
@@ -5780,7 +5815,7 @@ function TransferStockPage({ materials, homebases, customers, currentUser, role,
           </thead>
           <tbody>
             {transfers.map((t) => (
-              <tr key={t.id} className={`border-b border-gray-50 last:border-0 ${t.status === "Cancelled" ? "opacity-50" : ""}`}>
+              <tr key={t.id} className={`border-b border-gray-50 last:border-0 ${["Cancelled", "Rejected"].includes(t.status) ? "opacity-50" : ""}`}>
                 <td className="px-5 py-3 font-medium text-gray-800">{t.id}</td>
                 <td className="px-5 py-3 text-gray-700">{t.material}</td>
                 <td className="px-5 py-3 text-gray-600">{t.customer}</td>
@@ -5791,8 +5826,17 @@ function TransferStockPage({ materials, homebases, customers, currentUser, role,
                 <td className="px-5 py-3 text-gray-500">{t.date}</td>
                 <td className="px-5 py-3"><StatusBadge status={t.status || "Completed"} /></td>
                 <td className="px-5 py-3">
-                  {canSubmit && t.status !== "Cancelled" && (
+                  {canSubmit && t.status === "Waiting Logistics Approval" && (
+                    <div className="flex items-center gap-3">
+                      <button onClick={() => setConfirmApproveId(t.id)} className="text-emerald-700 hover:text-emerald-900 text-xs font-medium">Approve</button>
+                      <button onClick={() => { setRejectTargetId(t.id); setRejectReason(""); }} className="text-red-500 hover:text-red-700 text-xs font-medium">Tolak</button>
+                    </div>
+                  )}
+                  {canSubmit && t.status === "Completed" && (
                     <button onClick={() => setConfirmCancelId(t.id)} className="text-red-500 hover:text-red-700 text-xs font-medium">Batalkan</button>
+                  )}
+                  {t.status === "Rejected" && t.rejected_reason && (
+                    <span className="text-xs text-gray-400" title={t.rejected_reason}>Alasan: {t.rejected_reason}</span>
                   )}
                 </td>
               </tr>
@@ -5812,6 +5856,33 @@ function TransferStockPage({ materials, homebases, customers, currentUser, role,
         onConfirm={() => cancelTransfer(confirmCancelId)}
         onCancel={() => setConfirmCancelId(null)}
       />
+
+      <ConfirmDialog
+        open={!!confirmApproveId}
+        title="Approve Transfer"
+        message={`Transfer ${confirmApproveId} akan disetujui dan stock langsung dipindahkan ke homebase tujuan. Lanjutkan?`}
+        confirmLabel={approvingId ? "Menyetujui..." : "Ya, Approve"}
+        onConfirm={() => approveTransfer(confirmApproveId)}
+        onCancel={() => setConfirmApproveId(null)}
+      />
+
+      <ConfirmDialog
+        open={!!rejectTargetId}
+        title="Tolak Transfer"
+        message={`Transfer ${rejectTargetId} akan ditolak — stock tidak jadi dipindahkan.`}
+        confirmLabel={rejectingId ? "Menolak..." : "Ya, Tolak"}
+        danger
+        onConfirm={() => rejectTransfer(rejectTargetId, rejectReason)}
+        onCancel={() => { setRejectTargetId(null); setRejectReason(""); }}
+      >
+        <textarea
+          value={rejectReason}
+          onChange={(e) => setRejectReason(e.target.value)}
+          placeholder="Alasan penolakan (opsional)..."
+          rows={2}
+          className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600"
+        />
+      </ConfirmDialog>
     </div>
   );
 }
@@ -7734,6 +7805,8 @@ function createApiClient(baseUrl, getToken, onUnauthorized) {
     getTransferOptions: (material, customer) => request(`/stock/transfer-options?material=${encodeURIComponent(material)}&customer=${encodeURIComponent(customer)}`),
     getTransfers: () => request("/stock/transfers"),
     createTransfer: (payload) => request("/stock/transfers", { method: "POST", body: payload }),
+    approveTransfer: (id) => request(`/stock/transfers/${id}/approve`, { method: "POST" }),
+    rejectTransfer: (id, reason) => request(`/stock/transfers/${id}/reject`, { method: "POST", body: { reason } }),
     cancelTransfer: (id) => request(`/stock/transfers/${id}/cancel`, { method: "POST" }),
     getPhantomStockRows: () => request("/stock/phantom-check"),
     cleanupPhantomStockRows: () => request("/stock/phantom-cleanup", { method: "POST" }),
