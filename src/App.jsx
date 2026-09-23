@@ -4045,7 +4045,15 @@ function PhotoUpload({ label, value, onChange, compact, detectBarcode, onDetecte
     e.target.value = "";
     if (detectBarcode && onDetected) {
       setDetecting(true);
-      const text = await detectBarcodeFromDataUrl(compressed);
+      // Decode against the ORIGINAL file, not `compressed` — a barcode
+      // usually occupies a small part of the frame, and downscaling the
+      // whole photo to fit within compressImage's 1600px cap (sized for
+      // photo documentation, not barcode fidelity) can shrink it below
+      // what the decoder can still read. The original has much more
+      // pixel data to work with; only the compressed copy gets stored.
+      const objectUrl = URL.createObjectURL(file);
+      const text = await detectBarcodeFromDataUrl(objectUrl);
+      URL.revokeObjectURL(objectUrl);
       setDetecting(false);
       if (text) onDetected(text);
     }
