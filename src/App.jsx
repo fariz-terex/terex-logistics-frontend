@@ -3037,6 +3037,57 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
   );
 }
 
+// Shared "upload photo(s) of physical material -> guess type + qty" input,
+// reused by Reconciliation / Transfer Stock / Return Material Faulty's
+// "Deteksi dari Foto" panels — same idea as BkbReceiptPanel above but for a
+// photo of goods instead of a document, and deliberately dumb about what to
+// DO with a result: it just hands `onDetected` the raw
+// `[{material, qty, confidence, note, serialized}, ...]` array from
+// POST /stock/detect-materials-photo, since each of those three flows needs
+// something different done with it (see each call site). Never submits
+// anything itself.
+function PhotoMaterialDetect({ onDetected, api }) {
+  const [photos, setPhotos] = useState([]); // data URLs
+  const [detecting, setDetecting] = useState(false);
+  const [error, setError] = useState("");
+
+  const addPhoto = (dataUrl) => setPhotos((prev) => [...prev, dataUrl]);
+  const removePhoto = (i) => setPhotos((prev) => prev.filter((_, idx) => idx !== i));
+
+  const detect = async () => {
+    if (photos.length === 0) return;
+    setDetecting(true); setError("");
+    try {
+      const { items } = await api.detectMaterialsPhoto(photos);
+      if (items.length === 0) setError("Tidak ada material yang terdeteksi dari foto ini — coba foto lain atau isi manual.");
+      onDetected(items);
+      setPhotos([]);
+    } catch (err) {
+      setError(err.message || "Gagal mendeteksi material dari foto");
+    } finally {
+      setDetecting(false);
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        {photos.map((p, i) => (
+          <div key={i} className="relative">
+            <img src={p} alt="" className="w-14 h-14 rounded-lg object-cover border border-gray-200" />
+            <button onClick={() => removePhoto(i)} className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-white border border-gray-200 text-gray-400 hover:text-red-500 flex items-center justify-center"><X size={11} /></button>
+          </div>
+        ))}
+        {photos.length < 6 && <PhotoUpload compact value="" onChange={addPhoto} />}
+      </div>
+      {error && <div className="bg-red-50 border border-red-100 text-red-700 text-xs rounded-lg px-3 py-2">{error}</div>}
+      <div className="flex justify-end">
+        <PrimaryButton disabled={photos.length === 0 || detecting} onClick={detect}>{detecting ? "Mendeteksi material..." : "Deteksi dari Foto"}</PrimaryButton>
+      </div>
+    </div>
+  );
+}
+
 // Divisions with their own "Database" sub-page (matches NAV_TREE's
 // databaseGroup children) — "Lihat Detail" routes straight there when the
 // division is unambiguous, instead of the generic Serial Number page.
@@ -4154,7 +4205,7 @@ function findSNConflict(sn, { returns = [], reconciliations = [], excludeId = nu
   return null;
 }
 
-function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconciliations, initialData, excludeId, revisionNote, currentUser, customers, prefillItems, initialHomebase, onBack }) {
+function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconciliations, initialData, excludeId, revisionNote, currentUser, customers, prefillItems, initialHomebase, onBack, api }) {
   const isEdit = !!initialData;
   const isManager = currentUser?.role === ROLES.MANAGER;
   const myDivisions = currentUser?.customers || [];
@@ -4190,6 +4241,23 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
   const addSN = (itemIdx) => setItems(items.map((it, i) => (i === itemIdx ? { ...it, serials: [...it.serials, { sn: "", photo: "" }] } : it)));
   const updateSN = (itemIdx, snIdx, field, val) => setItems(items.map((it, i) => (i === itemIdx ? { ...it, serials: it.serials.map((s, j) => (j === snIdx ? { ...s, [field]: val } : s)) } : it)));
   const removeSN = (itemIdx, snIdx) => setItems(items.map((it, i) => (i === itemIdx ? { ...it, serials: it.serials.filter((_, j) => j !== snIdx) } : it)));
+  const [showPhotoDetect, setShowPhotoDetect] = useState(false);
+  const [detectedSummary, setDetectedSummary] = useState("");
+  // Turns a "Deteksi dari Foto" result into item rows with the right number
+  // of blank SN slots — SN capture itself is untouched, still per-unit
+  // (typed, ScanButton-free now, or auto-filled from that unit's own photo
+  // via detectBarcode above). Replaces the form's single still-blank
+  // starter row on first use instead of leaving it dangling unfilled.
+  const applyDetectedItems = (detected) => {
+    if (detected.length === 0) return;
+    const newItems = detected.map((d) => ({ material: d.material, serials: Array.from({ length: Math.max(1, d.qty) }, () => ({ sn: "", photo: "" })) }));
+    setItems((prev) => {
+      const isBlank = prev.length === 1 && !prev[0].material && prev[0].serials.every((s) => !s.sn.trim());
+      return isBlank ? newItems : [...prev, ...newItems];
+    });
+    setDetectedSummary(`${detected.length} jenis material ditambahkan dari foto — cek jenis & qty, lalu isi/scan Serial Number tiap unit.`);
+    setShowPhotoDetect(false);
+  };
   // Auto-fill from a barcode decoded out of the photo just uploaded (see
   // PhotoUpload's detectBarcode/onDetected) — only when the field is still
   // empty at the moment decoding finishes, via a functional update rather
@@ -4253,8 +4321,19 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
 
       <div className="flex items-center justify-between">
         <div className="text-sm font-semibold text-gray-800">Material yang Dikembalikan</div>
-        <button onClick={addItem} className="text-xs text-emerald-800 font-medium flex items-center gap-1"><Plus size={14} /> Tambah Material</button>
+        <div className="flex items-center gap-3">
+          {!isEdit && <button onClick={() => setShowPhotoDetect((v) => !v)} className="text-xs text-emerald-800 font-medium flex items-center gap-1"><Camera size={14} /> Deteksi dari Foto</button>}
+          <button onClick={addItem} className="text-xs text-emerald-800 font-medium flex items-center gap-1"><Plus size={14} /> Tambah Material</button>
+        </div>
       </div>
+
+      {showPhotoDetect && (
+        <Card className="p-5 space-y-3">
+          <div className="text-xs text-gray-500">Upload foto material yang mau dikembalikan (boleh lebih dari satu foto) — sistem akan menebak jenis & jumlahnya. Tetap perlu diperiksa, dan Serial Number tiap unit tetap diisi manual/scan seperti biasa.</div>
+          <PhotoMaterialDetect api={api} onDetected={applyDetectedItems} />
+        </Card>
+      )}
+      {detectedSummary && <div className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2">{detectedSummary}</div>}
 
       {items.map((item, itemIdx) => (
         <Card key={itemIdx} className="p-6 space-y-4">
@@ -4599,7 +4678,7 @@ function ReconciliationList({ items, setSelected, setPage, role }) {
   );
 }
 
-function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconciliations, homebases, initialData, excludeId, revisionNote, currentUser, customers }) {
+function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconciliations, homebases, initialData, excludeId, revisionNote, currentUser, customers, api }) {
   const isEdit = !!initialData;
   const isManager = currentUser?.role === ROLES.MANAGER;
   const myDivisions = currentUser?.customers || [];
@@ -4633,6 +4712,24 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
 
   const updateRow = (idx, patch) => setRows(rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
   const updateSerial = (idx, si, val) => setRows(rows.map((r, i) => (i === idx ? { ...r, serials: r.serials.map((s, j) => (j === si ? val : s)) } : r)));
+
+  const [showPhotoDetect, setShowPhotoDetect] = useState(false);
+  const [unmatchedDetected, setUnmatchedDetected] = useState([]);
+  // Only fills `actualQty` on rows ALREADY in this reconciliation (matched
+  // by material name) — `systemQty` here isn't backed by a real stock
+  // lookup (this form always seeds it from a placeholder, not a live
+  // count), so a detected material with no existing row is surfaced for
+  // the user to add manually rather than invented with a fabricated
+  // systemQty.
+  const applyDetected = (detected) => {
+    const existingNames = new Set(rows.map((r) => r.material));
+    setRows(rows.map((r) => {
+      const found = detected.find((d) => d.material === r.material);
+      return found ? { ...r, actualQty: found.qty } : r;
+    }));
+    setUnmatchedDetected(detected.filter((d) => !existingNames.has(d.material)));
+    setShowPhotoDetect(false);
+  };
 
   const snConflicts = rows.flatMap((r) => (r.serials || []).map((sn) => findSNConflict(sn, { returns, reconciliations, excludeId })).filter(Boolean));
   const valid = homebase && snConflicts.length === 0 && rows.every((r) => r.photo && (r.systemQty === r.actualQty || r.reason.trim()) && (!r.serialized || r.serials.every((s) => s.trim()))) && (isEdit || !needsDivisionPicker || customer);
@@ -4674,6 +4771,23 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
           </div>
         </div>
       </Card>
+
+      <div className="flex items-center justify-between">
+        <div className="text-sm font-semibold text-gray-800">Material yang Direkonsiliasi</div>
+        <button onClick={() => setShowPhotoDetect((v) => !v)} className="text-xs text-emerald-800 font-medium flex items-center gap-1"><Camera size={14} /> Deteksi dari Foto</button>
+      </div>
+
+      {showPhotoDetect && (
+        <Card className="p-5 space-y-3">
+          <div className="text-xs text-gray-500">Upload foto material yang ada di homebase ini (boleh lebih dari satu foto) — sistem akan menebak jenis & jumlahnya dan mengisi Actual Qty untuk material yang sudah ada di daftar di bawah. Material yang terdeteksi tapi belum ada di daftar akan ditampilkan terpisah untuk ditambah manual.</div>
+          <PhotoMaterialDetect api={api} onDetected={applyDetected} />
+        </Card>
+      )}
+      {unmatchedDetected.length > 0 && (
+        <div className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2.5">
+          Terdeteksi dari foto tapi belum ada di daftar reconciliation ini — tambahkan manual jika perlu: {unmatchedDetected.map((d) => `${d.material} (±${d.qty})`).join(", ")}
+        </div>
+      )}
 
       {rows.map((r, idx) => {
         const disc = r.systemQty - r.actualQty;
@@ -5548,7 +5662,7 @@ function ClusterTransferPage({ materials, customers, currentUser, role, api, sho
 // from/to homebases already fixed by the sender/destination step —
 // history + approve/reject/cancel now live in TransferDetail /
 // UnifiedRequestList instead.
-function TransferCreate({ onSubmit, onCancel, materials, customers, currentUser, role, api, initialFrom, initialTo, onBack }) {
+function TransferCreate({ onSubmit, onSubmitQuiet, onCancel, materials, customers, currentUser, role, api, initialFrom, initialTo, onBack }) {
   const isManager = role === ROLES.MANAGER;
   const myDivisions = currentUser?.customers || [];
   const needsDivisionPicker = isManager || myDivisions.length > 1;
@@ -5564,12 +5678,29 @@ function TransferCreate({ onSubmit, onCancel, materials, customers, currentUser,
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [showPhotoDetect, setShowPhotoDetect] = useState(false);
+  // Detected materials become a queue driving this SAME single-material
+  // form one at a time (material picked programmatically instead of from
+  // the dropdown, everything else — availability fetch, serial checklist,
+  // submit — reused as-is) rather than a separate batch UI, since Transfer
+  // Stock records are always exactly one material each anyway.
+  const [detectedQueue, setDetectedQueue] = useState(null); // [{material, qty, confidence, note}] | null
+  const [queueIndex, setQueueIndex] = useState(0);
 
   const homebaseFrom = initialFrom;
   const homebaseTo = initialTo;
   const activeMaterials = materials.filter((m) => m.status === "Active");
   const selectedMaterial = activeMaterials.find((m) => m.name === material);
   const isSerialized = !!selectedMaterial?.serialized;
+
+  const applyDetectedQueue = (detected) => {
+    if (detected.length === 0) return;
+    setDetectedQueue(detected);
+    setQueueIndex(0);
+    setShowPhotoDetect(false);
+    setMaterial(detected[0].material);
+  };
+  const exitQueue = () => { setDetectedQueue(null); setQueueIndex(0); setMaterial(""); setNote(""); };
 
   React.useEffect(() => {
     setSelectedSerials(new Set()); setQty(""); setTransferOptions(null); setAvailableSerials([]); setError("");
@@ -5587,6 +5718,19 @@ function TransferCreate({ onSubmit, onCancel, materials, customers, currentUser,
 
   const sourceQty = transferOptions?.breakdown.find((b) => b.homebase === homebaseFrom)?.qty || 0;
 
+  // Once availability finishes loading for the queue's current material,
+  // pre-fill qty / pre-check serials from what the photo suggested — still
+  // fully editable, never trusted blindly (clamped to what's actually
+  // available, same as a manual entry would be).
+  React.useEffect(() => {
+    if (!detectedQueue || !transferOptions) return;
+    const current = detectedQueue[queueIndex];
+    if (!current || current.material !== material) return;
+    if (isSerialized) setSelectedSerials(new Set(availableSerials.slice(0, current.qty).map((s) => s.sn)));
+    else setQty(String(Math.max(1, Math.min(current.qty || 1, sourceQty || current.qty || 1))));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transferOptions, availableSerials]);
+
   const toggleSerial = (sn) => {
     setSelectedSerials((prev) => {
       const next = new Set(prev);
@@ -5598,16 +5742,31 @@ function TransferCreate({ onSubmit, onCancel, materials, customers, currentUser,
   const valid = customer && material && sourceQty > 0 &&
     (isSerialized ? selectedSerials.size > 0 : Number(qty) > 0 && Number(qty) <= sourceQty);
 
+  const advanceQueue = () => {
+    if (!detectedQueue || queueIndex >= detectedQueue.length - 1) { exitQueue(); return; }
+    const next = queueIndex + 1;
+    setQueueIndex(next);
+    setMaterial(detectedQueue[next].material);
+    setNote("");
+  };
+
+  // Mid-queue (more detected materials still waiting) submits quietly and
+  // stays on this page to process the next one; the last item in the queue
+  // (or a normal manual, non-queue submission) uses the regular onSubmit,
+  // which navigates back to the list exactly like it always has.
+  const isLastOrNotQueued = !detectedQueue || queueIndex >= detectedQueue.length - 1;
   const submit = async () => {
     setSaving(true); setError("");
-    const ok = await onSubmit({
+    const payload = {
       material, customer, homebaseFrom, homebaseTo,
       serials: isSerialized ? Array.from(selectedSerials) : undefined,
       qty: isSerialized ? undefined : Number(qty),
       note: note || undefined,
-    });
+    };
+    const ok = isLastOrNotQueued ? await onSubmit(payload) : await onSubmitQuiet(payload);
     setSaving(false);
-    if (!ok) setError("Gagal mengajukan transfer");
+    if (!ok) { setError("Gagal mengajukan transfer"); return; }
+    if (detectedQueue && !isLastOrNotQueued) advanceQueue();
   };
 
   return (
@@ -5632,13 +5791,35 @@ function TransferCreate({ onSubmit, onCancel, materials, customers, currentUser,
             </div>
           )}
           <div>
-            <label className="text-sm font-medium text-gray-700">Material <span className="text-red-500">*</span></label>
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium text-gray-700">Material <span className="text-red-500">*</span></label>
+              {!detectedQueue && (
+                <button onClick={() => setShowPhotoDetect((v) => !v)} disabled={!customer} className="text-xs text-emerald-800 font-medium flex items-center gap-1 disabled:text-gray-300"><Camera size={13} /> Deteksi dari Foto</button>
+              )}
+            </div>
             <select value={material} onChange={(e) => setMaterial(e.target.value)} disabled={!customer} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600 disabled:bg-gray-50">
               <option value="">Pilih material...</option>
               {activeMaterials.map((m) => <option key={m.id} value={m.name}>{m.name}</option>)}
             </select>
           </div>
         </div>
+
+        {showPhotoDetect && !detectedQueue && (
+          <div className="border border-gray-100 rounded-xl p-4 space-y-3">
+            <div className="text-xs text-gray-500">Upload foto material yang mau dipindahkan (boleh lebih dari satu foto) — sistem akan menebak jenis & jumlahnya, lalu form ini otomatis maju satu-per-satu untuk tiap material yang terdeteksi.</div>
+            <PhotoMaterialDetect api={api} onDetected={applyDetectedQueue} />
+          </div>
+        )}
+
+        {detectedQueue && (
+          <div className="flex items-center justify-between bg-emerald-50/60 border border-emerald-100 rounded-lg px-3 py-2.5 text-xs">
+            <span className="text-emerald-800 font-medium">Material {queueIndex + 1} dari {detectedQueue.length} terdeteksi dari foto{detectedQueue[queueIndex]?.confidence === "rendah" ? " — perkiraan, cek lagi" : ""}</span>
+            <div className="flex items-center gap-3">
+              <button onClick={advanceQueue} className="text-gray-500 hover:text-gray-800 font-medium">Lewati</button>
+              <button onClick={exitQueue} className="text-gray-500 hover:text-gray-800 font-medium">Batalkan mode deteksi</button>
+            </div>
+          </div>
+        )}
 
         {loadingOptions && <div className="text-xs text-gray-400">Memuat ketersediaan stock...</div>}
 
@@ -5682,7 +5863,7 @@ function TransferCreate({ onSubmit, onCancel, materials, customers, currentUser,
 
         <div className="flex justify-between pt-2 border-t border-gray-50">
           <button onClick={onCancel} className="text-sm text-gray-500 hover:text-gray-800">Batal</button>
-          <PrimaryButton onClick={submit} disabled={!valid || saving}>{saving ? "Memproses..." : "Ajukan Transfer"}</PrimaryButton>
+          <PrimaryButton onClick={submit} disabled={!valid || saving}>{saving ? "Memproses..." : isLastOrNotQueued && detectedQueue ? "Ajukan Material Terakhir" : detectedQueue ? "Ajukan & Lanjut" : "Ajukan Transfer"}</PrimaryButton>
         </div>
       </Card>
     </div>
@@ -5775,7 +5956,7 @@ function TransferDetail({ transfer: t, onBack, onApprove, onReject, onCancel, ro
 // which existing create form takes over from there — Warehouse as sender
 // is a Delivery, Warehouse as destination is a Return, anything else is a
 // Transfer between two homebases.
-function RequestCreate({ onSubmitDelivery, onSubmitReturn, onSubmitTransfer, onCancel, materials, tools, consumables, sites, homebases, customers, currentUser, api, returns, reconciliations, role }) {
+function RequestCreate({ onSubmitDelivery, onSubmitReturn, onSubmitTransfer, onSubmitTransferQuiet, onCancel, materials, tools, consumables, sites, homebases, customers, currentUser, api, returns, reconciliations, role }) {
   const [sender, setSender] = useState("");
   const [destination, setDestination] = useState("");
 
@@ -5884,9 +6065,9 @@ function RequestCreate({ onSubmitDelivery, onSubmitReturn, onSubmitTransfer, onC
     return <DeliveryCreate onSubmit={onSubmitDelivery} onCancel={onCancel} onBack={backToStart} materials={materials} tools={tools} consumables={consumables} sites={sites} homebases={homebases} currentUser={currentUser} customers={customers} api={api} initialHomebase={destination} />;
   }
   if (mode === "return") {
-    return <ReturnFaultyCreate onSubmit={onSubmitReturn} onCancel={onCancel} onBack={backToStart} materials={materials} returns={returns} reconciliations={reconciliations} currentUser={currentUser} customers={customers} initialHomebase={sender} />;
+    return <ReturnFaultyCreate onSubmit={onSubmitReturn} onCancel={onCancel} onBack={backToStart} materials={materials} returns={returns} reconciliations={reconciliations} currentUser={currentUser} customers={customers} initialHomebase={sender} api={api} />;
   }
-  return <TransferCreate onSubmit={onSubmitTransfer} onCancel={onCancel} onBack={backToStart} materials={materials} customers={customers} currentUser={currentUser} role={role} api={api} initialFrom={sender} initialTo={destination} />;
+  return <TransferCreate onSubmit={onSubmitTransfer} onSubmitQuiet={onSubmitTransferQuiet} onCancel={onCancel} onBack={backToStart} materials={materials} customers={customers} currentUser={currentUser} role={role} api={api} initialFrom={sender} initialTo={destination} />;
 }
 
 function ToolSerialDetail({ toolName, api, onBack }) {
@@ -7838,6 +8019,7 @@ function createApiClient(baseUrl, getToken, onUnauthorized) {
     createReceipt: (payload) => request("/stock/receipts", { method: "POST", body: payload }),
     getReceipts: () => request("/stock/receipts"),
     parseBkb: (document) => request("/stock/parse-bkb", { method: "POST", body: { document } }),
+    detectMaterialsPhoto: (photos) => request("/stock/detect-materials-photo", { method: "POST", body: { photos } }),
 
     // ---- Tools / Alat (shared pool, no division split — Peminjaman now happens via Delivery Request) ----
     getTools: () => request("/tools"),
@@ -9531,6 +9713,20 @@ export default function App() {
     } catch (err) { setApiError(err.message); return false; }
   };
 
+  // Same as submitTransfer but stays on the page — used for every submit
+  // EXCEPT the last one in TransferCreate's "Deteksi dari Foto" queue
+  // (several detected materials become several separate transfer requests
+  // in a row), since navigating away after the first one would abandon the
+  // rest of the queue before the user ever sees it.
+  const submitTransferQuiet = async (data) => {
+    try {
+      const created = await api.createTransfer(data);
+      setTransfers((prev) => [created, ...prev]);
+      showToast(`Transfer ${created.id} diajukan — menunggu approval Logistics`);
+      return true;
+    } catch (err) { setApiError(err.message); return false; }
+  };
+
   const approveTransfer = async (id) => {
     try {
       const updated = await api.approveTransfer(id);
@@ -9800,13 +9996,13 @@ export default function App() {
     content = d
       ? <DeliveryDetail delivery={d} onBack={() => setSelectedDelivery(null)} onApprove={approveDelivery} onReject={rejectDelivery} onCancel={cancelDelivery} onAssignStock={assignDeliveryStock} onShip={shipDelivery} onAddResi={addDeliveryResi} onAddBast={addDeliveryBast} onAddBkbLink={addDeliveryBkbLink} onAdvance={advanceDelivery} onReturnTools={returnDeliveryTools} role={role} materials={materials} tools={tools} api={api} />
       : <UnifiedRequestList deliveries={deliveries} returns={returns} transfers={transfers} gotoDetail={gotoDetail} setPage={goto} role={role} />;
-  } else if (page === "deliveryCreate") content = <RequestCreate onSubmitDelivery={submitDelivery} onSubmitReturn={submitReturn} onSubmitTransfer={submitTransfer} onCancel={() => goto("delivery")} materials={materials} tools={tools} consumables={consumables} sites={sites} homebases={homebases} currentUser={currentUser} customers={customers} api={api} returns={returns} reconciliations={reconciliations} role={role} />;
+  } else if (page === "deliveryCreate") content = <RequestCreate onSubmitDelivery={submitDelivery} onSubmitReturn={submitReturn} onSubmitTransfer={submitTransfer} onSubmitTransferQuiet={submitTransferQuiet} onCancel={() => goto("delivery")} materials={materials} tools={tools} consumables={consumables} sites={sites} homebases={homebases} currentUser={currentUser} customers={customers} api={api} returns={returns} reconciliations={reconciliations} role={role} />;
   else if (page === "returnFaulty") {
     const r = selectedReturn && returns.find((x) => x.id === selectedReturn);
     content = r
       ? <ReturnFaultyDetail r={r} onBack={() => setSelectedReturn(null)} onApprove={approveReturn} onRevise={reviseReturn} onShip={shipReturn} onAddResi={addResiReturn} onReceive={receiveReturn} onQC={qcReturn} onComplete={completeReturn} onEdit={() => setPage("returnFaultyEdit")} role={role} />
       : <UnifiedRequestList deliveries={deliveries} returns={returns} transfers={transfers} gotoDetail={gotoDetail} setPage={goto} role={role} />;
-  } else if (page === "returnFaultyCreate") content = <ReturnFaultyCreate onSubmit={submitReturn} onCancel={() => goto("delivery")} materials={materials} returns={returns} reconciliations={reconciliations} currentUser={currentUser} customers={customers} prefillItems={returnPrefill ? [returnPrefill] : undefined} />;
+  } else if (page === "returnFaultyCreate") content = <ReturnFaultyCreate onSubmit={submitReturn} onCancel={() => goto("delivery")} materials={materials} returns={returns} reconciliations={reconciliations} currentUser={currentUser} customers={customers} prefillItems={returnPrefill ? [returnPrefill] : undefined} api={api} />;
   else if (page === "returnFaultyEdit") {
     const r = returns.find((x) => x.id === selectedReturn);
     content = r ? (
@@ -9829,7 +10025,7 @@ export default function App() {
     content = r
       ? <ReconciliationDetail r={r} onBack={() => setSelectedRecon(null)} onApprove={approveRecon} onRevise={reviseRecon} onEdit={() => setPage("reconciliationEdit")} role={role} />
       : <ReconciliationList items={reconciliations} setSelected={setSelectedRecon} setPage={goto} role={role} />;
-  } else if (page === "reconciliationCreate") content = <ReconciliationCreate onSubmit={submitRecon} onCancel={() => goto("reconciliation")} materials={materials} returns={returns} reconciliations={reconciliations} homebases={homebases} currentUser={currentUser} customers={customers} />;
+  } else if (page === "reconciliationCreate") content = <ReconciliationCreate onSubmit={submitRecon} onCancel={() => goto("reconciliation")} materials={materials} returns={returns} reconciliations={reconciliations} homebases={homebases} currentUser={currentUser} customers={customers} api={api} />;
   else if (page === "reconciliationEdit") {
     const r = reconciliations.find((x) => x.id === selectedRecon);
     content = r ? (
@@ -9845,6 +10041,7 @@ export default function App() {
         revisionNote={r.revisionNote}
         currentUser={currentUser}
         customers={customers}
+        api={api}
       />
     ) : <ReconciliationList items={reconciliations} setSelected={setSelectedRecon} setPage={goto} role={role} />;
   }
