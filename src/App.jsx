@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from "react";
 import {
-  LayoutDashboard, Package, Truck, Undo2, ClipboardList, Boxes, ArrowLeftRight,
+  LayoutDashboard, Package, Truck, Undo2, ClipboardList, Boxes, ArrowLeftRight, ArrowRight,
   FileBarChart, Database, Users, Settings as SettingsIcon, ChevronDown, ChevronRight, ChevronUp, ArrowUpDown,
   Search, Bell, LogOut, Plus, Minus, X, Check, AlertTriangle, Camera, ChevronLeft,
   Filter, Download, Upload, Eye, EyeOff, MapPin, Phone, User as UserIcon, Menu, FileText, Wrench, HelpCircle,
@@ -672,23 +672,24 @@ const NAV_TREE = [
   {
     key: "material", label: "Request", icon: ClipboardList,
     children: [
-      // groupWith: hidden pages reachable only via RequestTabs from this
-      // row's own page — the sidebar row stays highlighted while on any
-      // of them too, since they read as "part of Delivery" to the user
-      // even though they don't get their own row.
+      // groupWith: hidden pages reachable only as Detail views from the
+      // unified Delivery list (UnifiedRequestList) — the sidebar row stays
+      // highlighted while on any of them too, since they read as "part of
+      // Delivery" to the user even though they don't get their own row.
       { key: "delivery", label: "Delivery", groupWith: ["returnFaulty", "stockTransfer"] },
       { key: "materialSwap", label: "Replacement" },
       { key: "clusterTransfer", label: "Transfer Antar Cluster" },
       { key: "returnToCustomer", label: "Return Material" },
       { key: "reconciliation", label: "Reconciliation" },
       // Return Material Faulty & Transfer Stock no longer get their own
-      // sidebar row — reachable as tabs from Delivery Request's list page
-      // instead (see RequestTabs — Transfer Stock is literally "move
-      // Delivered stock from one homebase to another", i.e. the Homebase
-      // to Homebase tab; Transfer Antar Cluster is a different thing
-      // (PIM-only cluster ownership) and keeps its own row). Kept
-      // `hidden: true` (not deleted) since the key is still how the page
-      // routes and hasAccess still gates it — same pattern as `movement`.
+      // sidebar row or list page — all three request types (Delivery,
+      // Return Material Faulty, Transfer Stock) now share one list
+      // (UnifiedRequestList) and one create form (RequestCreate) under
+      // Delivery; these two keys still route their own Detail view.
+      // Transfer Antar Cluster is a different thing (PIM-only cluster
+      // ownership) and keeps its own row. Kept `hidden: true` (not
+      // deleted) since the key is still how the page routes and hasAccess
+      // still gates it — same pattern as `movement`.
       { key: "returnFaulty", label: "Return Material Faulty", hidden: true },
       { key: "stockTransfer", label: "Transfer Stock", hidden: true },
     ],
@@ -757,7 +758,14 @@ function hasAccess(key, role, userCustomers = []) {
     return (userCustomers || []).includes(division);
   }
   const map = {
-    delivery: NAV_ACCESS.delivery, returnFaulty: NAV_ACCESS.returnFaulty, reconciliation: NAV_ACCESS.reconciliation,
+    // "delivery" is now the unified list/create entry point for all three
+    // request types (Delivery, Return Material Faulty, Transfer Stock), so
+    // anyone who could reach ANY of the three before must still be able to
+    // reach it — union of the three roster sets, not just NAV_ACCESS.delivery
+    // (which alone would silently lock Technicians out of Return Material
+    // Faulty, their only entry point into that flow).
+    delivery: [...new Set([...NAV_ACCESS.delivery, ...NAV_ACCESS.returnFaulty, ...NAV_ACCESS.stockTransfer])],
+    returnFaulty: NAV_ACCESS.returnFaulty, reconciliation: NAV_ACCESS.reconciliation,
     materialSwap: NAV_ACCESS.materialSwap, returnToCustomer: NAV_ACCESS.returnToCustomer,
     stock: NAV_ACCESS.stock, movement: NAV_ACCESS.movement,
     toolStock: NAV_ACCESS.toolStock, stockTransfer: NAV_ACCESS.stockTransfer, consumableStock: NAV_ACCESS.consumableStock,
@@ -816,9 +824,9 @@ function Sidebar({ page, setPage, role, userName, userCustomers, mobileOpen, onC
           const Icon = item.icon;
           const isOpen = open[item.key];
           // Checked against ALL children (hidden ones too, e.g. Return
-          // Material Faulty/Transfer Antar Cluster reachable only via
-          // RequestTabs) so the parent still highlights while on one of
-          // those pages, not just the ones with their own sidebar row.
+          // Material Faulty reachable only as a Detail view from the
+          // unified Delivery list) so the parent still highlights while on
+          // one of those pages, not just the ones with their own sidebar row.
           const childActive = item.children.some((c) => hasAccess(c.key, role, userCustomers) && c.key === page);
           return (
             <div key={item.key}>
@@ -1023,8 +1031,9 @@ function TopBar({ user, onLogout, title, subtitle, searchQuery, setSearchQuery, 
    DASHBOARD
    ============================================================ */
 
-function Dashboard({ role, userName, setPage, deliveries, returns, reconciliations, materials, tools, materialSwaps, api, currentUser }) {
+function Dashboard({ role, userName, setPage, deliveries, returns, reconciliations, transfers, materials, tools, materialSwaps, api, currentUser }) {
   const pendingApproval = deliveries.filter((d) => d.status === "Waiting Logistics Approval").length;
+  const transferPendingApproval = (transfers || []).filter((t) => t.status === "Waiting Logistics Approval").length;
   const inProgress = deliveries.filter((d) => ["In Progress", "Waiting Stock Assignment", "Preparing", "Shipped"].includes(d.status)).length;
   const waitingReview = returns.filter((r) => r.status === "Waiting Logistics Review").length;
   const reconReview = reconciliations.filter((r) => r.status === "Waiting Logistics Review").length;
@@ -1163,6 +1172,7 @@ function Dashboard({ role, userName, setPage, deliveries, returns, reconciliatio
     { icon: Undo2, color: "bg-red-50 text-red-600", title: "Return Faulty menunggu review", sub: "Diajukan oleh tim lapangan", count: waitingReview, cta: "Review", page: "returnFaulty" },
     { icon: ClipboardList, color: "bg-amber-50 text-amber-600", title: "Rekonsiliasi menunggu review", sub: "Periode berjalan", count: reconReview, cta: "Review", page: "reconciliation" },
     { icon: Truck, color: "bg-emerald-50 text-emerald-700", title: "Delivery Request menunggu approval", sub: "Diajukan oleh tim lapangan", count: pendingApproval, cta: "Approval", page: "delivery" },
+    { icon: ArrowLeftRight, color: "bg-teal-50 text-teal-700", title: "Transfer Stock menunggu approval", sub: "Antar homebase", count: transferPendingApproval, cta: "Approval", page: "delivery" },
     { icon: AlertTriangle, color: "bg-blue-50 text-blue-600", title: "Material mendekati stok minimum", sub: "Perlu perhatian", count: lowStock, cta: "Lihat", page: "stock" },
   ].filter((a) => a.count > 0);
 
@@ -1437,99 +1447,82 @@ function HelpPage({ role }) {
    DELIVERY REQUEST MODULE
    ============================================================ */
 
-// Shared tab strip for the three request-type flows that live under one
-// sidebar entry ("Request" > Delivery) instead of three — Return Material
-// Faulty and Transfer Stock don't get their own sidebar row, so this is
-// how you switch between them from any of the three list pages. Transfer
-// Stock is literally "move Delivered stock from one homebase to another",
-// i.e. Homebase to Homebase — Transfer Antar Cluster is a different thing
-// (PIM-only cluster ownership) and keeps its own separate sidebar row.
-// Only rendered on the LIST view of each (not detail/create), and only
-// shows tabs this user actually has access to (same hasAccess check the
-// sidebar itself uses) — a tab strip with one tab left is pointless, so
-// it hides entirely in that case.
-function RequestTabs({ page, setPage, role, userCustomers }) {
-  const tabs = [
-    { key: "delivery", label: "Warehouse to Homebase" },
-    { key: "returnFaulty", label: "Homebase to Warehouse" },
-    { key: "stockTransfer", label: "Homebase to Homebase" },
-  ].filter((t) => hasAccess(t.key, role, userCustomers));
-  if (tabs.length <= 1) return null;
-  return (
-    <div>
-      <div className="text-xs text-gray-400 mb-1.5">Sedang di:</div>
-      <div className="flex gap-2 flex-wrap">
-        {tabs.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setPage(t.key)}
-            className={`px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${
-              page === t.key ? "bg-emerald-800 text-white border-emerald-800" : "border-gray-200 text-gray-600 hover:bg-gray-50"
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
+// Replaces the old three-tab arrangement (Delivery Request / Return
+// Material Faulty / Transfer Stock each with their own list) — one list
+// merging all three, direction shown per row instead of picked via tab
+// first. Each kind keeps its own table/workflow underneath (deliveries,
+// returns, stock_transfers are genuinely different processes — see
+// DeliveryDetail/ReturnFaultyDetail/TransferDetail); this only merges the
+// entry point.
+function UnifiedRequestList({ deliveries, returns, transfers, gotoDetail, setPage, role }) {
+  const canCreate = [ROLES.SPV, ROLES.TECH, ROLES.LOGISTICS, ROLES.MANAGER].includes(role);
 
-function DeliveryList({ deliveries, setSelected, setPage, role, page, userCustomers }) {
-  const [filter, setFilter] = usePersistedState("delivery:filter", "All");
-  const statuses = ["All", "Waiting Logistics Approval", "In Progress", "Selesai Dikirim", "Rejected"];
-  const countFor = (s) => s === "All" ? deliveries.length : deliveries.filter((d) => d.status === s || (s === "In Progress" && ["In Progress", "Preparing", "Shipped", "Waiting Stock Assignment"].includes(d.status))).length;
+  const merged = useMemo(() => {
+    const rows = [
+      ...deliveries.map((d) => ({ _kind: "delivery", id: d.id, from: "Warehouse Pusat", to: d.homebase, by: d.requester, date: d.date, status: d.status })),
+      ...returns.map((r) => ({ _kind: "return", id: r.id, from: r.homebase, to: "Warehouse Pusat", by: r.technician, date: r.date, status: r.status })),
+      ...transfers.map((t) => ({ _kind: "transfer", id: t.id, from: t.homebase_from, to: t.homebase_to, by: t.performed_by, date: t.date, status: t.status })),
+    ];
+    return rows.sort((a, b) => (a.date === b.date ? b.id.localeCompare(a.id) : a.date < b.date ? 1 : -1));
+  }, [deliveries, returns, transfers]);
+
+  const ARAH_OPTIONS = [
+    { key: "All", label: "Semua" },
+    { key: "delivery", label: "Dari Warehouse" },
+    { key: "return", label: "Ke Warehouse" },
+    { key: "transfer", label: "Antar Homebase" },
+  ];
+  const [arah, setArah] = usePersistedState("delivery:arah", "All");
+  const countFor = (k) => (k === "All" ? merged.length : merged.filter((m) => m._kind === k).length);
+
   const [sort, setSort] = usePersistedState("delivery:sort", { key: null, dir: "asc" });
   const handleSort = (key) => setSort((prev) => (prev.key === key ? { key, dir: prev.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" }));
-  const filtered = sortRows(filter === "All" ? deliveries : deliveries.filter((d) => d.status === filter || (filter === "In Progress" && ["In Progress", "Preparing", "Shipped", "Waiting Stock Assignment"].includes(d.status))), sort);
-  const pager = usePagination("delivery", JSON.stringify([filter, sort]), filtered.length);
+  const filtered = sortRows(arah === "All" ? merged : merged.filter((m) => m._kind === arah), sort);
+  const pager = usePagination("delivery", JSON.stringify([arah, sort]), filtered.length);
   const visible = pager.slice(filtered);
+
+  const DETAIL_PAGE = { delivery: "delivery", return: "returnFaulty", transfer: "stockTransfer" };
 
   return (
     <div className="p-4 sm:p-8 space-y-5">
-      <RequestTabs page={page} setPage={setPage} role={role} userCustomers={userCustomers} />
       <SectionTitle
-        title="Warehouse to Homebase"
-        subtitle="Delivery Request — pengajuan dan pengiriman material ke homebase / site"
-        right={role === ROLES.SPV || role === ROLES.MANAGER ? (
-          <PrimaryButton onClick={() => setPage("deliveryCreate")}><Plus size={16} /> Buat Request</PrimaryButton>
-        ) : null}
+        title="Delivery"
+        subtitle="Pengajuan dan pengiriman material — dari warehouse, ke warehouse, atau antar homebase"
+        right={canCreate ? <PrimaryButton onClick={() => setPage("deliveryCreate")}><Plus size={16} /> Buat Request</PrimaryButton> : null}
       />
-      <StatusFilterPills options={statuses.map((s) => ({ key: s, count: countFor(s) }))} value={filter} onChange={setFilter} />
+      <StatusFilterPills options={ARAH_OPTIONS.map((o) => ({ key: o.key, label: o.label, count: countFor(o.key) }))} value={arah} onChange={setArah} />
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
               <SortableHeader label="No. Request" sortKey="id" sort={sort} onSort={handleSort} />
-              <SortableHeader label="Requester" sortKey="requester" sort={sort} onSort={handleSort} />
-              <SortableHeader label="Homebase" sortKey="homebase" sort={sort} onSort={handleSort} />
-              <SortableHeader label="Site" sortKey="site" sort={sort} onSort={handleSort} />
-              <SortableHeader label="Keperluan" sortKey="keperluan" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Pengirim" sortKey="from" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Tujuan" sortKey="to" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Oleh" sortKey="by" sort={sort} onSort={handleSort} />
               <SortableHeader label="Tgl" sortKey="date" sort={sort} onSort={handleSort} />
               <SortableHeader label="Status" sortKey="status" sort={sort} onSort={handleSort} />
               <th className="px-5 py-3 font-medium"></th>
             </tr>
           </thead>
           <tbody>
-            {visible.map((d) => (
-              <tr key={d.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/50">
-                <td className="px-5 py-3 font-medium text-gray-800">{d.id}</td>
-                <td className="px-5 py-3 text-gray-600">{d.requester}</td>
-                <td className="px-5 py-3 text-gray-600">{d.homebase}</td>
-                <td className="px-5 py-3 text-gray-500">{d.site || "-"}</td>
-                <td className="px-5 py-3 text-gray-500">{d.keperluan}</td>
-                <td className="px-5 py-3 text-gray-500">{d.date}</td>
-                <td className="px-5 py-3"><StatusBadge status={d.status} /></td>
+            {visible.map((r) => (
+              <tr key={`${r._kind}-${r.id}`} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/50">
+                <td className="px-5 py-3 font-medium text-gray-800">{r.id}</td>
+                <td className="px-5 py-3 text-gray-600">{r.from}</td>
+                <td className="px-5 py-3 text-emerald-700">{r.to}</td>
+                <td className="px-5 py-3 text-gray-600">{r.by}</td>
+                <td className="px-5 py-3 text-gray-500">{r.date}</td>
+                <td className="px-5 py-3"><StatusBadge status={r.status} /></td>
                 <td className="px-5 py-3">
-                  <button onClick={() => setSelected(d.id)} className="text-emerald-800 text-xs font-medium flex items-center gap-1">
+                  <button onClick={() => gotoDetail(DETAIL_PAGE[r._kind], r._kind, r.id)} className="text-emerald-800 text-xs font-medium flex items-center gap-1">
                     <Eye size={14} /> Detail
                   </button>
                 </td>
               </tr>
             ))}
             {filtered.length === 0 && (
-              <tr><td colSpan={8}><EmptyState text="Tidak ada data untuk filter ini." /></td></tr>
+              <tr><td colSpan={7}><EmptyState text="Tidak ada data untuk filter ini." /></td></tr>
             )}
           </tbody>
         </table>
@@ -1540,9 +1533,9 @@ function DeliveryList({ deliveries, setSelected, setPage, role, page, userCustom
   );
 }
 
-function DeliveryCreate({ onSubmit, onCancel, materials, tools, consumables, sites, homebases, currentUser, customers, api }) {
+function DeliveryCreate({ onSubmit, onCancel, materials, tools, consumables, sites, homebases, currentUser, customers, api, initialHomebase }) {
   const [step, setStep] = useState(1);
-  const [homebase, setHomebase] = useState("");
+  const [homebase, setHomebase] = useState(initialHomebase || "");
   const [site, setSite] = useState("");
   const [siteSearch, setSiteSearch] = useState("");
   const [keperluan, setKeperluan] = useState("");
@@ -3844,59 +3837,6 @@ function StockMovement({ movements, filter, setFilter, deliveries }) {
    RETURN MATERIAL FAULTY MODULE
    ============================================================ */
 
-function ReturnFaultyList({ returns, setSelected, setPage, role, page, userCustomers }) {
-  const [filter, setFilter] = usePersistedState("returnFaulty:filter", "All");
-  const statuses = ["All", "Waiting Logistics Review", "Revision Required", "Ready to Ship", "On Delivery", "Received by Warehouse", "QC Checking", "Completed"];
-  const countFor = (s) => s === "All" ? returns.length : returns.filter((r) => r.status === s).length;
-  const filtered = filter === "All" ? returns : returns.filter((r) => r.status === filter);
-
-  return (
-    <div className="p-4 sm:p-8 space-y-5">
-      <RequestTabs page={page} setPage={setPage} role={role} userCustomers={userCustomers} />
-      <SectionTitle
-        title="Homebase to Warehouse"
-        subtitle="Return Material Faulty — pengembalian material rusak oleh teknisi lapangan"
-        right={role === ROLES.TECH || role === ROLES.MANAGER ? <PrimaryButton onClick={() => setPage("returnFaultyCreate")}><Plus size={16} /> Buat Return</PrimaryButton> : null}
-      />
-      <StatusFilterPills options={statuses.map((s) => ({ key: s, count: countFor(s) }))} value={filter} onChange={setFilter} />
-      <Card className="overflow-hidden">
-        <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
-              <th className="px-5 py-3 font-medium">Return ID</th>
-              <th className="px-5 py-3 font-medium">Technician</th>
-              <th className="px-5 py-3 font-medium">Homebase</th>
-              <th className="px-5 py-3 font-medium">Material</th>
-              <th className="px-5 py-3 font-medium">Status</th>
-              <th className="px-5 py-3 font-medium"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((r) => (
-              <tr key={r.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/50">
-                <td className="px-5 py-3 font-medium text-gray-800">{r.id}</td>
-                <td className="px-5 py-3 text-gray-600">{r.technician}</td>
-                <td className="px-5 py-3 text-gray-600">{r.homebase}</td>
-                <td className="px-5 py-3 text-gray-500">{r.items.map((i) => i.material).join(", ")}</td>
-                <td className="px-5 py-3"><StatusBadge status={r.status} /></td>
-                <td className="px-5 py-3 flex items-center gap-3">
-                  <button onClick={() => setSelected(r.id)} className="text-emerald-800 text-xs font-medium flex items-center gap-1"><Eye size={14} /> Detail</button>
-                  {role === ROLES.TECH && r.status === "Revision Required" && (
-                    <span className="text-red-600 text-xs font-medium">Perlu Revisi</span>
-                  )}
-                </td>
-              </tr>
-            ))}
-            {filtered.length === 0 && <tr><td colSpan={6}><EmptyState text="Tidak ada data untuk filter ini." /></td></tr>}
-          </tbody>
-        </table>
-        </div>
-      </Card>
-    </div>
-  );
-}
-
 function DocCheck({ label, checked, onToggle }) {
   return (
     <button onClick={onToggle} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl border text-sm text-left transition-colors ${checked ? "border-emerald-200 bg-emerald-50/50" : "border-gray-200"}`}>
@@ -4177,7 +4117,7 @@ function findSNConflict(sn, { returns = [], reconciliations = [], excludeId = nu
   return null;
 }
 
-function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconciliations, initialData, excludeId, revisionNote, currentUser, customers, prefillItems }) {
+function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconciliations, initialData, excludeId, revisionNote, currentUser, customers, prefillItems, initialHomebase }) {
   const isEdit = !!initialData;
   const isManager = currentUser?.role === ROLES.MANAGER;
   const myDivisions = currentUser?.customers || [];
@@ -4230,6 +4170,7 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
     items: items.map((it) => ({ material: it.material, qty: it.serials.length, serials: it.serials })),
     docs,
     ...(!isEdit && needsDivisionPicker ? { customer } : {}),
+    ...(!isEdit && initialHomebase ? { homebase: initialHomebase } : {}),
   });
 
   return (
@@ -5557,17 +5498,19 @@ function ClusterTransferPage({ materials, customers, currentUser, role, api, sho
   );
 }
 
-function TransferStockPage({ materials, homebases, customers, currentUser, role, api, showToast, setPage, page, userCustomers }) {
+// Form half of the old TransferStockPage, extracted so it can be reached
+// through the unified Delivery create flow (RequestCreate) with the
+// from/to homebases already fixed by the sender/destination step —
+// history + approve/reject/cancel now live in TransferDetail /
+// UnifiedRequestList instead.
+function TransferCreate({ onSubmit, onCancel, materials, customers, currentUser, role, api, initialFrom, initialTo }) {
   const isManager = role === ROLES.MANAGER;
   const myDivisions = currentUser?.customers || [];
   const needsDivisionPicker = isManager || myDivisions.length > 1;
   const divisionOptions = isManager ? customers.filter((c) => c.status === "Active").map((c) => c.name) : myDivisions;
-  const canSubmit = role === ROLES.MANAGER || role === ROLES.LOGISTICS;
 
   const [customer, setCustomer] = useState(needsDivisionPicker ? "" : (myDivisions[0] || ""));
   const [material, setMaterial] = useState("");
-  const [homebaseFrom, setHomebaseFrom] = useState("");
-  const [homebaseTo, setHomebaseTo] = useState("");
   const [transferOptions, setTransferOptions] = useState(null); // { serialized, breakdown: [{homebase, qty}] }
   const [loadingOptions, setLoadingOptions] = useState(false);
   const [availableSerials, setAvailableSerials] = useState([]);
@@ -5576,91 +5519,28 @@ function TransferStockPage({ materials, homebases, customers, currentUser, role,
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [transfers, setTransfers] = useState([]);
-  const [loadingTransfers, setLoadingTransfers] = useState(true);
-  const [confirmCancelId, setConfirmCancelId] = useState(null);
-  const [cancellingId, setCancellingId] = useState(null);
-  const [approvingId, setApprovingId] = useState(null);
-  const [confirmApproveId, setConfirmApproveId] = useState(null);
-  const [rejectingId, setRejectingId] = useState(null);
-  const [rejectTargetId, setRejectTargetId] = useState(null);
-  const [rejectReason, setRejectReason] = useState("");
 
+  const homebaseFrom = initialFrom;
+  const homebaseTo = initialTo;
   const activeMaterials = materials.filter((m) => m.status === "Active");
   const selectedMaterial = activeMaterials.find((m) => m.name === material);
   const isSerialized = !!selectedMaterial?.serialized;
 
-  const loadTransfers = () => {
-    setLoadingTransfers(true);
-    api.getTransfers().then(setTransfers).catch(() => {}).finally(() => setLoadingTransfers(false));
-  };
-  React.useEffect(loadTransfers, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const cancelTransfer = async (id) => {
-    setCancellingId(id);
-    try {
-      await api.cancelTransfer(id);
-      showToast("Transfer dibatalkan — stock dikembalikan ke homebase asal");
-      loadTransfers();
-    } catch (err) {
-      showToast(err.message || "Gagal membatalkan transfer");
-    } finally {
-      setCancellingId(null);
-      setConfirmCancelId(null);
-    }
-  };
-
-  const approveTransfer = async (id) => {
-    setApprovingId(id);
-    try {
-      await api.approveTransfer(id);
-      showToast("Transfer disetujui — stock sudah dipindahkan");
-      loadTransfers();
-    } catch (err) {
-      showToast(err.message || "Gagal approve transfer");
-    } finally {
-      setApprovingId(null);
-      setConfirmApproveId(null);
-    }
-  };
-
-  const rejectTransfer = async (id, reason) => {
-    setRejectingId(id);
-    try {
-      await api.rejectTransfer(id, reason);
-      showToast("Transfer ditolak");
-      loadTransfers();
-    } catch (err) {
-      showToast(err.message || "Gagal menolak transfer");
-    } finally {
-      setRejectingId(null);
-      setRejectTargetId(null);
-      setRejectReason("");
-    }
-  };
-
-  // Every time material or division changes, the whole "where is it"
-  // picture is stale — reset the homebase choices along with it rather
-  // than leaving a source/destination selected that may no longer apply.
   React.useEffect(() => {
-    setHomebaseFrom(""); setHomebaseTo(""); setSelectedSerials(new Set()); setQty(""); setTransferOptions(null); setError("");
+    setSelectedSerials(new Set()); setQty(""); setTransferOptions(null); setAvailableSerials([]); setError("");
     if (!material || !customer) return;
     setLoadingOptions(true);
-    api.getTransferOptions(material, customer).then(setTransferOptions).catch((err) => setError(err.message)).finally(() => setLoadingOptions(false));
+    api.getTransferOptions(material, customer)
+      .then((opts) => {
+        setTransferOptions(opts);
+        if (opts?.serialized) return api.getSerials(material, "Delivered", customer, homebaseFrom).then(setAvailableSerials);
+      })
+      .catch((err) => setError(err.message))
+      .finally(() => setLoadingOptions(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [material, customer]);
 
-  // Once a source homebase is picked for a serialized material, fetch the
-  // actual units sitting there so specific ones can be checked off.
-  React.useEffect(() => {
-    setSelectedSerials(new Set());
-    if (!isSerialized || !homebaseFrom) { setAvailableSerials([]); return; }
-    api.getSerials(material, "Delivered", customer, homebaseFrom).then(setAvailableSerials).catch(() => setAvailableSerials([]));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isSerialized, homebaseFrom, material, customer]);
-
   const sourceQty = transferOptions?.breakdown.find((b) => b.homebase === homebaseFrom)?.qty || 0;
-  const destinationOptions = homebases.filter((h) => h.status === "Active" && h.name !== homebaseFrom);
 
   const toggleSerial = (sn) => {
     setSelectedSerials((prev) => {
@@ -5670,37 +5550,31 @@ function TransferStockPage({ materials, homebases, customers, currentUser, role,
     });
   };
 
-  const valid = customer && material && homebaseFrom && homebaseTo && homebaseFrom !== homebaseTo &&
+  const valid = customer && material && sourceQty > 0 &&
     (isSerialized ? selectedSerials.size > 0 : Number(qty) > 0 && Number(qty) <= sourceQty);
 
   const submit = async () => {
     setSaving(true); setError("");
-    try {
-      await api.createTransfer({
-        material, customer, homebaseFrom, homebaseTo,
-        serials: isSerialized ? Array.from(selectedSerials) : undefined,
-        qty: isSerialized ? undefined : Number(qty),
-        note: note || undefined,
-      });
-      showToast(`Transfer ${material} dari ${homebaseFrom} ke ${homebaseTo} diajukan — menunggu approval Logistics`);
-      setHomebaseTo(""); setSelectedSerials(new Set()); setQty(""); setNote("");
-      api.getTransferOptions(material, customer).then(setTransferOptions).catch(() => {});
-      if (isSerialized) api.getSerials(material, "Delivered", customer, homebaseFrom).then(setAvailableSerials).catch(() => {});
-      loadTransfers();
-    } catch (err) {
-      setError(err.message || "Gagal memindahkan stock");
-    } finally {
-      setSaving(false);
-    }
+    const ok = await onSubmit({
+      material, customer, homebaseFrom, homebaseTo,
+      serials: isSerialized ? Array.from(selectedSerials) : undefined,
+      qty: isSerialized ? undefined : Number(qty),
+      note: note || undefined,
+    });
+    setSaving(false);
+    if (!ok) setError("Gagal mengajukan transfer");
   };
 
   return (
-    <div className="p-4 sm:p-8 space-y-5">
-      <RequestTabs page={page} setPage={setPage} role={role} userCustomers={userCustomers} />
-      <SectionTitle title="Homebase to Homebase" subtitle={canSubmit ? "Transfer Stock — pindahkan stock material yang sudah Delivered dari satu homebase ke homebase lain" : "Transfer Stock — riwayat transfer stock antar homebase"} />
+    <div className="p-4 sm:p-8 max-w-2xl mx-auto space-y-6">
+      <SectionTitle title="Buat Request — Homebase to Homebase" subtitle="Transfer Stock — pindahkan stock material yang sudah Delivered dari satu homebase ke homebase lain" />
+      <Card className="p-6 space-y-4">
+        <div className="flex items-center gap-2 text-sm bg-emerald-50/60 border border-emerald-100 rounded-lg px-3 py-2.5">
+          <span className="font-medium text-gray-700">{homebaseFrom}</span>
+          <ArrowRight size={14} className="text-emerald-700" />
+          <span className="font-medium text-emerald-700">{homebaseTo}</span>
+        </div>
 
-      {canSubmit && (
-      <Card className="p-6 space-y-4 max-w-2xl">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {needsDivisionPicker && (
             <div>
@@ -5723,168 +5597,212 @@ function TransferStockPage({ materials, homebases, customers, currentUser, role,
         {loadingOptions && <div className="text-xs text-gray-400">Memuat ketersediaan stock...</div>}
 
         {transferOptions && (
-          <div>
-            <div className="text-xs text-gray-500 mb-1.5">Stock {material} saat ini per homebase:</div>
-            {transferOptions.breakdown.length === 0 ? (
-              <div className="text-xs text-gray-400">Belum ada stock Delivered untuk material ini di divisi {customer}.</div>
-            ) : (
-              <div className="flex flex-wrap gap-2">
-                {transferOptions.breakdown.map((b) => (
-                  <span key={b.homebase} className="text-xs bg-gray-100 text-gray-600 px-2.5 py-1 rounded-full">{b.homebase}: <span className="font-medium">{b.qty}</span></span>
-                ))}
-              </div>
-            )}
+          <div className="text-xs text-gray-500">
+            Stock {material} tersedia di {homebaseFrom}: <span className={`font-medium ${sourceQty > 0 ? "text-emerald-700" : "text-red-600"}`}>{sourceQty}</span>
+            {sourceQty === 0 && <span className="text-red-600"> — tidak bisa transfer dari homebase ini, pilih material lain atau ubah pengirim.</span>}
           </div>
         )}
 
-        {transferOptions && transferOptions.breakdown.length > 0 && (
-          <>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="text-sm font-medium text-gray-700">Dari Homebase <span className="text-red-500">*</span></label>
-                <select value={homebaseFrom} onChange={(e) => setHomebaseFrom(e.target.value)} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600">
-                  <option value="">Pilih homebase asal...</option>
-                  {transferOptions.breakdown.map((b) => <option key={b.homebase} value={b.homebase}>{b.homebase} (tersedia: {b.qty})</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="text-sm font-medium text-gray-700">Ke Homebase <span className="text-red-500">*</span></label>
-                <select value={homebaseTo} onChange={(e) => setHomebaseTo(e.target.value)} disabled={!homebaseFrom} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600 disabled:bg-gray-50">
-                  <option value="">Pilih homebase tujuan...</option>
-                  {destinationOptions.map((h) => <option key={h.code} value={h.name}>{h.name}</option>)}
-                </select>
-              </div>
+        {sourceQty > 0 && isSerialized && (
+          <div>
+            <label className="text-sm font-medium text-gray-700">Pilih Serial Number <span className="text-red-500">*</span></label>
+            <div className="mt-1.5 border border-gray-200 rounded-lg max-h-48 overflow-y-auto divide-y divide-gray-50">
+              {availableSerials.length === 0 ? (
+                <div className="text-xs text-gray-400 p-3">Tidak ada unit tersedia di {homebaseFrom}.</div>
+              ) : availableSerials.map((s) => (
+                <label key={s.sn} className="flex items-center gap-2 px-3 py-2 text-sm cursor-pointer hover:bg-gray-50">
+                  <input type="checkbox" checked={selectedSerials.has(s.sn)} onChange={() => toggleSerial(s.sn)} className="accent-emerald-800" />
+                  <span className="font-mono text-xs">{s.sn}</span>
+                </label>
+              ))}
             </div>
-
-            {homebaseFrom && isSerialized && (
-              <div>
-                <label className="text-sm font-medium text-gray-700">Pilih Serial Number <span className="text-red-500">*</span></label>
-                <div className="mt-1.5 border border-gray-200 rounded-lg max-h-48 overflow-y-auto divide-y divide-gray-50">
-                  {availableSerials.length === 0 ? (
-                    <div className="text-xs text-gray-400 p-3">Tidak ada unit tersedia di {homebaseFrom}.</div>
-                  ) : availableSerials.map((s) => (
-                    <label key={s.sn} className="flex items-center gap-2 px-3 py-2 text-sm cursor-pointer hover:bg-gray-50">
-                      <input type="checkbox" checked={selectedSerials.has(s.sn)} onChange={() => toggleSerial(s.sn)} className="accent-emerald-800" />
-                      <span className="font-mono text-xs">{s.sn}</span>
-                    </label>
-                  ))}
-                </div>
-                {selectedSerials.size > 0 && <div className="text-xs text-emerald-700 mt-1">{selectedSerials.size} unit dipilih</div>}
-              </div>
-            )}
-
-            {homebaseFrom && !isSerialized && (
-              <div>
-                <label className="text-sm font-medium text-gray-700">Qty <span className="text-red-500">*</span></label>
-                <input type="number" min="1" max={sourceQty} value={qty} onChange={(e) => setQty(e.target.value)} placeholder={`Maks. ${sourceQty}`} className="mt-1.5 w-full max-w-[160px] border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
-              </div>
-            )}
-
-            <div>
-              <label className="text-sm font-medium text-gray-700">Catatan <span className="text-gray-400 font-normal">(opsional)</span></label>
-              <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="mis. alasan transfer" className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
-            </div>
-          </>
+            {selectedSerials.size > 0 && <div className="text-xs text-emerald-700 mt-1">{selectedSerials.size} unit dipilih</div>}
+          </div>
         )}
+
+        {sourceQty > 0 && !isSerialized && (
+          <div>
+            <label className="text-sm font-medium text-gray-700">Qty <span className="text-red-500">*</span></label>
+            <input type="number" min="1" max={sourceQty} value={qty} onChange={(e) => setQty(e.target.value)} placeholder={`Maks. ${sourceQty}`} className="mt-1.5 w-full max-w-[160px] border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+          </div>
+        )}
+
+        <div>
+          <label className="text-sm font-medium text-gray-700">Catatan <span className="text-gray-400 font-normal">(opsional)</span></label>
+          <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="mis. alasan transfer" className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+        </div>
 
         {error && <div className="bg-red-50 border border-red-100 text-red-700 text-sm rounded-lg px-3 py-2">{error}</div>}
 
-        <div className="flex justify-end pt-2 border-t border-gray-50">
-          <PrimaryButton onClick={submit} disabled={!valid || saving}>{saving ? "Memproses..." : "Transfer Stock"}</PrimaryButton>
+        <div className="flex justify-between pt-2 border-t border-gray-50">
+          <button onClick={onCancel} className="text-sm text-gray-500 hover:text-gray-800">Batal</button>
+          <PrimaryButton onClick={submit} disabled={!valid || saving}>{saving ? "Memproses..." : "Ajukan Transfer"}</PrimaryButton>
         </div>
       </Card>
-      )}
-
-      <Card className="overflow-hidden">
-        <div className="px-5 py-4 border-b border-gray-50 text-sm font-semibold text-gray-800">Riwayat Transfer</div>
-        <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
-              <th className="px-5 py-3 font-medium">ID</th>
-              <th className="px-5 py-3 font-medium">Material</th>
-              <th className="px-5 py-3 font-medium">Divisi</th>
-              <th className="px-5 py-3 font-medium">Dari</th>
-              <th className="px-5 py-3 font-medium">Ke</th>
-              <th className="px-5 py-3 font-medium">Qty</th>
-              <th className="px-5 py-3 font-medium">Oleh</th>
-              <th className="px-5 py-3 font-medium">Tgl</th>
-              <th className="px-5 py-3 font-medium">Status</th>
-              <th className="px-5 py-3 font-medium"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {transfers.map((t) => (
-              <tr key={t.id} className={`border-b border-gray-50 last:border-0 ${["Cancelled", "Rejected"].includes(t.status) ? "opacity-50" : ""}`}>
-                <td className="px-5 py-3 font-medium text-gray-800">{t.id}</td>
-                <td className="px-5 py-3 text-gray-700">{t.material}</td>
-                <td className="px-5 py-3 text-gray-600">{t.customer}</td>
-                <td className="px-5 py-3 text-gray-600">{t.homebase_from}</td>
-                <td className="px-5 py-3 text-emerald-700">{t.homebase_to}</td>
-                <td className="px-5 py-3 text-gray-600">{t.qty}{t.serials?.length > 0 ? ` (${t.serials.join(", ")})` : ""}</td>
-                <td className="px-5 py-3 text-gray-500">{t.performed_by}</td>
-                <td className="px-5 py-3 text-gray-500">{t.date}</td>
-                <td className="px-5 py-3"><StatusBadge status={t.status || "Completed"} /></td>
-                <td className="px-5 py-3">
-                  {canSubmit && t.status === "Waiting Logistics Approval" && (
-                    <div className="flex items-center gap-3">
-                      <button onClick={() => setConfirmApproveId(t.id)} className="text-emerald-700 hover:text-emerald-900 text-xs font-medium">Approve</button>
-                      <button onClick={() => { setRejectTargetId(t.id); setRejectReason(""); }} className="text-red-500 hover:text-red-700 text-xs font-medium">Tolak</button>
-                    </div>
-                  )}
-                  {canSubmit && t.status === "Completed" && (
-                    <button onClick={() => setConfirmCancelId(t.id)} className="text-red-500 hover:text-red-700 text-xs font-medium">Batalkan</button>
-                  )}
-                  {t.status === "Rejected" && t.rejected_reason && (
-                    <span className="text-xs text-gray-400" title={t.rejected_reason}>Alasan: {t.rejected_reason}</span>
-                  )}
-                </td>
-              </tr>
-            ))}
-            {!loadingTransfers && transfers.length === 0 && <tr><td colSpan={10}><EmptyState text="Belum ada riwayat transfer." /></td></tr>}
-          </tbody>
-        </table>
-        </div>
-      </Card>
-
-      <ConfirmDialog
-        open={!!confirmCancelId}
-        title="Batalkan Transfer"
-        message={`Transfer ${confirmCancelId} akan dibatalkan dan stock dikembalikan ke homebase asal. Hanya bisa dilakukan kalau belum ada perubahan lain pada unit/stock ini sejak transfer dibuat. Lanjutkan?`}
-        confirmLabel={cancellingId ? "Membatalkan..." : "Ya, Batalkan"}
-        danger
-        onConfirm={() => cancelTransfer(confirmCancelId)}
-        onCancel={() => setConfirmCancelId(null)}
-      />
-
-      <ConfirmDialog
-        open={!!confirmApproveId}
-        title="Approve Transfer"
-        message={`Transfer ${confirmApproveId} akan disetujui dan stock langsung dipindahkan ke homebase tujuan. Lanjutkan?`}
-        confirmLabel={approvingId ? "Menyetujui..." : "Ya, Approve"}
-        onConfirm={() => approveTransfer(confirmApproveId)}
-        onCancel={() => setConfirmApproveId(null)}
-      />
-
-      <ConfirmDialog
-        open={!!rejectTargetId}
-        title="Tolak Transfer"
-        message={`Transfer ${rejectTargetId} akan ditolak — stock tidak jadi dipindahkan.`}
-        confirmLabel={rejectingId ? "Menolak..." : "Ya, Tolak"}
-        danger
-        onConfirm={() => rejectTransfer(rejectTargetId, rejectReason)}
-        onCancel={() => { setRejectTargetId(null); setRejectReason(""); }}
-      >
-        <textarea
-          value={rejectReason}
-          onChange={(e) => setRejectReason(e.target.value)}
-          placeholder="Alasan penolakan (opsional)..."
-          rows={2}
-          className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600"
-        />
-      </ConfirmDialog>
     </div>
   );
+}
+
+// Detail page for a single Transfer Stock request — Transfer Stock had no
+// detail view before (only inline history-row actions); this gives it
+// parity with DeliveryDetail/ReturnFaultyDetail now that it lives behind
+// the same unified list.
+function TransferDetail({ transfer: t, onBack, onApprove, onReject, onCancel, role }) {
+  const canAct = role === ROLES.MANAGER || role === ROLES.LOGISTICS;
+  const [confirmApprove, setConfirmApprove] = useState(false);
+  const [confirmReject, setConfirmReject] = useState(false);
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  const [rejectReason, setRejectReason] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const run = async (fn) => { setBusy(true); await fn(); setBusy(false); };
+
+  return (
+    <div className="p-4 sm:p-8 max-w-2xl mx-auto space-y-6">
+      <button onClick={onBack} className="text-sm text-gray-500 flex items-center gap-1 hover:text-gray-800"><ChevronLeft size={16} /> Kembali ke Delivery</button>
+      <SectionTitle title={`Transfer Stock — ${t.id}`} subtitle="Homebase to Homebase" right={<StatusBadge status={t.status} />} />
+
+      <Card className="p-6 space-y-3 text-sm">
+        <div className="flex items-center gap-2">
+          <span className="font-medium text-gray-700">{t.homebase_from}</span>
+          <ArrowRight size={14} className="text-emerald-700" />
+          <span className="font-medium text-emerald-700">{t.homebase_to}</span>
+        </div>
+        <div className="grid grid-cols-2 gap-3 text-gray-600">
+          <div><span className="text-gray-400">Material</span><div className="font-medium text-gray-800">{t.material}</div></div>
+          <div><span className="text-gray-400">Divisi</span><div className="font-medium text-gray-800">{t.customer}</div></div>
+          <div><span className="text-gray-400">Qty</span><div className="font-medium text-gray-800">{t.qty}{t.serials?.length > 0 ? ` (${t.serials.join(", ")})` : ""}</div></div>
+          <div><span className="text-gray-400">Oleh</span><div className="font-medium text-gray-800">{t.performed_by}</div></div>
+          <div><span className="text-gray-400">Tanggal</span><div className="font-medium text-gray-800">{t.date}</div></div>
+        </div>
+        {t.note && <div><span className="text-gray-400">Catatan</span><div className="text-gray-700">{t.note}</div></div>}
+        {t.status === "Rejected" && t.rejected_reason && (
+          <div className="bg-red-50 border border-red-100 text-red-700 rounded-lg px-3 py-2 text-xs">Ditolak oleh {t.rejected_by}: {t.rejected_reason}</div>
+        )}
+      </Card>
+
+      {canAct && t.status === "Waiting Logistics Approval" && (
+        <div className="flex gap-3">
+          <PrimaryButton onClick={() => setConfirmApprove(true)} disabled={busy}>Approve</PrimaryButton>
+          <button onClick={() => setConfirmReject(true)} disabled={busy} className="text-red-600 border border-red-200 rounded-lg px-4 py-2 text-sm font-medium hover:bg-red-50">Tolak</button>
+        </div>
+      )}
+      {canAct && t.status === "Completed" && (
+        <button onClick={() => setConfirmCancel(true)} disabled={busy} className="text-red-600 border border-red-200 rounded-lg px-4 py-2 text-sm font-medium hover:bg-red-50">Batalkan</button>
+      )}
+
+      <ConfirmDialog
+        open={confirmApprove}
+        title="Approve Transfer"
+        message={`Transfer ${t.id} akan disetujui dan stock langsung dipindahkan ke ${t.homebase_to}. Lanjutkan?`}
+        confirmLabel={busy ? "Menyetujui..." : "Ya, Approve"}
+        onConfirm={() => run(async () => { await onApprove(t.id); setConfirmApprove(false); })}
+        onCancel={() => setConfirmApprove(false)}
+      />
+      <ConfirmDialog
+        open={confirmReject}
+        title="Tolak Transfer"
+        message={`Transfer ${t.id} akan ditolak — stock tidak jadi dipindahkan.`}
+        confirmLabel={busy ? "Menolak..." : "Ya, Tolak"}
+        danger
+        onConfirm={() => run(async () => { await onReject(t.id, rejectReason); setConfirmReject(false); setRejectReason(""); })}
+        onCancel={() => { setConfirmReject(false); setRejectReason(""); }}
+      >
+        <textarea value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} placeholder="Alasan penolakan (opsional)..." rows={2} className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+      </ConfirmDialog>
+      <ConfirmDialog
+        open={confirmCancel}
+        title="Batalkan Transfer"
+        message={`Transfer ${t.id} akan dibatalkan dan stock dikembalikan ke ${t.homebase_from}. Hanya bisa dilakukan kalau belum ada perubahan lain pada unit/stock ini sejak transfer disetujui. Lanjutkan?`}
+        confirmLabel={busy ? "Membatalkan..." : "Ya, Batalkan"}
+        danger
+        onConfirm={() => run(async () => { await onCancel(t.id); setConfirmCancel(false); })}
+        onCancel={() => setConfirmCancel(false)}
+      />
+    </div>
+  );
+}
+
+// Single entry point for all three request types (replaces the separate
+// "Buat Request" / "Buat Return" / Transfer Stock form). Step 0 asks for
+// Alamat/Area Pengirim + Tujuan; the combination determines the mode and
+// which existing create form takes over from there — Warehouse as sender
+// is a Delivery, Warehouse as destination is a Return, anything else is a
+// Transfer between two homebases.
+function RequestCreate({ onSubmitDelivery, onSubmitReturn, onSubmitTransfer, onCancel, materials, tools, consumables, sites, homebases, customers, currentUser, api, returns, reconciliations, role }) {
+  const [sender, setSender] = useState("");
+  const [destination, setDestination] = useState("");
+
+  const activeHomebaseNames = homebases.filter((h) => h.status === "Active").map((h) => h.name);
+  const WAREHOUSE = "Warehouse Pusat";
+  const senderOptions = [WAREHOUSE, ...activeHomebaseNames];
+  const destinationOptions = [WAREHOUSE, ...activeHomebaseNames].filter((o) => o !== sender);
+
+  const mode = !sender || !destination ? null
+    : sender === WAREHOUSE ? "delivery"
+    : destination === WAREHOUSE ? "return"
+    : "transfer";
+
+  if (!mode) {
+    return (
+      <div className="p-4 sm:p-8 max-w-xl mx-auto space-y-6">
+        <SectionTitle title="Buat Request" subtitle="Pilih alamat/area pengirim dan tujuan — jenis pengirimannya ditentukan otomatis dari kombinasi ini" />
+        <Card className="p-6 space-y-5">
+          <div>
+            <label className="text-sm font-medium text-gray-700">Alamat/Area Pengirim <span className="text-red-500">*</span></label>
+            <select value={sender} onChange={(e) => { setSender(e.target.value); setDestination(""); }} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600">
+              <option value="">Pilih pengirim...</option>
+              {senderOptions.map((o) => <option key={o} value={o}>{o}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-sm font-medium text-gray-700">Alamat/Area Tujuan <span className="text-red-500">*</span></label>
+            <select value={destination} onChange={(e) => setDestination(e.target.value)} disabled={!sender} className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600 disabled:bg-gray-50">
+              <option value="">Pilih tujuan...</option>
+              {destinationOptions.map((o) => <option key={o} value={o}>{o}</option>)}
+            </select>
+          </div>
+          <div className="text-xs text-gray-400">
+            {sender === WAREHOUSE && "Warehouse → Homebase: Delivery Request."}
+            {sender && sender !== WAREHOUSE && destination === WAREHOUSE && "Homebase → Warehouse: Return Material Faulty."}
+            {sender && sender !== WAREHOUSE && destination && destination !== WAREHOUSE && "Homebase → Homebase: Transfer Stock (perlu approval Logistics)."}
+          </div>
+          <div className="flex justify-start pt-2 border-t border-gray-50">
+            <button onClick={onCancel} className="text-sm text-gray-500 hover:text-gray-800">Batal</button>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  // The "Buat Request" button on UnifiedRequestList already hides itself
+  // for roles that can't create any of the three, but this page is also
+  // reachable directly by URL — mirror the same per-type role gates the
+  // backend enforces (POST /deliveries, /returns, /stock/transfers) so a
+  // role that can, say, only submit Returns doesn't get a Delivery form
+  // that will just 403 on submit.
+  const modeAllowed = mode === "delivery" ? (role === ROLES.SPV || role === ROLES.MANAGER)
+    : mode === "return" ? (role === ROLES.TECH || role === ROLES.MANAGER)
+    : (role === ROLES.LOGISTICS || role === ROLES.MANAGER);
+  if (!modeAllowed) {
+    return (
+      <div className="p-4 sm:p-8 max-w-xl mx-auto space-y-6">
+        <SectionTitle title="Buat Request" subtitle="Akses tidak tersedia" />
+        <Card className="p-6 space-y-4">
+          <div className="text-sm text-gray-600">Role Anda tidak memiliki akses untuk membuat request jenis ini ({sender} → {destination}).</div>
+          <button onClick={onCancel} className="text-sm text-gray-500 hover:text-gray-800">Kembali</button>
+        </Card>
+      </div>
+    );
+  }
+
+  if (mode === "delivery") {
+    return <DeliveryCreate onSubmit={onSubmitDelivery} onCancel={onCancel} materials={materials} tools={tools} consumables={consumables} sites={sites} homebases={homebases} currentUser={currentUser} customers={customers} api={api} initialHomebase={destination} />;
+  }
+  if (mode === "return") {
+    return <ReturnFaultyCreate onSubmit={onSubmitReturn} onCancel={onCancel} materials={materials} returns={returns} reconciliations={reconciliations} currentUser={currentUser} customers={customers} initialHomebase={sender} />;
+  }
+  return <TransferCreate onSubmit={onSubmitTransfer} onCancel={onCancel} materials={materials} customers={customers} currentUser={currentUser} role={role} api={api} initialFrom={sender} initialTo={destination} />;
 }
 
 function ToolSerialDetail({ toolName, api, onBack }) {
@@ -8770,6 +8688,7 @@ export default function App() {
   const [page, setPage] = useState("dashboard");
   const [selectedDelivery, setSelectedDelivery] = useState(null);
   const [selectedReturn, setSelectedReturn] = useState(null);
+  const [selectedTransfer, setSelectedTransfer] = useState(null);
   const [selectedRecon, setSelectedRecon] = useState(null);
   const [movementFilter, setMovementFilter] = useState("");
   const [serialMaterial, setSerialMaterial] = useState("");
@@ -8793,6 +8712,7 @@ export default function App() {
   const [toolSerialName, setToolSerialName] = useState("");
   const [consumables, setConsumables] = useState([]);
   const [materialSwaps, setMaterialSwaps] = useState([]);
+  const [transfers, setTransfers] = useState([]);
   const [returnPrefill, setReturnPrefill] = useState(null);
   const [selectedSwap, setSelectedSwap] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -8846,11 +8766,12 @@ export default function App() {
   const loadAllData = async ({ silent = false } = {}) => {
     if (!silent) { setDataLoading(true); setApiError(""); }
     try {
-      const [mats, movs, dels, rets, recs, sts, hbs, ars, custs, usrs, tls, swaps, csms] = await Promise.all([
+      const [mats, movs, dels, rets, recs, sts, hbs, ars, custs, usrs, tls, swaps, csms, trs] = await Promise.all([
         api.getStock(), api.getMovements(), api.getDeliveries(), api.getReturns(),
         api.getReconciliations(), api.getSites(), api.getHomebases(), api.getAreas(),
         api.getCustomers(), api.getUsers().catch(() => []), // Users list is Manager-only; ignore 403 for other roles
         api.getTools(), api.getMaterialSwaps(), api.getConsumables(),
+        api.getTransfers().catch(() => []), // 403 for roles with no stockTransfer access (e.g. Technician)
       ]);
       setMaterials(mats.map(normalizeMaterial));
       setMovements(movs);
@@ -8865,6 +8786,7 @@ export default function App() {
       setTools(tls);
       setMaterialSwaps(swaps);
       setConsumables(csms);
+      setTransfers(trs);
     } catch (err) {
       if (silent) console.error("[loadAllData] background refresh failed:", err.message);
       else setApiError(err.message || "Gagal memuat data dari server");
@@ -8910,7 +8832,7 @@ export default function App() {
     try { window.history.replaceState(null, "", window.location.pathname + window.location.search); } catch { /* ignore */ }
     setAuthToken(null); setCurrentUser(null);
     setMaterials([]); setMovements([]); setDeliveries([]); setReturns([]); setReconciliations([]);
-    setSites([]); setHomebases([]); setAreas([]); setCustomers([]); setUsers([]); setConsumables([]);
+    setSites([]); setHomebases([]); setAreas([]); setCustomers([]); setUsers([]); setConsumables([]); setTransfers([]);
     setPage("dashboard");
   };
 
@@ -9029,7 +8951,7 @@ export default function App() {
   const goto = (p) => {
     if (HIDDEN_PAGES.has(p)) p = "dashboard";
     setPage(p);
-    setSelectedDelivery(null); setSelectedReturn(null); setSelectedRecon(null); setSelectedSwap(null);
+    setSelectedDelivery(null); setSelectedReturn(null); setSelectedTransfer(null); setSelectedRecon(null); setSelectedSwap(null);
     if (p !== "returnFaultyCreate") setReturnPrefill(null); // only meant for the one navigation right after a swap
     // Cleared on every navigation; "Lihat Detail" (Warehouse Stock) sets it
     // right after calling goto(), so within the same handler its value wins
@@ -9046,6 +8968,7 @@ export default function App() {
   const routeIdFor = (p) => {
     if (p === "delivery") return selectedDelivery;
     if (p === "returnFaulty" || p === "returnFaultyEdit") return selectedReturn;
+    if (p === "stockTransfer") return selectedTransfer;
     if (p === "reconciliation" || p === "reconciliationEdit") return selectedRecon;
     if (p === "materialSwap") return selectedSwap;
     if (p === "serialDetail") return serialMaterial;
@@ -9062,6 +8985,7 @@ export default function App() {
     setPage(p);
     setSelectedDelivery(p === "delivery" ? id || null : null);
     setSelectedReturn(p === "returnFaulty" || p === "returnFaultyEdit" ? id || null : null);
+    setSelectedTransfer(p === "stockTransfer" ? id || null : null);
     setSelectedRecon(p === "reconciliation" || p === "reconciliationEdit" ? id || null : null);
     setSelectedSwap(p === "materialSwap" ? id || null : null);
     setSerialMaterial(p === "serialDetail" ? id : "");
@@ -9070,7 +8994,7 @@ export default function App() {
     setDbMaterialFilter(p.startsWith("database") ? id : "");
     // An unknown/forbidden hash gets corrected in place rather than pushed,
     // otherwise Back would land on it again and loop.
-    const canonical = buildHash(p, ["delivery", "returnFaulty", "returnFaultyEdit", "reconciliation", "reconciliationEdit", "materialSwap", "serialDetail", "toolSerialDetail"].includes(p) || p.startsWith("database") ? id : "", p === "serialDetail" ? r.customer : "");
+    const canonical = buildHash(p, ["delivery", "returnFaulty", "returnFaultyEdit", "stockTransfer", "reconciliation", "reconciliationEdit", "materialSwap", "serialDetail", "toolSerialDetail"].includes(p) || p.startsWith("database") ? id : "", p === "serialDetail" ? r.customer : "");
     if (window.location.hash !== canonical) window.history.replaceState(null, "", canonical);
   };
 
@@ -9085,7 +9009,7 @@ export default function App() {
     const hash = buildHash(page, routeIdFor(page), page === "serialDetail" ? serialCustomer : "");
     if (window.location.hash !== hash) window.history.pushState(null, "", hash);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [routeInit, page, selectedDelivery, selectedReturn, selectedRecon, selectedSwap, serialMaterial, serialCustomer, toolSerialName, dbMaterialFilter]);
+  }, [routeInit, page, selectedDelivery, selectedReturn, selectedTransfer, selectedRecon, selectedSwap, serialMaterial, serialCustomer, toolSerialName, dbMaterialFilter]);
 
   React.useEffect(() => {
     if (!authToken) return;
@@ -9114,6 +9038,7 @@ export default function App() {
   const gotoDetail = (targetPage, kind, id) => {
     setSelectedDelivery(kind === "delivery" ? id : null);
     setSelectedReturn(kind === "return" ? id : null);
+    setSelectedTransfer(kind === "transfer" ? id : null);
     setSelectedRecon(kind === "recon" ? id : null);
     setPage(targetPage);
   };
@@ -9135,6 +9060,13 @@ export default function App() {
       const matMatch = r.items.some((i) => i.material.toLowerCase().includes(q));
       if (r.id.toLowerCase().includes(q) || r.homebase.toLowerCase().includes(q) || snMatch || matMatch) {
         results.push({ type: "Return Faulty", icon: Undo2, label: r.id, sub: snMatch ? `SN cocok · ${r.status}` : `${r.homebase} · ${r.status}`, onSelect: () => gotoDetail("returnFaulty", "return", r.id) });
+      }
+    });
+
+    transfers.forEach((t) => {
+      const snMatch = (t.serials || []).some((sn) => sn.toLowerCase().includes(q));
+      if (t.id.toLowerCase().includes(q) || t.material.toLowerCase().includes(q) || t.homebase_from.toLowerCase().includes(q) || t.homebase_to.toLowerCase().includes(q) || snMatch) {
+        results.push({ type: "Transfer Stock", icon: ArrowLeftRight, label: t.id, sub: `${t.homebase_from} → ${t.homebase_to} · ${t.status}`, onSelect: () => gotoDetail("stockTransfer", "transfer", t.id) });
       }
     });
 
@@ -9184,7 +9116,7 @@ export default function App() {
     });
 
     return results.slice(0, 8);
-  }, [searchQuery, deliveries, returns, reconciliations, materials, sites, tools, materialSwaps]);
+  }, [searchQuery, deliveries, returns, transfers, reconciliations, materials, sites, tools, materialSwaps]);
 
   // Serial Numbers live in the warehouse SN registry, not in any locally
   // loaded list — so unlike the rest of global search (computed instantly
@@ -9440,7 +9372,7 @@ export default function App() {
     try {
       const created = await api.createReturn(data);
       setReturns((prev) => [created, ...prev]);
-      goto("returnFaulty");
+      goto("delivery");
       return true;
     } catch (err) { setApiError(err.message); return false; }
   };
@@ -9499,6 +9431,41 @@ export default function App() {
     try {
       const updated = await api.completeReturn(id);
       setReturns((prev) => prev.map((r) => (r.id === id ? updated : r)));
+      await refreshStock();
+    } catch (err) { setApiError(err.message); }
+  };
+
+  /* ---- Transfer Stock actions — stock only actually moves at approve, not
+     at create (see terex-backend utils/stockTransfers.js) ---- */
+  const submitTransfer = async (data) => {
+    try {
+      const created = await api.createTransfer(data);
+      setTransfers((prev) => [created, ...prev]);
+      showToast(`Transfer ${created.id} diajukan — menunggu approval Logistics`);
+      goto("delivery");
+      return true;
+    } catch (err) { setApiError(err.message); return false; }
+  };
+
+  const approveTransfer = async (id) => {
+    try {
+      const updated = await api.approveTransfer(id);
+      setTransfers((prev) => prev.map((t) => (t.id === id ? updated : t)));
+      await refreshStock();
+    } catch (err) { setApiError(err.message); }
+  };
+
+  const rejectTransfer = async (id, reason) => {
+    try {
+      const updated = await api.rejectTransfer(id, reason);
+      setTransfers((prev) => prev.map((t) => (t.id === id ? updated : t)));
+    } catch (err) { setApiError(err.message); }
+  };
+
+  const cancelTransfer = async (id) => {
+    try {
+      const updated = await api.cancelTransfer(id);
+      setTransfers((prev) => prev.map((t) => (t.id === id ? updated : t)));
       await refreshStock();
     } catch (err) { setApiError(err.message); }
   };
@@ -9735,7 +9702,7 @@ export default function App() {
     content = (
       <div className="p-8 flex items-center justify-center h-full text-gray-400 text-sm">Memuat data dari server...</div>
     );
-  } else if (page === "dashboard") content = <Dashboard role={role} userName={currentUser?.name} setPage={goto} deliveries={deliveries} returns={returns} reconciliations={reconciliations} materials={materials} tools={tools} materialSwaps={materialSwaps} api={api} currentUser={currentUser} />;
+  } else if (page === "dashboard") content = <Dashboard role={role} userName={currentUser?.name} setPage={goto} deliveries={deliveries} returns={returns} reconciliations={reconciliations} transfers={transfers} materials={materials} tools={tools} materialSwaps={materialSwaps} api={api} currentUser={currentUser} />;
   else if (page === "delivery") {
     // `selectedDelivery` can outlive its record (e.g. the background
     // refresh — see loadAllData's silent poll — lands between it being
@@ -9748,14 +9715,14 @@ export default function App() {
     const d = selectedDelivery && deliveries.find((x) => x.id === selectedDelivery);
     content = d
       ? <DeliveryDetail delivery={d} onBack={() => setSelectedDelivery(null)} onApprove={approveDelivery} onReject={rejectDelivery} onCancel={cancelDelivery} onAssignStock={assignDeliveryStock} onShip={shipDelivery} onAddResi={addDeliveryResi} onAddBast={addDeliveryBast} onAddBkbLink={addDeliveryBkbLink} onAdvance={advanceDelivery} onReturnTools={returnDeliveryTools} role={role} materials={materials} tools={tools} api={api} />
-      : <DeliveryList deliveries={deliveries} setSelected={setSelectedDelivery} setPage={goto} role={role} page={page} userCustomers={currentUser?.customers} />;
-  } else if (page === "deliveryCreate") content = <DeliveryCreate onSubmit={submitDelivery} onCancel={() => goto("delivery")} materials={materials} tools={tools} consumables={consumables} sites={sites} homebases={homebases} currentUser={currentUser} customers={customers} api={api} />;
+      : <UnifiedRequestList deliveries={deliveries} returns={returns} transfers={transfers} gotoDetail={gotoDetail} setPage={goto} role={role} />;
+  } else if (page === "deliveryCreate") content = <RequestCreate onSubmitDelivery={submitDelivery} onSubmitReturn={submitReturn} onSubmitTransfer={submitTransfer} onCancel={() => goto("delivery")} materials={materials} tools={tools} consumables={consumables} sites={sites} homebases={homebases} currentUser={currentUser} customers={customers} api={api} returns={returns} reconciliations={reconciliations} role={role} />;
   else if (page === "returnFaulty") {
     const r = selectedReturn && returns.find((x) => x.id === selectedReturn);
     content = r
       ? <ReturnFaultyDetail r={r} onBack={() => setSelectedReturn(null)} onApprove={approveReturn} onRevise={reviseReturn} onShip={shipReturn} onAddResi={addResiReturn} onReceive={receiveReturn} onQC={qcReturn} onComplete={completeReturn} onEdit={() => setPage("returnFaultyEdit")} role={role} />
-      : <ReturnFaultyList returns={returns} setSelected={setSelectedReturn} setPage={goto} role={role} page={page} userCustomers={currentUser?.customers} />;
-  } else if (page === "returnFaultyCreate") content = <ReturnFaultyCreate onSubmit={submitReturn} onCancel={() => goto("returnFaulty")} materials={materials} returns={returns} reconciliations={reconciliations} currentUser={currentUser} customers={customers} prefillItems={returnPrefill ? [returnPrefill] : undefined} />;
+      : <UnifiedRequestList deliveries={deliveries} returns={returns} transfers={transfers} gotoDetail={gotoDetail} setPage={goto} role={role} />;
+  } else if (page === "returnFaultyCreate") content = <ReturnFaultyCreate onSubmit={submitReturn} onCancel={() => goto("delivery")} materials={materials} returns={returns} reconciliations={reconciliations} currentUser={currentUser} customers={customers} prefillItems={returnPrefill ? [returnPrefill] : undefined} />;
   else if (page === "returnFaultyEdit") {
     const r = returns.find((x) => x.id === selectedReturn);
     content = r ? (
@@ -9771,7 +9738,7 @@ export default function App() {
         currentUser={currentUser}
         customers={customers}
       />
-    ) : <ReturnFaultyList returns={returns} setSelected={setSelectedReturn} setPage={goto} role={role} page={page} userCustomers={currentUser?.customers} />;
+    ) : <UnifiedRequestList deliveries={deliveries} returns={returns} transfers={transfers} gotoDetail={gotoDetail} setPage={goto} role={role} />;
   }
   else if (page === "reconciliation") {
     const r = selectedRecon && reconciliations.find((x) => x.id === selectedRecon);
@@ -9813,7 +9780,12 @@ export default function App() {
   else if (page === "serialDetail") content = <MaterialSerialDetail material={serialMaterial} customer={serialCustomer || undefined} materials={materials} api={api} onBack={() => goto("stock")} highlightSerial={highlightSerial} highlightToken={highlightToken} deliveries={deliveries} role={role} showToast={showToast} />;
   else if (page === "toolStock") content = <ToolStockPage tools={tools} setPage={goto} setToolSerialName={setToolSerialName} onSubmitReceipt={createToolReceipt} showToast={showToast} role={role} />;
   else if (page === "consumableStock") content = <ConsumableStockPage consumables={consumables} onSubmitReceipt={createConsumableReceipt} showToast={showToast} role={role} />;
-  else if (page === "stockTransfer") content = <TransferStockPage materials={materials} homebases={homebases} customers={customers} currentUser={currentUser} role={role} api={api} showToast={showToast} setPage={goto} page={page} userCustomers={currentUser?.customers} />;
+  else if (page === "stockTransfer") {
+    const t = selectedTransfer && transfers.find((x) => x.id === selectedTransfer);
+    content = t
+      ? <TransferDetail transfer={t} onBack={() => setSelectedTransfer(null)} onApprove={approveTransfer} onReject={rejectTransfer} onCancel={cancelTransfer} role={role} />
+      : <UnifiedRequestList deliveries={deliveries} returns={returns} transfers={transfers} gotoDetail={gotoDetail} setPage={goto} role={role} />;
+  }
   else if (page === "clusterTransfer") content = <ClusterTransferPage materials={materials} customers={customers} currentUser={currentUser} role={role} api={api} showToast={showToast} />;
   else if (page === "toolSerialDetail") content = <ToolSerialDetail toolName={toolSerialName} api={api} onBack={() => goto("toolStock")} />;
   else if (page === "reports") content = <ReportsPage
