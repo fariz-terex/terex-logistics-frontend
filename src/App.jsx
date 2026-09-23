@@ -4,7 +4,7 @@ import {
   FileBarChart, Database, Users, Settings as SettingsIcon, ChevronDown, ChevronRight, ChevronUp, ArrowUpDown,
   Search, Bell, LogOut, Plus, Minus, X, Check, AlertTriangle, Camera, ChevronLeft,
   Filter, Download, Upload, Eye, EyeOff, MapPin, Phone, User as UserIcon, Menu, FileText, Wrench, HelpCircle,
-  Lock, ShieldCheck, Clock3, BarChart3, Pencil
+  Lock, ShieldCheck, Clock3, BarChart3, Pencil, ScanLine
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
@@ -2610,6 +2610,7 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast, currentUse
               <div key={i} className="flex items-center gap-2">
                 <span className="text-xs text-gray-400 w-5">{i + 1}.</span>
                 <input value={s} onChange={(e) => updateSN(i, e.target.value)} placeholder="Masukkan Serial Number" className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
+                <ScanButton onScan={(text) => updateSN(i, text)} />
                 {serials.length > 1 && <button onClick={() => removeSN(i)} className="text-gray-300 hover:text-red-500"><X size={16} /></button>}
               </div>
             ))
@@ -3858,6 +3859,104 @@ function compressImage(file, maxDimension = 1600, quality = 0.75) {
   });
 }
 
+// Barcode scanning — an optional accelerator next to a manual Serial Number
+// field, never a replacement for it: some materials (several of Teleglobal's
+// among them) don't have a barcode at all, so typing has to keep working
+// exactly as before. iOS Safari has no native barcode-detection API, so this
+// goes through the camera stream (getUserMedia) with @zxing/browser doing
+// the decoding in JS — works the same way on Android and iPhone. The
+// library is only fetched the moment someone actually opens the scanner,
+// not on page load, since most sessions will never use it.
+function ScanButton({ onScan, className = "" }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className={`inline-flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 shrink-0 ${className}`}
+        title="Scan barcode Serial Number"
+        aria-label="Scan barcode"
+      >
+        <ScanLine size={16} />
+      </button>
+      {open && (
+        <BarcodeScannerModal
+          onScan={(text) => { setOpen(false); onScan(text); }}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </>
+  );
+}
+
+function BarcodeScannerModal({ onScan, onClose }) {
+  const videoRef = React.useRef(null);
+  const controlsRef = React.useRef(null);
+  const onScanRef = React.useRef(onScan);
+  onScanRef.current = onScan;
+  const [error, setError] = useState("");
+  const [ready, setReady] = useState(false);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { BrowserMultiFormatReader } = await import("@zxing/browser");
+        const reader = new BrowserMultiFormatReader();
+        const controls = await reader.decodeFromConstraints(
+          { video: { facingMode: { ideal: "environment" } } },
+          videoRef.current,
+          (result) => {
+            // Per-frame "not found yet" is the normal case while aiming the
+            // camera, not an error — only a successful `result` matters here.
+            if (result) {
+              if (navigator.vibrate) navigator.vibrate(80);
+              onScanRef.current(result.getText());
+            }
+          }
+        );
+        if (cancelled) { controls.stop(); return; }
+        controlsRef.current = controls;
+        setReady(true);
+      } catch (err) {
+        if (cancelled) return;
+        setError(
+          err?.name === "NotAllowedError"
+            ? "Izin kamera ditolak. Aktifkan izin kamera untuk browser ini di pengaturan perangkat, atau isi Serial Number secara manual."
+            : "Tidak bisa membuka kamera di perangkat ini. Isi Serial Number secara manual."
+        );
+      }
+    })();
+    return () => { cancelled = true; controlsRef.current?.stop(); };
+  }, []);
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl overflow-hidden max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+          <div className="text-sm font-semibold text-gray-800 flex items-center gap-2"><ScanLine size={16} /> Scan Barcode</div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600" aria-label="Tutup"><X size={18} /></button>
+        </div>
+        {error ? (
+          <div className="p-5 text-sm text-red-600">{error}</div>
+        ) : (
+          <>
+            <div className="relative bg-black aspect-square">
+              <video ref={videoRef} className="w-full h-full object-cover" muted playsInline />
+              <div className="absolute inset-8 border-2 border-emerald-400 rounded-xl pointer-events-none" />
+              {!ready && <div className="absolute inset-0 flex items-center justify-center text-white text-sm">Membuka kamera...</div>}
+            </div>
+            <div className="px-4 py-3 text-xs text-gray-500">
+              Arahkan kamera ke barcode. Tidak ada barcode pada unit ini? Tutup lalu isi Serial Number secara manual.
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function PhotoUpload({ label, value, onChange, compact }) {
   const inputRef = React.useRef(null);
   const [compressing, setCompressing] = useState(false);
@@ -4102,6 +4201,7 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
                   <div className="flex items-center gap-2">
                     <span className="text-xs text-gray-400 w-5">{snIdx + 1}.</span>
                     <input value={s.sn} onChange={(e) => updateSN(itemIdx, snIdx, "sn", e.target.value)} placeholder="Masukkan Serial Number" className={`flex-1 border rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600 ${conflict ? "border-red-300" : "border-gray-200"}`} />
+                    <ScanButton onScan={(text) => updateSN(itemIdx, snIdx, "sn", text)} />
                     <PhotoUpload compact value={s.photo} onChange={(val) => updateSN(itemIdx, snIdx, "photo", val)} />
                     {item.serials.length > 1 && <button onClick={() => removeSN(itemIdx, snIdx)} className="text-gray-300 hover:text-red-500"><X size={16} /></button>}
                   </div>
@@ -4507,7 +4607,10 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
                   const conflict = findSNConflict(s, { returns, reconciliations, excludeId });
                   return (
                     <div key={si}>
-                      <input value={s} onChange={(e) => updateSerial(idx, si, e.target.value)} placeholder={`SN ${si + 1}`} className={`w-full border rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600 ${conflict ? "border-red-300" : "border-gray-200"}`} />
+                      <div className="flex items-center gap-1.5">
+                        <input value={s} onChange={(e) => updateSerial(idx, si, e.target.value)} placeholder={`SN ${si + 1}`} className={`flex-1 border rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600 ${conflict ? "border-red-300" : "border-gray-200"}`} />
+                        <ScanButton onScan={(text) => updateSerial(idx, si, text)} />
+                      </div>
                       {conflict && <div className="text-xs text-red-600 mt-1">SN digunakan pada {conflict}.</div>}
                     </div>
                   );
@@ -4790,14 +4893,17 @@ function MaterialSwapPage({ swaps, api, materials, sites, homebases, onSubmit, s
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="relative">
             <label className="text-sm font-medium text-gray-700">Serial Number (Installed) <span className="text-red-500">*</span></label>
-            <input
-              value={newSn}
-              onChange={(e) => setNewSn(e.target.value)}
-              onFocus={() => setNewFocused(true)}
-              onBlur={() => setTimeout(() => setNewFocused(false), 150)}
-              placeholder="Cari atau pilih unit yang sudah Delivered..."
-              className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600"
-            />
+            <div className="mt-1.5 flex items-center gap-2">
+              <input
+                value={newSn}
+                onChange={(e) => setNewSn(e.target.value)}
+                onFocus={() => setNewFocused(true)}
+                onBlur={() => setTimeout(() => setNewFocused(false), 150)}
+                placeholder="Cari atau pilih unit yang sudah Delivered..."
+                className="flex-1 border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600"
+              />
+              <ScanButton onScan={setNewSn} />
+            </div>
             {newFocused && <SnDropdown options={deliveredOptions} query={newSn} onPick={(sn) => { setNewSn(sn); setNewFocused(false); }} />}
             {newInfo === null && <div className="text-xs text-red-600 mt-1">Serial Number tidak ditemukan di sistem.</div>}
             {newInfo && !newInfo.ok && <div className="text-xs text-red-600 mt-1">{newInfo.material} — status saat ini <span className="font-medium">{newInfo.status}</span>, harus Delivered.</div>}
@@ -4843,7 +4949,10 @@ function MaterialSwapPage({ swaps, api, materials, sites, homebases, onSubmit, s
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label className="text-sm font-medium text-gray-700">Serial Number Lama</label>
-            <input value={oldSn} onChange={(e) => setOldSn(e.target.value)} placeholder="SN unit yang dicabut (tulis manual)" className="mt-1.5 w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+            <div className="mt-1.5 flex items-center gap-2">
+              <input value={oldSn} onChange={(e) => setOldSn(e.target.value)} placeholder="SN unit yang dicabut (tulis manual)" className="flex-1 border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+              <ScanButton onScan={setOldSn} />
+            </div>
           </div>
           <div>
             <label className="text-sm font-medium text-gray-700">Jenis Material Lama {oldSn.trim() && <span className="text-red-500">*</span>}</label>
@@ -5748,6 +5857,7 @@ function ToolReceiptForm({ tools, onSubmit, onCancel, showToast }) {
               <div key={i} className="flex items-center gap-2">
                 <span className="text-xs text-gray-400 w-5">{i + 1}.</span>
                 <input value={s} onChange={(e) => updateSN(i, e.target.value)} placeholder="Masukkan Serial Number" className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
+                <ScanButton onScan={(text) => updateSN(i, text)} />
                 {serials.length > 1 && <button onClick={() => removeSN(i)} className="text-gray-300 hover:text-red-500"><X size={16} /></button>}
               </div>
             ))
