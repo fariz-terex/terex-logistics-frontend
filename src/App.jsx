@@ -4283,7 +4283,6 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
                   <div className="flex items-center gap-2">
                     <span className="text-xs text-gray-400 w-5">{snIdx + 1}.</span>
                     <input value={s.sn} onChange={(e) => updateSN(itemIdx, snIdx, "sn", e.target.value)} placeholder="Masukkan Serial Number" className={`flex-1 border rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600 ${conflict ? "border-red-300" : "border-gray-200"}`} />
-                    <ScanButton onScan={(text) => updateSN(itemIdx, snIdx, "sn", text)} />
                     <PhotoUpload compact value={s.photo} onChange={(val) => updateSN(itemIdx, snIdx, "photo", val)} detectBarcode onDetected={(text) => applyDetectedSN(itemIdx, snIdx, text)} />
                     {item.serials.length > 1 && <button onClick={() => removeSN(itemIdx, snIdx)} className="text-gray-300 hover:text-red-500"><X size={16} /></button>}
                   </div>
