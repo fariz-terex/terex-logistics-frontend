@@ -4001,25 +4001,53 @@ function BarcodeScannerModal({ onScan, onClose }) {
   );
 }
 
-function PhotoUpload({ label, value, onChange, compact }) {
+// Reads a barcode out of an already-captured/uploaded photo (as opposed to
+// BarcodeScannerModal, which reads live off the camera feed) — same
+// @zxing/browser decoder, same lazy import so it's never fetched unless a
+// photo actually needs decoding. Many SN stickers are also barcoded (that's
+// what ScanButton is for), so a photo taken of one can skip the retyping
+// step too. Resolves to null — never throws — when nothing decodes, since
+// plenty of materials have no barcode at all and that's expected, not an
+// error (see ScanButton's comment above).
+async function detectBarcodeFromDataUrl(dataUrl) {
+  try {
+    const { BrowserMultiFormatReader } = await import("@zxing/browser");
+    const reader = new BrowserMultiFormatReader();
+    const result = await reader.decodeFromImageUrl(dataUrl);
+    return result.getText();
+  } catch {
+    return null;
+  }
+}
+
+function PhotoUpload({ label, value, onChange, compact, detectBarcode, onDetected }) {
   const inputRef = React.useRef(null);
   const [compressing, setCompressing] = useState(false);
+  const [detecting, setDetecting] = useState(false);
   const handleFile = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setCompressing(true);
+    let compressed;
     try {
-      const compressed = await compressImage(file);
-      onChange(compressed);
+      compressed = await compressImage(file);
     } catch {
       // Fallback: if compression fails for any reason, still let the photo
       // through uncompressed rather than blocking the user entirely.
-      const reader = new FileReader();
-      reader.onload = () => onChange(reader.result);
-      reader.readAsDataURL(file);
-    } finally {
-      setCompressing(false);
-      e.target.value = "";
+      compressed = await new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.readAsDataURL(file);
+      });
+    }
+    onChange(compressed);
+    setCompressing(false);
+    e.target.value = "";
+    if (detectBarcode && onDetected) {
+      setDetecting(true);
+      const text = await detectBarcodeFromDataUrl(compressed);
+      setDetecting(false);
+      if (text) onDetected(text);
     }
   };
   if (compact) {
@@ -4028,7 +4056,7 @@ function PhotoUpload({ label, value, onChange, compact }) {
         <input ref={inputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFile} />
         <button onClick={() => inputRef.current?.click()} disabled={compressing} className={`px-3 py-2 rounded-lg text-xs font-medium border flex items-center gap-1.5 shrink-0 ${value ? "border-emerald-300 bg-emerald-50 text-emerald-700" : "border-gray-200 text-gray-400"}`}>
           {value ? <img src={value} alt="" className="w-4 h-4 rounded object-cover" /> : <Camera size={13} />}
-          {compressing ? "Memproses..." : value ? "Foto ✓" : "Upload Foto"}
+          {compressing ? "Memproses..." : detecting ? "Mendeteksi SN..." : value ? "Foto ✓" : "Upload Foto"}
         </button>
       </>
     );
@@ -4154,6 +4182,14 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
   const addSN = (itemIdx) => setItems(items.map((it, i) => (i === itemIdx ? { ...it, serials: [...it.serials, { sn: "", photo: "" }] } : it)));
   const updateSN = (itemIdx, snIdx, field, val) => setItems(items.map((it, i) => (i === itemIdx ? { ...it, serials: it.serials.map((s, j) => (j === snIdx ? { ...s, [field]: val } : s)) } : it)));
   const removeSN = (itemIdx, snIdx) => setItems(items.map((it, i) => (i === itemIdx ? { ...it, serials: it.serials.filter((_, j) => j !== snIdx) } : it)));
+  // Auto-fill from a barcode decoded out of the photo just uploaded (see
+  // PhotoUpload's detectBarcode/onDetected) — only when the field is still
+  // empty at the moment decoding finishes, via a functional update rather
+  // than the `items` closure, so it never clobbers a SN the user already
+  // typed (by hand, or from ScanButton) while the photo was processing.
+  const applyDetectedSN = (itemIdx, snIdx, text) => setItems((prev) => prev.map((it, i) => (i === itemIdx
+    ? { ...it, serials: it.serials.map((s, j) => (j === snIdx && !s.sn.trim() ? { ...s, sn: text } : s)) }
+    : it)));
 
   const allSerials = items.flatMap((it) => it.serials);
   const docsCompleted = Object.values(docs).filter(Boolean).length + allSerials.filter((s) => s.photo).length;
@@ -4248,7 +4284,7 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
                     <span className="text-xs text-gray-400 w-5">{snIdx + 1}.</span>
                     <input value={s.sn} onChange={(e) => updateSN(itemIdx, snIdx, "sn", e.target.value)} placeholder="Masukkan Serial Number" className={`flex-1 border rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600 ${conflict ? "border-red-300" : "border-gray-200"}`} />
                     <ScanButton onScan={(text) => updateSN(itemIdx, snIdx, "sn", text)} />
-                    <PhotoUpload compact value={s.photo} onChange={(val) => updateSN(itemIdx, snIdx, "photo", val)} />
+                    <PhotoUpload compact value={s.photo} onChange={(val) => updateSN(itemIdx, snIdx, "photo", val)} detectBarcode onDetected={(text) => applyDetectedSN(itemIdx, snIdx, text)} />
                     {item.serials.length > 1 && <button onClick={() => removeSN(itemIdx, snIdx)} className="text-gray-300 hover:text-red-500"><X size={16} /></button>}
                   </div>
                   {conflict && <div className="text-xs text-red-600 pl-7">Serial Number ini sedang digunakan pada {conflict}.</div>}
