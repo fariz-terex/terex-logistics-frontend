@@ -162,15 +162,6 @@ const initialReconciliations = [
   },
 ];
 
-const activityData = [
-  { day: "1 Agu", delivery: 18, faulty: 12, recon: 6 },
-  { day: "2 Agu", delivery: 22, faulty: 14, recon: 9 },
-  { day: "3 Agu", delivery: 38, faulty: 26, recon: 14 },
-  { day: "4 Agu", delivery: 15, faulty: 15, recon: 6 },
-  { day: "5 Agu", delivery: 30, faulty: 18, recon: 12 },
-  { day: "6 Agu", delivery: 27, faulty: 22, recon: 8 },
-  { day: "7 Agu", delivery: 32, faulty: 21, recon: 13 },
-];
 
 const ROLES = {
   MANAGER: "Admin / Manager Logistics",
@@ -1041,6 +1032,87 @@ function Dashboard({ role, userName, setPage, deliveries, returns, reconciliatio
   const toolsCheckedOut = tools.reduce((s, t) => s + (t.checked_out || 0), 0);
   const swapsToday = materialSwaps.filter((s) => s.date === new Date().toISOString().slice(0, 10)).length;
 
+  const now = new Date();
+  const hour = now.getHours();
+  const greeting = hour < 11 ? "Good morning" : hour < 15 ? "Good afternoon" : hour < 19 ? "Good evening" : "Good night";
+  const firstName = (userName || "").trim().split(" ")[0] || "there";
+  const formattedDate = now.toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+
+  // Technician only ever submits reports and has no access to Delivery,
+  // Stock, or Reports — the shared dashboard below linked to pages they
+  // can't open and showed queues (approvals, low stock) that aren't theirs
+  // to act on. This is a separate, much smaller view: the 3 things they
+  // actually do, plus the status of what they've personally submitted.
+  if (role === ROLES.TECH) {
+    const myReturns = returns.filter((r) => r.technician === userName).slice(0, 5);
+    const mySwaps = materialSwaps.filter((s) => s.performedBy === userName).slice(0, 5);
+    const recentRecons = reconciliations.slice(0, 5);
+    const quickActions = [
+      { icon: Undo2, color: "bg-amber-50 text-amber-700", title: "Return Material Faulty", sub: "Laporkan unit rusak dari lapangan", page: "returnFaultyCreate" },
+      { icon: ClipboardList, color: "bg-blue-50 text-blue-700", title: "Reconciliation", sub: "Verifikasi fisik material", page: "reconciliationCreate" },
+      { icon: ArrowLeftRight, color: "bg-teal-50 text-teal-700", title: "Replacement", sub: "Konfirmasi instalasi / penggantian unit", page: "materialSwap" },
+    ];
+    const MiniList = ({ items, empty, renderLeft, renderRight }) => (
+      items.length === 0 ? <EmptyState text={empty} /> : (
+        <div className="space-y-1">
+          {items.map((it, i) => (
+            <div key={i} className="flex items-center justify-between py-2.5 border-b border-gray-50 last:border-0">
+              {renderLeft(it)}
+              {renderRight(it)}
+            </div>
+          ))}
+        </div>
+      )
+    );
+    return (
+      <div className="p-4 sm:p-8 space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">{greeting}, {firstName} 👋</h1>
+          <p className="text-gray-500 mt-1">{formattedDate} · {role}</p>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          {quickActions.map((a) => (
+            <button key={a.title} onClick={() => setPage(a.page)} className="text-left">
+              <Card className="p-5 h-full hover:shadow-md hover:border-emerald-200 transition-shadow">
+                <div className={`w-11 h-11 rounded-xl flex items-center justify-center ${a.color}`}><a.icon size={20} /></div>
+                <div className="mt-3 font-semibold text-gray-900">{a.title}</div>
+                <div className="text-xs text-gray-500 mt-0.5">{a.sub}</div>
+              </Card>
+            </button>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <Card className="p-5">
+            <SectionTitle title="Return Faulty Saya" right={<button onClick={() => setPage("returnFaulty")} className="text-sm text-emerald-800 font-medium">Lihat semua</button>} />
+            <MiniList
+              items={myReturns} empty="Belum ada laporan."
+              renderLeft={(r) => <div><div className="text-sm font-medium text-gray-800">{r.id}</div><div className="text-xs text-gray-400">{r.date}</div></div>}
+              renderRight={(r) => <StatusBadge status={r.status} />}
+            />
+          </Card>
+          <Card className="p-5">
+            <SectionTitle title="Reconciliation Terbaru" subtitle="Divisi Anda" right={<button onClick={() => setPage("reconciliation")} className="text-sm text-emerald-800 font-medium">Lihat semua</button>} />
+            <MiniList
+              items={recentRecons} empty="Belum ada reconciliation."
+              renderLeft={(r) => <div><div className="text-sm font-medium text-gray-800">{r.id}</div><div className="text-xs text-gray-400">{r.homebase} · {r.date}</div></div>}
+              renderRight={(r) => <StatusBadge status={r.status} />}
+            />
+          </Card>
+          <Card className="p-5">
+            <SectionTitle title="Replacement Saya" right={<button onClick={() => setPage("materialSwap")} className="text-sm text-emerald-800 font-medium">Lihat semua</button>} />
+            <MiniList
+              items={mySwaps} empty="Belum ada replacement."
+              renderLeft={(s) => <div><div className="text-sm font-medium text-gray-800">{s.newSn}</div><div className="text-xs text-gray-400">{s.site || "-"} · {s.date}</div></div>}
+              renderRight={(s) => <span className="text-xs text-gray-400">{s.oldSn ? "Penggantian" : "Instalasi"}</span>}
+            />
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
   // The focused, material-only dashboard is shown to Division Managers, SPVs,
   // and Managers. Managers/SPVs and Division Managers all get the same summary
   // cards plus a per-cluster (PIM) or per-homebase (other divisions) breakdown.
@@ -1080,24 +1152,48 @@ function Dashboard({ role, userName, setPage, deliveries, returns, reconciliatio
     { label: "Faulty di Warehouse", value: faultyInWarehouse.toLocaleString("id-ID"), sub: "Belum Sent to Customer", icon: AlertTriangle, color: "bg-red-50 text-red-600", page: "stock" },
   ];
 
-  const now = new Date();
-  const hour = now.getHours();
-  const greeting = hour < 11 ? "Good morning" : hour < 15 ? "Good afternoon" : hour < 19 ? "Good evening" : "Good night";
-  const firstName = (userName || "").trim().split(" ")[0] || "there";
-  const formattedDate = now.toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
-
-  const actions = [
+  // Return/Reconciliation/Delivery review-and-approve queues are only ever
+  // actioned by Logistics Staff or Manager (see HelpPage) — SPV and Division
+  // Manager have no review step of their own, so showing this queue to them
+  // just links to pages they can't act on.
+  const canReview = role === ROLES.LOGISTICS || role === ROLES.MANAGER;
+  const isSpv = role === ROLES.SPV;
+  const actions = !canReview ? [] : [
     { icon: Undo2, color: "bg-red-50 text-red-600", title: "Return Faulty menunggu review", sub: "Diajukan oleh tim lapangan", count: waitingReview, cta: "Review", page: "returnFaulty" },
     { icon: ClipboardList, color: "bg-amber-50 text-amber-600", title: "Rekonsiliasi menunggu review", sub: "Periode berjalan", count: reconReview, cta: "Review", page: "reconciliation" },
     { icon: Truck, color: "bg-emerald-50 text-emerald-700", title: "Delivery Request menunggu approval", sub: "Diajukan oleh tim lapangan", count: pendingApproval, cta: "Approval", page: "delivery" },
     { icon: AlertTriangle, color: "bg-blue-50 text-blue-600", title: "Material mendekati stok minimum", sub: "Perlu perhatian", count: lowStock, cta: "Lihat", page: "stock" },
   ].filter((a) => a.count > 0);
 
+  // Real counts for the last 7 days, replacing what used to be permanently
+  // hardcoded placeholder numbers. Not shown to SPV — Delivery/Faulty/Recon
+  // trend-watching isn't their job (they submit Delivery Requests, nothing
+  // to review), and Technician gets its own dashboard above already.
+  const showActivityChart = !isSpv;
+  const weekActivity = React.useMemo(() => {
+    const days = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const iso = d.toISOString().slice(0, 10);
+      days.push({
+        day: d.toLocaleDateString("id-ID", { day: "numeric", month: "short" }),
+        delivery: deliveries.filter((x) => x.date === iso).length,
+        faulty: returns.filter((x) => x.date === iso).length,
+        recon: reconciliations.filter((x) => x.date === iso).length,
+      });
+    }
+    return days;
+  }, [deliveries, returns, reconciliations]);
+
   return (
     <div className="p-4 sm:p-8 space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">{greeting}, {firstName} 👋</h1>
-        <p className="text-gray-500 mt-1">{formattedDate} · {role}</p>
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">{greeting}, {firstName} 👋</h1>
+          <p className="text-gray-500 mt-1">{formattedDate} · {role}</p>
+        </div>
+        {isSpv && <PrimaryButton onClick={() => setPage("deliveryCreate")}><Plus size={16} /> Buat Delivery Request</PrimaryButton>}
       </div>
 
       <div className={`grid grid-cols-1 gap-4 ${isDivisionManager ? "md:grid-cols-4" : "md:grid-cols-4"}`}>
@@ -1160,51 +1256,57 @@ function Dashboard({ role, userName, setPage, deliveries, returns, reconciliatio
         </div>
       ))}
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <Card className="p-5 lg:col-span-2">
-          <SectionTitle title="Aktivitas Diperlukan" subtitle="Item yang membutuhkan tindakan Anda" />
-          {actions.length === 0 ? (
-            <EmptyState text="Tidak ada tindakan yang tertunda saat ini." />
-          ) : (
-            <div className="space-y-1">
-              {actions.map((a, i) => (
-                <div key={i} className="flex items-center justify-between py-3 border-b border-gray-50 last:border-0">
-                  <div className="flex items-center gap-3">
-                    <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${a.color}`}><a.icon size={17} /></div>
-                    <div>
-                      <div className="text-sm font-medium text-gray-900">{a.title}</div>
-                      <div className="text-xs text-gray-500">{a.sub}</div>
+      {(canReview || showActivityChart) && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {canReview && (
+            <Card className={`p-5 ${showActivityChart ? "lg:col-span-2" : "lg:col-span-3"}`}>
+              <SectionTitle title="Aktivitas Diperlukan" subtitle="Item yang membutuhkan tindakan Anda" />
+              {actions.length === 0 ? (
+                <EmptyState text="Tidak ada tindakan yang tertunda saat ini." />
+              ) : (
+                <div className="space-y-1">
+                  {actions.map((a, i) => (
+                    <div key={i} className="flex items-center justify-between py-3 border-b border-gray-50 last:border-0">
+                      <div className="flex items-center gap-3">
+                        <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${a.color}`}><a.icon size={17} /></div>
+                        <div>
+                          <div className="text-sm font-medium text-gray-900">{a.title}</div>
+                          <div className="text-xs text-gray-500">{a.sub}</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <span className="text-sm font-semibold text-gray-700">{a.count}</span>
+                        <GhostButton onClick={() => setPage(a.page)} className="py-1.5 px-3 text-xs">{a.cta}</GhostButton>
+                      </div>
                     </div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className="text-sm font-semibold text-gray-700">{a.count}</span>
-                    <GhostButton onClick={() => setPage(a.page)} className="py-1.5 px-3 text-xs">{a.cta}</GhostButton>
-                  </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              )}
+            </Card>
           )}
-        </Card>
 
-        <Card className="p-5">
-          <SectionTitle title="Activity Overview" subtitle="7 hari terakhir" />
-          <ResponsiveContainer width="100%" height={220}>
-            <LineChart data={activityData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-              <XAxis dataKey="day" tick={{ fontSize: 11, fill: "#9ca3af" }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fontSize: 11, fill: "#9ca3af" }} axisLine={false} tickLine={false} />
-              <Tooltip />
-              <Line type="monotone" dataKey="delivery" stroke="#065f46" strokeWidth={2} dot={false} name="Delivery" />
-              <Line type="monotone" dataKey="faulty" stroke="#d97706" strokeWidth={2} dot={false} name="Faulty" />
-              <Line type="monotone" dataKey="recon" stroke="#2563eb" strokeWidth={2} dot={false} name="Rekonsiliasi" />
-            </LineChart>
-          </ResponsiveContainer>
-        </Card>
-      </div>
+          {showActivityChart && (
+            <Card className={`p-5 ${canReview ? "" : "lg:col-span-3"}`}>
+              <SectionTitle title="Activity Overview" subtitle="7 hari terakhir" />
+              <ResponsiveContainer width="100%" height={220}>
+                <LineChart data={weekActivity}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="day" tick={{ fontSize: 11, fill: "#9ca3af" }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fontSize: 11, fill: "#9ca3af" }} axisLine={false} tickLine={false} allowDecimals={false} />
+                  <Tooltip />
+                  <Line type="monotone" dataKey="delivery" stroke="#065f46" strokeWidth={2} dot={false} name="Delivery" />
+                  <Line type="monotone" dataKey="faulty" stroke="#d97706" strokeWidth={2} dot={false} name="Faulty" />
+                  <Line type="monotone" dataKey="recon" stroke="#2563eb" strokeWidth={2} dot={false} name="Rekonsiliasi" />
+                </LineChart>
+              </ResponsiveContainer>
+            </Card>
+          )}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <Card className="p-5 lg:col-span-2">
-          <SectionTitle title="Pengiriman Terbaru" right={<button onClick={() => setPage("delivery")} className="text-sm text-emerald-800 font-medium">Lihat semua</button>} />
+          <SectionTitle title={isSpv ? "Delivery Request Saya" : "Pengiriman Terbaru"} right={<button onClick={() => setPage("delivery")} className="text-sm text-emerald-800 font-medium">Lihat semua</button>} />
           <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -1216,7 +1318,7 @@ function Dashboard({ role, userName, setPage, deliveries, returns, reconciliatio
               </tr>
             </thead>
             <tbody>
-              {deliveries.slice(0, 5).map((d) => (
+              {(isSpv ? deliveries.filter((d) => d.requester === userName) : deliveries).slice(0, 5).map((d) => (
                 <tr key={d.id} className="border-b border-gray-50 last:border-0">
                   <td className="py-2.5 font-medium text-gray-800">{d.id}</td>
                   <td className="py-2.5 text-gray-600">{d.homebase}</td>
