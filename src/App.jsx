@@ -4766,6 +4766,7 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
     },
   });
 
+  const [lightboxSrc, setLightboxSrc] = useState(null);
   const updateRow = (idx, patch) => setRows(rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
   const updateSerial = (idx, si, val) => setRows(rows.map((r, i) => (i === idx ? { ...r, serials: r.serials.map((s, j) => (j === si ? val : s)) } : r)));
   const addRow = () => setRows([...rows, { material: "", serialized: false, systemQty: 0, actualQty: 0, serials: [], reason: "" }]);
@@ -4792,21 +4793,25 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
   // since there's no better source; a row that already existed (e.g. this
   // reconciliation is being edited, or the user already typed a systemQty
   // manually before detecting) keeps its own systemQty and only gets
-  // actualQty updated. Never touches `photo` — that's the standalone field
-  // above, not something a detection pass fills in.
-  const applyDetected = (detected) => {
+  // actualQty updated. Never touches the standalone `photo` field above —
+  // `detectionPhoto` here is a different, separate thing: a reference
+  // thumbnail (one photo from the detection batch) shown ON the row purely
+  // so the SN(s) can be cross-checked against it, same as Return Faulty /
+  // Transfer Stock already do.
+  const applyDetected = (detected, photos) => {
+    const referencePhoto = photos[0] || "";
     setRows((prev) => {
       const next = [...prev];
       detected.forEach((d) => {
         const idx = next.findIndex((r) => r.material === d.material);
-        if (idx >= 0) { next[idx] = { ...next[idx], actualQty: d.qty }; return; }
+        if (idx >= 0) { next[idx] = { ...next[idx], actualQty: d.qty, detectionPhoto: referencePhoto }; return; }
         next.push({
           material: d.material, serialized: !!d.serialized,
           systemQty: d.qty, actualQty: d.qty,
           // SNs the same photos happened to have legible are pre-filled
           // here (best-effort, often empty) — still fully editable/scan-able.
           serials: d.serialized ? Array.from({ length: d.qty }, (_, i) => d.serials?.[i] || "") : [],
-          reason: "", confidence: d.confidence,
+          reason: "", confidence: d.confidence, detectionPhoto: referencePhoto,
         });
       });
       return next;
@@ -4922,12 +4927,19 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
                 })}
               </div>
             )}
+            {r.detectionPhoto && (
+              <div>
+                <div className="text-xs text-gray-400 mb-1.5">Foto dari deteksi — cocokkan dengan SN di atas:</div>
+                <PhotoThumb src={r.detectionPhoto} alt="Foto deteksi" className="w-16 h-16 rounded-lg object-cover border border-gray-200" onOpen={setLightboxSrc} />
+              </div>
+            )}
             {disc !== 0 && (
               <textarea value={r.reason} onChange={(e) => updateRow(idx, { reason: e.target.value })} placeholder="Reason / Explanation untuk discrepancy..." rows={2} className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
             )}
           </Card>
         );
       })}
+      <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
 
       <div className="flex justify-between">
         <GhostButton onClick={onCancel}>Batal</GhostButton>
