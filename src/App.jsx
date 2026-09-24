@@ -3071,7 +3071,11 @@ function PhotoMaterialDetect({ onDetected, api }) {
     try {
       const { items } = await api.detectMaterialsPhoto(photos);
       if (items.length === 0) setError("Tidak ada material yang terdeteksi dari foto ini — coba foto lain atau tambah manual.");
-      onDetected(items);
+      // Hands back the batch of photos too (not just the parsed items) so
+      // the caller can attach them to whatever row(s) it creates — there's
+      // no per-material photo split from a single detection call, so every
+      // row from this batch gets the same set to look back on.
+      onDetected(items, photos);
       setPhotos([]);
     } catch (err) {
       setError(err.message || "Gagal mendeteksi material dari foto");
@@ -4271,16 +4275,22 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
   const updateSN = (itemIdx, snIdx, field, val) => setItems(items.map((it, i) => (i === itemIdx ? { ...it, serials: it.serials.map((s, j) => (j === snIdx ? { ...s, [field]: val } : s)) } : it)));
   const removeSN = (itemIdx, snIdx) => setItems(items.map((it, i) => (i === itemIdx ? { ...it, serials: it.serials.filter((_, j) => j !== snIdx) } : it)));
   const [detectedSummary, setDetectedSummary] = useState("");
+  const [lightboxSrc, setLightboxSrc] = useState(null);
   // Turns a "Deteksi dari Foto" result into item rows with the right number
   // of SN slots — pre-filled from any Serial Number the same photos
   // happened to have legible (best-effort, often none), blank otherwise.
   // Per-unit capture stays exactly as it was either way: typed, scanned, or
   // auto-filled from that unit's own barcode photo via detectBarcode above.
-  const applyDetectedItems = (detected) => {
+  const applyDetectedItems = (detected, photos) => {
     if (detected.length === 0) return;
     let anySerials = false;
     const newItems = detected.map((d) => ({
       material: d.material,
+      // Kept for reference alongside this item's SN fields (see the
+      // gallery rendered below each item) — not resubmitted anywhere,
+      // just lets the technician cross-check what they typed/scanned
+      // against the photo that led to this row.
+      detectionPhotos: photos,
       serials: Array.from({ length: Math.max(1, d.qty) }, (_, i) => {
         const sn = d.serials?.[i] || "";
         if (sn) anySerials = true;
@@ -4414,8 +4424,19 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
               );
             })}
           </div>
+          {item.detectionPhotos?.length > 0 && (
+            <div className="pt-3 border-t border-gray-50">
+              <div className="text-xs text-gray-400 mb-1.5">Foto dari deteksi — cocokkan dengan SN di atas:</div>
+              <div className="flex flex-wrap gap-2">
+                {item.detectionPhotos.map((p, pi) => (
+                  <PhotoThumb key={pi} src={p} alt={`Foto deteksi ${pi + 1}`} className="w-16 h-16 rounded-lg object-cover border border-gray-200" onOpen={setLightboxSrc} />
+                ))}
+              </div>
+            </div>
+          )}
         </Card>
       ))}
+      <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
 
       {hasDuplicateSN && <div className="text-xs text-red-600 -mt-2">Terdapat Serial Number duplikat dalam transaksi ini.</div>}
 
@@ -4743,15 +4764,16 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
     },
   });
 
+  const [lightboxSrc, setLightboxSrc] = useState(null);
   const updateRow = (idx, patch) => setRows(rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
   const updateSerial = (idx, si, val) => setRows(rows.map((r, i) => (i === idx ? { ...r, serials: r.serials.map((s, j) => (j === si ? val : s)) } : r)));
-  const addRow = () => setRows([...rows, { material: "", serialized: false, systemQty: 0, actualQty: 0, serials: [], photo: "", reason: "" }]);
+  const addRow = () => setRows([...rows, { material: "", serialized: false, systemQty: 0, actualQty: 0, serials: [], reason: "" }]);
   const removeRow = (idx) => setRows(rows.filter((_, i) => i !== idx));
   // Switching a row's material invalidates whatever qty/SN was there —
   // reset rather than carry stale counts for the wrong material across.
   const updateRowMaterial = (idx, name) => {
     const mat = materials.find((m) => m.name === name);
-    setRows(rows.map((r, i) => (i === idx ? { material: name, serialized: !!mat?.serialized, systemQty: 0, actualQty: 0, serials: [], photo: r.photo, reason: "" } : r)));
+    setRows(rows.map((r, i) => (i === idx ? { material: name, serialized: !!mat?.serialized, systemQty: 0, actualQty: 0, serials: [], reason: "" } : r)));
   };
   // Serialized rows keep exactly one SN slot per Actual Qty unit — resize
   // (preserving whatever's already typed) instead of leaving the SN list
@@ -4770,19 +4792,22 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
   // reconciliation is being edited, or the user already typed a systemQty
   // manually before detecting) keeps its own systemQty and only gets
   // actualQty updated.
-  const applyDetected = (detected) => {
+  const applyDetected = (detected, photos) => {
     setRows((prev) => {
       const next = [...prev];
       detected.forEach((d) => {
         const idx = next.findIndex((r) => r.material === d.material);
-        if (idx >= 0) { next[idx] = { ...next[idx], actualQty: d.qty }; return; }
+        // The batch of photos this detection ran on isn't split per
+        // material — every row it touches gets the same set to look back
+        // on and cross-check against the SN(s) it filled in.
+        if (idx >= 0) { next[idx] = { ...next[idx], actualQty: d.qty, detectionPhotos: photos }; return; }
         next.push({
           material: d.material, serialized: !!d.serialized,
           systemQty: d.qty, actualQty: d.qty,
           // SNs the same photos happened to have legible are pre-filled
           // here (best-effort, often empty) — still fully editable/scan-able.
           serials: d.serialized ? Array.from({ length: d.qty }, (_, i) => d.serials?.[i] || "") : [],
-          photo: "", reason: "", confidence: d.confidence,
+          reason: "", confidence: d.confidence, detectionPhotos: photos,
         });
       });
       return next;
@@ -4791,7 +4816,7 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
 
   const snConflicts = rows.flatMap((r) => (r.serials || []).map((sn) => findSNConflict(sn, { returns, reconciliations, excludeId })).filter(Boolean));
   const valid = homebase && rows.length > 0 && snConflicts.length === 0 &&
-    rows.every((r) => r.material && r.photo && (r.systemQty === r.actualQty || r.reason.trim()) && (!r.serialized || (r.serials.length > 0 && r.serials.every((s) => s.trim())))) &&
+    rows.every((r) => r.material && (r.systemQty === r.actualQty || r.reason.trim()) && (!r.serialized || (r.serials.length > 0 && r.serials.every((s) => s.trim())))) &&
     (isEdit || !needsDivisionPicker || customer);
 
   return (
@@ -4883,23 +4908,30 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
                   const conflict = findSNConflict(s, { returns, reconciliations, excludeId });
                   return (
                     <div key={si}>
-                      <div className="flex items-center gap-1.5">
-                        <input value={s} onChange={(e) => updateSerial(idx, si, e.target.value)} placeholder={`SN ${si + 1}`} className={`flex-1 border rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600 ${conflict ? "border-red-300" : "border-gray-200"}`} />
-                        <ScanButton onScan={(text) => updateSerial(idx, si, text)} />
-                      </div>
+                      <input value={s} onChange={(e) => updateSerial(idx, si, e.target.value)} placeholder={`SN ${si + 1}`} className={`w-full border rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600 ${conflict ? "border-red-300" : "border-gray-200"}`} />
                       {conflict && <div className="text-xs text-red-600 mt-1">SN digunakan pada {conflict}.</div>}
                     </div>
                   );
                 })}
               </div>
             )}
-            <PhotoUpload label="Foto Keseluruhan Material" value={r.photo} onChange={(v) => updateRow(idx, { photo: v })} />
+            {r.detectionPhotos?.length > 0 && (
+              <div>
+                <div className="text-xs text-gray-400 mb-1.5">Foto dari deteksi — cocokkan dengan SN di atas:</div>
+                <div className="flex flex-wrap gap-2">
+                  {r.detectionPhotos.map((p, pi) => (
+                    <PhotoThumb key={pi} src={p} alt={`Foto deteksi ${pi + 1}`} className="w-16 h-16 rounded-lg object-cover border border-gray-200" onOpen={setLightboxSrc} />
+                  ))}
+                </div>
+              </div>
+            )}
             {disc !== 0 && (
               <textarea value={r.reason} onChange={(e) => updateRow(idx, { reason: e.target.value })} placeholder="Reason / Explanation untuk discrepancy..." rows={2} className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
             )}
           </Card>
         );
       })}
+      <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
 
       <div className="flex justify-between">
         <GhostButton onClick={onCancel}>Batal</GhostButton>
@@ -5766,14 +5798,17 @@ function TransferCreate({ onSubmit, onSubmitQuiet, onCancel, materials, customer
   const selectedMaterial = activeMaterials.find((m) => m.name === material);
   const isSerialized = !!selectedMaterial?.serialized;
 
-  const applyDetectedQueue = (detected) => {
+  const [detectionPhotos, setDetectionPhotos] = useState([]);
+  const [lightboxSrc, setLightboxSrc] = useState(null);
+  const applyDetectedQueue = (detected, photos) => {
     if (detected.length === 0) return;
     setDetectedQueue(detected);
     setQueueIndex(0);
     setShowPhotoDetect(false);
     setMaterial(detected[0].material);
+    setDetectionPhotos(photos);
   };
-  const exitQueue = () => { setDetectedQueue(null); setQueueIndex(0); setMaterial(""); setNote(""); };
+  const exitQueue = () => { setDetectedQueue(null); setQueueIndex(0); setMaterial(""); setNote(""); setDetectionPhotos([]); };
 
   React.useEffect(() => {
     setSelectedSerials(new Set()); setQty(""); setTransferOptions(null); setAvailableSerials([]); setError("");
@@ -5894,14 +5929,24 @@ function TransferCreate({ onSubmit, onSubmitQuiet, onCancel, materials, customer
         )}
 
         {detectedQueue && (
-          <div className="flex items-center justify-between bg-emerald-50/60 border border-emerald-100 rounded-lg px-3 py-2.5 text-xs">
-            <span className="text-emerald-800 font-medium">Material {queueIndex + 1} dari {detectedQueue.length} terdeteksi dari foto{detectedQueue[queueIndex]?.confidence === "rendah" ? " — perkiraan, cek lagi" : ""}</span>
-            <div className="flex items-center gap-3">
-              <button onClick={advanceQueue} className="text-gray-500 hover:text-gray-800 font-medium">Lewati</button>
-              <button onClick={exitQueue} className="text-gray-500 hover:text-gray-800 font-medium">Batalkan mode deteksi</button>
+          <div className="bg-emerald-50/60 border border-emerald-100 rounded-lg px-3 py-2.5 text-xs space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-emerald-800 font-medium">Material {queueIndex + 1} dari {detectedQueue.length} terdeteksi dari foto{detectedQueue[queueIndex]?.confidence === "rendah" ? " — perkiraan, cek lagi" : ""}</span>
+              <div className="flex items-center gap-3">
+                <button onClick={advanceQueue} className="text-gray-500 hover:text-gray-800 font-medium">Lewati</button>
+                <button onClick={exitQueue} className="text-gray-500 hover:text-gray-800 font-medium">Batalkan mode deteksi</button>
+              </div>
             </div>
+            {detectionPhotos.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {detectionPhotos.map((p, pi) => (
+                  <PhotoThumb key={pi} src={p} alt={`Foto deteksi ${pi + 1}`} className="w-14 h-14 rounded-lg object-cover border border-emerald-200" onOpen={setLightboxSrc} />
+                ))}
+              </div>
+            )}
           </div>
         )}
+        <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
 
         {loadingOptions && <div className="text-xs text-gray-400">Memuat ketersediaan stock...</div>}
 
