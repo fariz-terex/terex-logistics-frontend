@@ -3046,6 +3046,28 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
 // POST /stock/detect-materials-photo, since each of those three flows needs
 // something different done with it (see each call site). Never submits
 // anything itself.
+// The photo(s) from a detection batch that one detected item was actually
+// seen in — the backend maps each material/SN to its "Foto N"
+// (photoIndexes). Falls back to the whole batch only when the detector
+// didn't say (never silently pins every row to photo #1).
+function detectedPhotosFor(d, photos) {
+  const own = (d.photoIndexes || []).map((i) => photos[i]).filter(Boolean);
+  return own.length ? own : photos;
+}
+
+// Reference thumbnails shown on a row so its SN(s) can be cross-checked
+// against the photo(s) they were read from. Accepts the old single-string
+// `detectionPhoto` too (restored drafts).
+function DetectionPhotoThumbs({ photos, legacy, onOpen, className = "w-16 h-16" }) {
+  const list = photos?.length ? photos : legacy ? [legacy] : [];
+  if (list.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-2">
+      {list.map((src, i) => <PhotoThumb key={i} src={src} alt={`Foto deteksi ${i + 1}`} className={`${className} rounded-lg object-cover border border-gray-200`} onOpen={onOpen} />)}
+    </div>
+  );
+}
+
 function PhotoMaterialDetect({ onDetected, api }) {
   const [photos, setPhotos] = useState([]); // data URLs
   const [detecting, setDetecting] = useState(false);
@@ -3072,9 +3094,8 @@ function PhotoMaterialDetect({ onDetected, api }) {
       const { items } = await api.detectMaterialsPhoto(photos);
       if (items.length === 0) setError("Tidak ada material yang terdeteksi dari foto ini — coba foto lain atau tambah manual.");
       // Hands back the batch of photos too (not just the parsed items) so
-      // the caller can attach them to whatever row(s) it creates — there's
-      // no per-material photo split from a single detection call, so every
-      // row from this batch gets the same set to look back on.
+      // the caller can attach each item's OWN photo(s) to its row — see
+      // detectedPhotosFor (items carry photoIndexes into this array).
       onDetected(items, photos);
       setPhotos([]);
     } catch (err) {
@@ -4284,13 +4305,12 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
   const applyDetectedItems = (detected, photos) => {
     if (detected.length === 0) return;
     let anySerials = false;
-    // One reference photo per item, not the whole batch — kept alongside
-    // this item's SN fields so it can be cross-checked against what was
-    // typed/scanned, not resubmitted anywhere itself.
-    const referencePhoto = photos[0] || "";
+    // Each item gets only the photo(s) it was actually detected in — kept
+    // alongside this item's SN fields so it can be cross-checked against
+    // what was typed/scanned, not resubmitted anywhere itself.
     const newItems = detected.map((d) => ({
       material: d.material,
-      detectionPhoto: referencePhoto,
+      detectionPhotos: detectedPhotosFor(d, photos),
       serials: Array.from({ length: Math.max(1, d.qty) }, (_, i) => {
         const sn = d.serials?.[i] || "";
         if (sn) anySerials = true;
@@ -4424,10 +4444,10 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
               );
             })}
           </div>
-          {item.detectionPhoto && (
+          {(item.detectionPhotos?.length > 0 || item.detectionPhoto) && (
             <div className="pt-3 border-t border-gray-50">
               <div className="text-xs text-gray-400 mb-1.5">Foto dari deteksi — cocokkan dengan SN di atas:</div>
-              <PhotoThumb src={item.detectionPhoto} alt="Foto deteksi" className="w-16 h-16 rounded-lg object-cover border border-gray-200" onOpen={setLightboxSrc} />
+              <DetectionPhotoThumbs photos={item.detectionPhotos} legacy={item.detectionPhoto} onOpen={setLightboxSrc} />
             </div>
           )}
         </Card>
@@ -4788,7 +4808,9 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
   const [lightboxSrc, setLightboxSrc] = useState(null);
   const updateRow = (idx, patch) => setRows(rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
   const updateSerial = (idx, si, val) => setRows(rows.map((r, i) => (i === idx ? { ...r, serials: r.serials.map((s, j) => (j === si ? val : s)) } : r)));
-  const addRow = () => setRows([...rows, { material: "", serialized: false, actualQty: 0, serials: [], reason: "" }]);
+  // New manual rows go on TOP so the user immediately sees the empty form
+  // they just added, instead of it landing below every detected row.
+  const addRow = () => setRows([{ material: "", serialized: false, actualQty: 0, serials: [], reason: "" }, ...rows]);
   const removeRow = (idx) => setRows(rows.filter((_, i) => i !== idx));
   // Switching a row's material invalidates whatever qty/SN was there —
   // reset rather than carry stale counts for the wrong material across.
@@ -4810,24 +4832,24 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
   // updated; otherwise a new row is added (System Qty is never stored on the
   // row — it's looked up from systemQtyMap). Never touches the standalone
   // `photo` field above —
-  // `detectionPhoto` here is a different, separate thing: a reference
-  // thumbnail (one photo from the detection batch) shown ON the row purely
+  // `detectionPhotos` here is a different, separate thing: reference
+  // thumbnails (only the photo(s) this material was detected in) shown ON the row purely
   // so the SN(s) can be cross-checked against it, same as Return Faulty /
   // Transfer Stock already do.
   const applyDetected = (detected, photos) => {
-    const referencePhoto = photos[0] || "";
     setRows((prev) => {
       const next = [...prev];
       detected.forEach((d) => {
+        const own = detectedPhotosFor(d, photos);
         const idx = next.findIndex((r) => r.material === d.material);
-        if (idx >= 0) { next[idx] = { ...next[idx], actualQty: d.qty, detectionPhoto: referencePhoto }; return; }
+        if (idx >= 0) { next[idx] = { ...next[idx], actualQty: d.qty, detectionPhotos: own, detectionPhoto: undefined }; return; }
         next.push({
           material: d.material, serialized: !!d.serialized,
           actualQty: d.qty,
           // SNs the same photos happened to have legible are pre-filled
           // here (best-effort, often empty) — still fully editable/scan-able.
           serials: d.serialized ? Array.from({ length: d.qty }, (_, i) => d.serials?.[i] || "") : [],
-          reason: "", confidence: d.confidence, detectionPhoto: referencePhoto,
+          reason: "", confidence: d.confidence, detectionPhotos: own,
         });
       });
       return next;
@@ -4945,10 +4967,10 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
                 })}
               </div>
             )}
-            {r.detectionPhoto && (
+            {(r.detectionPhotos?.length > 0 || r.detectionPhoto) && (
               <div>
                 <div className="text-xs text-gray-400 mb-1.5">Foto dari deteksi — cocokkan dengan SN di atas:</div>
-                <PhotoThumb src={r.detectionPhoto} alt="Foto deteksi" className="w-16 h-16 rounded-lg object-cover border border-gray-200" onOpen={setLightboxSrc} />
+                <DetectionPhotoThumbs photos={r.detectionPhotos} legacy={r.detectionPhoto} onOpen={setLightboxSrc} />
               </div>
             )}
             {disc !== 0 && (
@@ -5830,17 +5852,17 @@ function TransferCreate({ onSubmit, onSubmitQuiet, onCancel, materials, customer
   const selectedMaterial = activeMaterials.find((m) => m.name === material);
   const isSerialized = !!selectedMaterial?.serialized;
 
-  const [detectionPhoto, setDetectionPhoto] = useState("");
   const [lightboxSrc, setLightboxSrc] = useState(null);
   const applyDetectedQueue = (detected, photos) => {
     if (detected.length === 0) return;
-    setDetectedQueue(detected);
+    // Each queue entry carries its own photo(s), so stepping to the next
+    // material shows that material's photo, not the first one of the batch.
+    setDetectedQueue(detected.map((d) => ({ ...d, detectionPhotos: detectedPhotosFor(d, photos) })));
     setQueueIndex(0);
     setShowPhotoDetect(false);
     setMaterial(detected[0].material);
-    setDetectionPhoto(photos[0] || "");
   };
-  const exitQueue = () => { setDetectedQueue(null); setQueueIndex(0); setMaterial(""); setNote(""); setDetectionPhoto(""); };
+  const exitQueue = () => { setDetectedQueue(null); setQueueIndex(0); setMaterial(""); setNote(""); };
 
   React.useEffect(() => {
     setSelectedSerials(new Set()); setQty(""); setTransferOptions(null); setAvailableSerials([]); setError("");
@@ -5969,9 +5991,7 @@ function TransferCreate({ onSubmit, onSubmitQuiet, onCancel, materials, customer
                 <button onClick={exitQueue} className="text-gray-500 hover:text-gray-800 font-medium">Batalkan mode deteksi</button>
               </div>
             </div>
-            {detectionPhoto && (
-              <PhotoThumb src={detectionPhoto} alt="Foto deteksi" className="w-14 h-14 rounded-lg object-cover border border-emerald-200" onOpen={setLightboxSrc} />
-            )}
+            <DetectionPhotoThumbs photos={detectedQueue[queueIndex]?.detectionPhotos} onOpen={setLightboxSrc} className="w-14 h-14" />
           </div>
         )}
         <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
