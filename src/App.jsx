@@ -3050,8 +3050,19 @@ function PhotoMaterialDetect({ onDetected, api }) {
   const [photos, setPhotos] = useState([]); // data URLs
   const [detecting, setDetecting] = useState(false);
   const [error, setError] = useState("");
+  const [dragOver, setDragOver] = useState(false);
+  const inputRef = React.useRef(null);
 
-  const addPhoto = (dataUrl) => setPhotos((prev) => [...prev, dataUrl]);
+  const addFiles = async (fileList) => {
+    const room = Math.max(0, 6 - photos.length);
+    const files = Array.from(fileList || []).filter((f) => f.type.startsWith("image/")).slice(0, room);
+    for (const file of files) {
+      try {
+        const compressed = await compressImage(file);
+        setPhotos((prev) => (prev.length < 6 ? [...prev, compressed] : prev));
+      } catch { /* skip a file that fails to process, rest still go through */ }
+    }
+  };
   const removePhoto = (i) => setPhotos((prev) => prev.filter((_, idx) => idx !== i));
 
   const detect = async () => {
@@ -3059,7 +3070,7 @@ function PhotoMaterialDetect({ onDetected, api }) {
     setDetecting(true); setError("");
     try {
       const { items } = await api.detectMaterialsPhoto(photos);
-      if (items.length === 0) setError("Tidak ada material yang terdeteksi dari foto ini — coba foto lain atau isi manual.");
+      if (items.length === 0) setError("Tidak ada material yang terdeteksi dari foto ini — coba foto lain atau tambah manual.");
       onDetected(items);
       setPhotos([]);
     } catch (err) {
@@ -3071,15 +3082,29 @@ function PhotoMaterialDetect({ onDetected, api }) {
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
-        {photos.map((p, i) => (
-          <div key={i} className="relative">
-            <img src={p} alt="" className="w-14 h-14 rounded-lg object-cover border border-gray-200" />
-            <button onClick={() => removePhoto(i)} className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-white border border-gray-200 text-gray-400 hover:text-red-500 flex items-center justify-center"><X size={11} /></button>
-          </div>
-        ))}
-        {photos.length < 6 && <PhotoUpload compact value="" onChange={addPhoto} />}
+      <input ref={inputRef} type="file" accept="image/*" multiple capture="environment" className="hidden" onChange={(e) => { addFiles(e.target.files); e.target.value = ""; }} />
+      <div
+        onClick={() => inputRef.current?.click()}
+        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => { e.preventDefault(); setDragOver(false); addFiles(e.dataTransfer.files); }}
+        className={`rounded-xl border-2 border-dashed p-8 text-center cursor-pointer transition-colors ${dragOver ? "border-emerald-500 bg-emerald-50/50" : "border-gray-200 hover:border-gray-300"}`}
+      >
+        <div className="w-12 h-12 rounded-full bg-emerald-50 text-emerald-700 flex items-center justify-center mx-auto mb-3"><Upload size={20} /></div>
+        <div className="text-sm font-medium text-gray-700">Pilih foto atau drag & drop di sini</div>
+        <div className="text-xs text-gray-400 mt-1">JPG, PNG — boleh lebih dari satu, maksimal 6 foto</div>
       </div>
+
+      {photos.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {photos.map((p, i) => (
+            <div key={i} className="relative">
+              <img src={p} alt="" className="w-16 h-16 rounded-lg object-cover border border-gray-200" />
+              <button onClick={() => removePhoto(i)} className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-white border border-gray-200 text-gray-400 hover:text-red-500 flex items-center justify-center"><X size={11} /></button>
+            </div>
+          ))}
+        </div>
+      )}
       {error && <div className="bg-red-50 border border-red-100 text-red-700 text-xs rounded-lg px-3 py-2">{error}</div>}
       <div className="flex justify-end">
         <PrimaryButton disabled={photos.length === 0 || detecting} onClick={detect}>{detecting ? "Mendeteksi material..." : "Deteksi dari Foto"}</PrimaryButton>
@@ -4212,12 +4237,16 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
   const needsDivisionPicker = isManager || myDivisions.length > 1;
   const divisionOptions = isManager ? customers.filter((c) => c.status === "Active").map((c) => c.name) : myDivisions;
   const [customer, setCustomer] = useState("");
+  // Starts empty rather than with one blank placeholder row — "Deteksi dari
+  // Foto" is the primary way in now (see below), with "+ Tambah Material"
+  // as the manual fallback for whatever it misses, so there's nothing to
+  // show until one of those actually adds something.
   const [items, setItems] = useState(
     initialData?.items?.length
       ? initialData.items.map((it) => ({ material: it.material, serials: it.serials.map((s) => ({ ...s })) }))
       : prefillItems?.length
       ? prefillItems.map((it) => ({ material: it.material, serials: [{ sn: it.sn, photo: it.photo || "" }] }))
-      : [{ material: "", serials: [{ sn: "", photo: "" }] }]
+      : []
   );
   const [docs, setDocs] = useState(initialData?.docs ? { ...initialData.docs } : { beforePacking: "", afterPacking: "", weighing: "" });
 
@@ -4241,22 +4270,16 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
   const addSN = (itemIdx) => setItems(items.map((it, i) => (i === itemIdx ? { ...it, serials: [...it.serials, { sn: "", photo: "" }] } : it)));
   const updateSN = (itemIdx, snIdx, field, val) => setItems(items.map((it, i) => (i === itemIdx ? { ...it, serials: it.serials.map((s, j) => (j === snIdx ? { ...s, [field]: val } : s)) } : it)));
   const removeSN = (itemIdx, snIdx) => setItems(items.map((it, i) => (i === itemIdx ? { ...it, serials: it.serials.filter((_, j) => j !== snIdx) } : it)));
-  const [showPhotoDetect, setShowPhotoDetect] = useState(false);
   const [detectedSummary, setDetectedSummary] = useState("");
   // Turns a "Deteksi dari Foto" result into item rows with the right number
   // of blank SN slots — SN capture itself is untouched, still per-unit
   // (typed, ScanButton-free now, or auto-filled from that unit's own photo
-  // via detectBarcode above). Replaces the form's single still-blank
-  // starter row on first use instead of leaving it dangling unfilled.
+  // via detectBarcode above).
   const applyDetectedItems = (detected) => {
     if (detected.length === 0) return;
     const newItems = detected.map((d) => ({ material: d.material, serials: Array.from({ length: Math.max(1, d.qty) }, () => ({ sn: "", photo: "" })) }));
-    setItems((prev) => {
-      const isBlank = prev.length === 1 && !prev[0].material && prev[0].serials.every((s) => !s.sn.trim());
-      return isBlank ? newItems : [...prev, ...newItems];
-    });
-    setDetectedSummary(`${detected.length} jenis material ditambahkan dari foto — cek jenis & qty, lalu isi/scan Serial Number tiap unit.`);
-    setShowPhotoDetect(false);
+    setItems((prev) => [...prev, ...newItems]);
+    setDetectedSummary(`${detected.length} jenis material ditambahkan dari foto — cek jenis & qty, lalu isi/scan Serial Number tiap unit yang gagal terdeteksi otomatis bisa ditambah lewat "Tambah Material".`);
   };
   // Auto-fill from a barcode decoded out of the photo just uploaded (see
   // PhotoUpload's detectBarcode/onDetected) — only when the field is still
@@ -4291,7 +4314,7 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
       {onBack && <button onClick={onBack} className="text-sm text-gray-500 flex items-center gap-1 hover:text-gray-800"><ChevronLeft size={16} /> Ubah pengirim / tujuan</button>}
       <SectionTitle
         title={isEdit ? `Perbaiki Request — Homebase to Warehouse — ${excludeId}` : "Buat Request — Homebase to Warehouse"}
-        subtitle={isEdit ? "Perbarui data sesuai catatan revisi, lalu kirim ulang ke Logistics" : "Input Serial Number secara manual untuk setiap unit — bisa lebih dari satu material"}
+        subtitle={isEdit ? "Perbarui data sesuai catatan revisi, lalu kirim ulang ke Logistics" : "Upload foto material yang dikembalikan, atau tambahkan manual — bisa lebih dari satu material"}
       />
       <DraftBanner draft={draft} note="Foto tidak ikut tersimpan — perlu diunggah ulang." />
 
@@ -4319,21 +4342,21 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
         </Card>
       )}
 
-      <div className="flex items-center justify-between">
-        <div className="text-sm font-semibold text-gray-800">Material yang Dikembalikan</div>
-        <div className="flex items-center gap-3">
-          {!isEdit && <button onClick={() => setShowPhotoDetect((v) => !v)} className="text-xs text-emerald-800 font-medium flex items-center gap-1"><Camera size={14} /> Deteksi dari Foto</button>}
-          <button onClick={addItem} className="text-xs text-emerald-800 font-medium flex items-center gap-1"><Plus size={14} /> Tambah Material</button>
-        </div>
-      </div>
-
-      {showPhotoDetect && (
+      {!isEdit && (
         <Card className="p-5 space-y-3">
-          <div className="text-xs text-gray-500">Upload foto material yang mau dikembalikan (boleh lebih dari satu foto) — sistem akan menebak jenis & jumlahnya. Tetap perlu diperiksa, dan Serial Number tiap unit tetap diisi manual/scan seperti biasa.</div>
+          <div>
+            <div className="text-sm font-semibold text-gray-800">Upload Foto Material</div>
+            <div className="text-xs text-gray-500 mt-0.5">Upload foto material yang mau dikembalikan — sistem akan menebak jenis & jumlahnya. Tetap perlu diperiksa, dan Serial Number tiap unit tetap diisi manual/scan seperti biasa.</div>
+          </div>
           <PhotoMaterialDetect api={api} onDetected={applyDetectedItems} />
         </Card>
       )}
       {detectedSummary && <div className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2">{detectedSummary}</div>}
+
+      <div className="flex items-center justify-between">
+        <div className="text-sm font-semibold text-gray-800">Material yang Dikembalikan{items.length === 0 && <span className="text-gray-400 font-normal"> — belum ada</span>}</div>
+        <button onClick={addItem} className="text-xs text-emerald-800 font-medium flex items-center gap-1"><Plus size={14} /> Tambah Material Manual</button>
+      </div>
 
       {items.map((item, itemIdx) => (
         <Card key={itemIdx} className="p-6 space-y-4">
@@ -4687,23 +4710,20 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
   const [customer, setCustomer] = useState("");
   const [homebase, setHomebase] = useState(initialData?.homebase || "");
   const [period, setPeriod] = useState(initialData?.period || "01 - 15 Agustus 2026");
+  // Starts empty rather than pre-seeded with placeholder rows — "Deteksi
+  // dari Foto" is the primary way to populate this now, with "+ Tambah
+  // Material" as the manual fallback for whatever a photo doesn't confidently
+  // identify, so there's nothing to show (and no System Qty to fake) until
+  // one of those actually adds a row.
   const [rows, setRows] = useState(
-    initialData?.items
-      ? initialData.items.map((r) => ({ ...r, serials: r.serials ? [...r.serials] : [] }))
-      : materials.slice(0, 3).map((m) => ({
-          material: m.name, serialized: m.serialized,
-          systemQty: 3, serials: m.serialized ? ["", "", ""] : [],
-          actualQty: 3, photo: "", reason: "",
-        }))
+    initialData?.items ? initialData.items.map((r) => ({ ...r, serials: r.serials ? [...r.serials] : [] })) : []
   );
 
   const draft = useFormDraft({
     userId: currentUser?.id, formKey: "reconciliationCreate",
     enabled: !isEdit,
     snapshot: { customer, homebase, period, rows: rows.map((r) => ({ ...r, photo: "" })) },
-    // The form opens pre-seeded with 3 default rows, so "empty" means nothing
-    // has been changed from those defaults, not that there are no rows.
-    isEmpty: !customer && !homebase && rows.every((r) => !r.reason && r.actualQty === r.systemQty && (r.serials || []).every((s) => !s)),
+    isEmpty: !customer && !homebase && rows.length === 0,
     onRestore: (d) => {
       setCustomer(d.customer || ""); setHomebase(d.homebase || ""); setPeriod(d.period || "");
       if (d.rows?.length) setRows(d.rows);
@@ -4712,33 +4732,58 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
 
   const updateRow = (idx, patch) => setRows(rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
   const updateSerial = (idx, si, val) => setRows(rows.map((r, i) => (i === idx ? { ...r, serials: r.serials.map((s, j) => (j === si ? val : s)) } : r)));
+  const addRow = () => setRows([...rows, { material: "", serialized: false, systemQty: 0, actualQty: 0, serials: [], photo: "", reason: "" }]);
+  const removeRow = (idx) => setRows(rows.filter((_, i) => i !== idx));
+  // Switching a row's material invalidates whatever qty/SN was there —
+  // reset rather than carry stale counts for the wrong material across.
+  const updateRowMaterial = (idx, name) => {
+    const mat = materials.find((m) => m.name === name);
+    setRows(rows.map((r, i) => (i === idx ? { material: name, serialized: !!mat?.serialized, systemQty: 0, actualQty: 0, serials: [], photo: r.photo, reason: "" } : r)));
+  };
+  // Serialized rows keep exactly one SN slot per Actual Qty unit — resize
+  // (preserving whatever's already typed) instead of leaving the SN list
+  // out of sync with the count, same idea as Return Faulty's item rows.
+  const updateRowActualQty = (idx, actualQty) => setRows(rows.map((r, i) => {
+    if (i !== idx) return r;
+    if (!r.serialized) return { ...r, actualQty };
+    const n = Math.max(0, actualQty);
+    return { ...r, actualQty, serials: Array.from({ length: n }, (_, j) => r.serials[j] || "") };
+  }));
 
-  const [showPhotoDetect, setShowPhotoDetect] = useState(false);
-  const [unmatchedDetected, setUnmatchedDetected] = useState([]);
-  // Only fills `actualQty` on rows ALREADY in this reconciliation (matched
-  // by material name) — `systemQty` here isn't backed by a real stock
-  // lookup (this form always seeds it from a placeholder, not a live
-  // count), so a detected material with no existing row is surfaced for
-  // the user to add manually rather than invented with a fabricated
-  // systemQty.
+  // System Qty here was never backed by a real stock lookup (a pre-existing,
+  // separate gap — see CLAUDE.md/plan notes) — a detected row's systemQty
+  // is just set equal to its detected actualQty (0 discrepancy assumed)
+  // since there's no better source; a row that already existed (e.g. this
+  // reconciliation is being edited, or the user already typed a systemQty
+  // manually before detecting) keeps its own systemQty and only gets
+  // actualQty updated.
   const applyDetected = (detected) => {
-    const existingNames = new Set(rows.map((r) => r.material));
-    setRows(rows.map((r) => {
-      const found = detected.find((d) => d.material === r.material);
-      return found ? { ...r, actualQty: found.qty } : r;
-    }));
-    setUnmatchedDetected(detected.filter((d) => !existingNames.has(d.material)));
-    setShowPhotoDetect(false);
+    setRows((prev) => {
+      const next = [...prev];
+      detected.forEach((d) => {
+        const idx = next.findIndex((r) => r.material === d.material);
+        if (idx >= 0) { next[idx] = { ...next[idx], actualQty: d.qty }; return; }
+        next.push({
+          material: d.material, serialized: !!d.serialized,
+          systemQty: d.qty, actualQty: d.qty,
+          serials: d.serialized ? Array.from({ length: d.qty }, () => "") : [],
+          photo: "", reason: "", confidence: d.confidence,
+        });
+      });
+      return next;
+    });
   };
 
   const snConflicts = rows.flatMap((r) => (r.serials || []).map((sn) => findSNConflict(sn, { returns, reconciliations, excludeId })).filter(Boolean));
-  const valid = homebase && snConflicts.length === 0 && rows.every((r) => r.photo && (r.systemQty === r.actualQty || r.reason.trim()) && (!r.serialized || r.serials.every((s) => s.trim()))) && (isEdit || !needsDivisionPicker || customer);
+  const valid = homebase && rows.length > 0 && snConflicts.length === 0 &&
+    rows.every((r) => r.material && r.photo && (r.systemQty === r.actualQty || r.reason.trim()) && (!r.serialized || (r.serials.length > 0 && r.serials.every((s) => s.trim())))) &&
+    (isEdit || !needsDivisionPicker || customer);
 
   return (
     <div className="p-4 sm:p-8 max-w-3xl mx-auto space-y-6">
       <SectionTitle
         title={isEdit ? `Perbaiki Reconciliation — ${excludeId}` : "Buat Reconciliation"}
-        subtitle={isEdit ? "Perbarui data sesuai catatan revisi, lalu kirim ulang ke Logistics" : "Verifikasi fisik material dan input SN secara manual"}
+        subtitle={isEdit ? "Perbarui data sesuai catatan revisi, lalu kirim ulang ke Logistics" : "Upload foto material untuk verifikasi fisik, atau tambahkan manual"}
       />
       <DraftBanner draft={draft} note="Foto tidak ikut tersimpan — perlu diunggah ulang." />
       {isEdit && revisionNote && (
@@ -4772,36 +4817,49 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
         </div>
       </Card>
 
-      <div className="flex items-center justify-between">
-        <div className="text-sm font-semibold text-gray-800">Material yang Direkonsiliasi</div>
-        <button onClick={() => setShowPhotoDetect((v) => !v)} className="text-xs text-emerald-800 font-medium flex items-center gap-1"><Camera size={14} /> Deteksi dari Foto</button>
-      </div>
-
-      {showPhotoDetect && (
+      {!isEdit && (
         <Card className="p-5 space-y-3">
-          <div className="text-xs text-gray-500">Upload foto material yang ada di homebase ini (boleh lebih dari satu foto) — sistem akan menebak jenis & jumlahnya dan mengisi Actual Qty untuk material yang sudah ada di daftar di bawah. Material yang terdeteksi tapi belum ada di daftar akan ditampilkan terpisah untuk ditambah manual.</div>
+          <div>
+            <div className="text-sm font-semibold text-gray-800">Upload Foto Material</div>
+            <div className="text-xs text-gray-500 mt-0.5">Upload foto material yang ada di homebase ini — sistem akan menebak jenis & jumlahnya dan menambahkannya ke daftar di bawah. Material yang gagal terdeteksi dengan benar bisa ditambahkan manual lewat "Tambah Material".</div>
+          </div>
           <PhotoMaterialDetect api={api} onDetected={applyDetected} />
         </Card>
       )}
-      {unmatchedDetected.length > 0 && (
-        <div className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2.5">
-          Terdeteksi dari foto tapi belum ada di daftar reconciliation ini — tambahkan manual jika perlu: {unmatchedDetected.map((d) => `${d.material} (±${d.qty})`).join(", ")}
-        </div>
-      )}
+
+      <div className="flex items-center justify-between">
+        <div className="text-sm font-semibold text-gray-800">Material yang Direkonsiliasi{rows.length === 0 && <span className="text-gray-400 font-normal"> — belum ada</span>}</div>
+        <button onClick={addRow} className="text-xs text-emerald-800 font-medium flex items-center gap-1"><Plus size={14} /> Tambah Material Manual</button>
+      </div>
 
       {rows.map((r, idx) => {
         const disc = r.systemQty - r.actualQty;
         return (
           <Card key={idx} className="p-6 space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="text-sm font-semibold text-gray-800">{r.material}</div>
-              {disc !== 0 && <span className="text-xs font-semibold text-red-600 bg-red-50 px-2 py-1 rounded-full">Discrepancy: {disc > 0 ? -disc : Math.abs(disc)}</span>}
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex-1">
+                <label className="text-xs font-medium text-gray-500">
+                  Material <span className="text-red-500">*</span>
+                  {r.confidence === "rendah" && <span className="text-amber-600 font-normal"> — perkiraan dari foto, cek lagi</span>}
+                </label>
+                <select value={r.material} onChange={(e) => updateRowMaterial(idx, e.target.value)} disabled={isEdit} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600 disabled:bg-gray-50">
+                  <option value="">Pilih material...</option>
+                  {materials.filter((m) => m.status === "Active").map((m) => <option key={m.id} value={m.name}>{m.name}</option>)}
+                </select>
+              </div>
+              <div className="flex items-center gap-2 pt-5">
+                {disc !== 0 && <span className="text-xs font-semibold text-red-600 bg-red-50 px-2 py-1 rounded-full whitespace-nowrap">Discrepancy: {disc > 0 ? -disc : Math.abs(disc)}</span>}
+                {!isEdit && <button onClick={() => removeRow(idx)} className="text-gray-300 hover:text-red-500 shrink-0" title="Hapus material ini"><X size={18} /></button>}
+              </div>
             </div>
             <div className="flex items-center gap-4 text-sm">
-              <div>System Qty: <span className="font-medium">{r.systemQty}</span></div>
+              <div className="flex items-center gap-2">
+                System Qty:
+                <input type="number" min="0" value={r.systemQty} onChange={(e) => updateRow(idx, { systemQty: Number(e.target.value) })} className="w-20 border border-gray-200 rounded-lg px-2 py-1.5 text-sm outline-none focus:border-emerald-600" />
+              </div>
               <div className="flex items-center gap-2">
                 Actual Qty:
-                <input type="number" value={r.actualQty} onChange={(e) => updateRow(idx, { actualQty: Number(e.target.value) })} className="w-20 border border-gray-200 rounded-lg px-2 py-1.5 text-sm outline-none focus:border-emerald-600" />
+                <input type="number" min="0" value={r.actualQty} onChange={(e) => updateRowActualQty(idx, Number(e.target.value))} className="w-20 border border-gray-200 rounded-lg px-2 py-1.5 text-sm outline-none focus:border-emerald-600" />
               </div>
             </div>
             {r.serialized && (
