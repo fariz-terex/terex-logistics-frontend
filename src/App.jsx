@@ -4766,16 +4766,35 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
     },
   });
 
+  // System Qty comes from the server — the homebase's own stock (Delivered
+  // SNs / homebase ledger, see backend utils/reconciliation.js), never typed
+  // in. The server recomputes it again on submit anyway; this is only so the
+  // user sees the discrepancy (and whether a reason is needed) while filling.
+  const effectiveCustomer = isEdit ? initialData.customer : (needsDivisionPicker ? customer : myDivisions[0]);
+  const [systemQtyMap, setSystemQtyMap] = useState(null); // { [material]: qty } | null while unknown
+  const [systemQtyError, setSystemQtyError] = useState("");
+  React.useEffect(() => {
+    setSystemQtyMap(null); setSystemQtyError("");
+    if (!effectiveCustomer || !homebase) return;
+    let cancelled = false;
+    api.getReconSystemQty(effectiveCustomer, homebase)
+      .then((m) => { if (!cancelled) setSystemQtyMap(m || {}); })
+      .catch((err) => { if (!cancelled) setSystemQtyError(err.message); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveCustomer, homebase]);
+  const sysQty = (material) => (systemQtyMap ? systemQtyMap[material] || 0 : null);
+
   const [lightboxSrc, setLightboxSrc] = useState(null);
   const updateRow = (idx, patch) => setRows(rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
   const updateSerial = (idx, si, val) => setRows(rows.map((r, i) => (i === idx ? { ...r, serials: r.serials.map((s, j) => (j === si ? val : s)) } : r)));
-  const addRow = () => setRows([...rows, { material: "", serialized: false, systemQty: 0, actualQty: 0, serials: [], reason: "" }]);
+  const addRow = () => setRows([...rows, { material: "", serialized: false, actualQty: 0, serials: [], reason: "" }]);
   const removeRow = (idx) => setRows(rows.filter((_, i) => i !== idx));
   // Switching a row's material invalidates whatever qty/SN was there —
   // reset rather than carry stale counts for the wrong material across.
   const updateRowMaterial = (idx, name) => {
     const mat = materials.find((m) => m.name === name);
-    setRows(rows.map((r, i) => (i === idx ? { material: name, serialized: !!mat?.serialized, systemQty: 0, actualQty: 0, serials: [], reason: "" } : r)));
+    setRows(rows.map((r, i) => (i === idx ? { material: name, serialized: !!mat?.serialized, actualQty: 0, serials: [], reason: "" } : r)));
   };
   // Serialized rows keep exactly one SN slot per Actual Qty unit — resize
   // (preserving whatever's already typed) instead of leaving the SN list
@@ -4787,13 +4806,10 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
     return { ...r, actualQty, serials: Array.from({ length: n }, (_, j) => r.serials[j] || "") };
   }));
 
-  // System Qty here was never backed by a real stock lookup (a pre-existing,
-  // separate gap — see CLAUDE.md/plan notes) — a detected row's systemQty
-  // is just set equal to its detected actualQty (0 discrepancy assumed)
-  // since there's no better source; a row that already existed (e.g. this
-  // reconciliation is being edited, or the user already typed a systemQty
-  // manually before detecting) keeps its own systemQty and only gets
-  // actualQty updated. Never touches the standalone `photo` field above —
+  // A detected material that already has a row only gets its actualQty
+  // updated; otherwise a new row is added (System Qty is never stored on the
+  // row — it's looked up from systemQtyMap). Never touches the standalone
+  // `photo` field above —
   // `detectionPhoto` here is a different, separate thing: a reference
   // thumbnail (one photo from the detection batch) shown ON the row purely
   // so the SN(s) can be cross-checked against it, same as Return Faulty /
@@ -4807,7 +4823,7 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
         if (idx >= 0) { next[idx] = { ...next[idx], actualQty: d.qty, detectionPhoto: referencePhoto }; return; }
         next.push({
           material: d.material, serialized: !!d.serialized,
-          systemQty: d.qty, actualQty: d.qty,
+          actualQty: d.qty,
           // SNs the same photos happened to have legible are pre-filled
           // here (best-effort, often empty) — still fully editable/scan-able.
           serials: d.serialized ? Array.from({ length: d.qty }, (_, i) => d.serials?.[i] || "") : [],
@@ -4819,8 +4835,8 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
   };
 
   const snConflicts = rows.flatMap((r) => (r.serials || []).map((sn) => findSNConflict(sn, { returns, reconciliations, excludeId })).filter(Boolean));
-  const valid = homebase && photo && rows.length > 0 && snConflicts.length === 0 &&
-    rows.every((r) => r.material && (r.systemQty === r.actualQty || r.reason.trim()) && (!r.serialized || (r.serials.length > 0 && r.serials.every((s) => s.trim())))) &&
+  const valid = homebase && photo && systemQtyMap && rows.length > 0 && snConflicts.length === 0 &&
+    rows.every((r) => r.material && (sysQty(r.material) === r.actualQty || r.reason.trim()) && (!r.serialized || (r.serials.length > 0 && r.serials.every((s) => s.trim())))) &&
     (isEdit || !needsDivisionPicker || customer);
 
   return (
@@ -4884,8 +4900,10 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
         <button onClick={addRow} className="text-xs text-emerald-800 font-medium flex items-center gap-1"><Plus size={14} /> Tambah Material Manual</button>
       </div>
 
+      {systemQtyError && <div className="text-sm text-red-600">Gagal memuat System Qty: {systemQtyError}</div>}
       {rows.map((r, idx) => {
-        const disc = r.systemQty - r.actualQty;
+        const system = sysQty(r.material);
+        const disc = system === null ? 0 : system - r.actualQty;
         return (
           <Card key={idx} className="p-6 space-y-3">
             <div className="flex items-start justify-between gap-3">
@@ -4905,9 +4923,9 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
               </div>
             </div>
             <div className="flex items-center gap-4 text-sm">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2" title={`Stock tercatat di ${homebase || "homebase"} menurut sistem`}>
                 System Qty:
-                <input type="number" min="0" value={r.systemQty} onChange={(e) => updateRow(idx, { systemQty: Number(e.target.value) })} className="w-20 border border-gray-200 rounded-lg px-2 py-1.5 text-sm outline-none focus:border-emerald-600" />
+                <span className="w-20 px-2 py-1.5 text-sm font-medium bg-gray-50 border border-gray-100 rounded-lg text-gray-700">{system === null ? (homebase ? "…" : "—") : system}</span>
               </div>
               <div className="flex items-center gap-2">
                 Actual Qty:
@@ -4943,7 +4961,7 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
 
       <div className="flex justify-between">
         <GhostButton onClick={onCancel}>Batal</GhostButton>
-        <PrimaryButton disabled={!valid} onClick={async () => { if (await onSubmit({ homebase, period, photo, items: rows, ...(!isEdit && needsDivisionPicker ? { customer } : {}) })) draft.clear(); }}>
+        <PrimaryButton disabled={!valid} onClick={async () => { if (await onSubmit({ homebase, period, photo, items: rows.map((r) => ({ ...r, systemQty: sysQty(r.material) })), ...(!isEdit && needsDivisionPicker ? { customer } : {}) })) draft.clear(); }}>
           <Check size={16} /> {isEdit ? "Kirim Ulang ke Logistics" : "Submit Reconciliation"}
         </PrimaryButton>
       </div>
@@ -8216,6 +8234,7 @@ function createApiClient(baseUrl, getToken, onUnauthorized) {
     reviseReconciliation: (id, note) => request(`/reconciliations/${id}/revise`, { method: "POST", body: { note } }),
     resubmitReconciliation: (id, payload) => request(`/reconciliations/${id}/resubmit`, { method: "POST", body: payload }),
     approveReconciliation: (id) => request(`/reconciliations/${id}/approve`, { method: "POST" }),
+    getReconSystemQty: (customer, homebase) => request(`/reconciliations/system-qty?customer=${encodeURIComponent(customer)}&homebase=${encodeURIComponent(homebase)}`),
   };
 }
 
@@ -10173,7 +10192,7 @@ export default function App() {
         returns={returns}
         reconciliations={reconciliations}
         homebases={homebases}
-        initialData={{ homebase: r.homebase, period: r.period, photo: r.photo, items: r.items }}
+        initialData={{ homebase: r.homebase, period: r.period, photo: r.photo, items: r.items, customer: r.customer }}
         excludeId={r.id}
         revisionNote={r.revisionNote}
         currentUser={currentUser}
