@@ -4740,6 +4740,12 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
   const [customer, setCustomer] = useState("");
   const [homebase, setHomebase] = useState(initialData?.homebase || "");
   const [period, setPeriod] = useState(initialData?.period || "01 - 15 Agustus 2026");
+  // "Foto Keseluruhan Material" — ONE photo for the whole reconciliation
+  // (all materials laid out together in one frame, e.g. a geotagged site
+  // photo), completely separate from any individual material row and from
+  // "Deteksi dari Foto" below (that's a different, AI-facing upload —
+  // never used to fill this in automatically, on purpose).
+  const [photo, setPhoto] = useState(initialData?.photo || "");
   // Starts empty rather than pre-seeded with placeholder rows — "Deteksi
   // dari Foto" is the primary way to populate this now, with "+ Tambah
   // Material" as the manual fallback for whatever a photo doesn't confidently
@@ -4752,7 +4758,7 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
   const draft = useFormDraft({
     userId: currentUser?.id, formKey: "reconciliationCreate",
     enabled: !isEdit,
-    snapshot: { customer, homebase, period, rows: rows.map((r) => ({ ...r, photo: "" })) },
+    snapshot: { customer, homebase, period, rows },
     isEmpty: !customer && !homebase && rows.length === 0,
     onRestore: (d) => {
       setCustomer(d.customer || ""); setHomebase(d.homebase || ""); setPeriod(d.period || "");
@@ -4762,13 +4768,13 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
 
   const updateRow = (idx, patch) => setRows(rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
   const updateSerial = (idx, si, val) => setRows(rows.map((r, i) => (i === idx ? { ...r, serials: r.serials.map((s, j) => (j === si ? val : s)) } : r)));
-  const addRow = () => setRows([...rows, { material: "", serialized: false, systemQty: 0, actualQty: 0, serials: [], photo: "", reason: "" }]);
+  const addRow = () => setRows([...rows, { material: "", serialized: false, systemQty: 0, actualQty: 0, serials: [], reason: "" }]);
   const removeRow = (idx) => setRows(rows.filter((_, i) => i !== idx));
   // Switching a row's material invalidates whatever qty/SN was there —
   // reset rather than carry stale counts for the wrong material across.
   const updateRowMaterial = (idx, name) => {
     const mat = materials.find((m) => m.name === name);
-    setRows(rows.map((r, i) => (i === idx ? { material: name, serialized: !!mat?.serialized, systemQty: 0, actualQty: 0, serials: [], photo: "", reason: "" } : r)));
+    setRows(rows.map((r, i) => (i === idx ? { material: name, serialized: !!mat?.serialized, systemQty: 0, actualQty: 0, serials: [], reason: "" } : r)));
   };
   // Serialized rows keep exactly one SN slot per Actual Qty unit — resize
   // (preserving whatever's already typed) instead of leaving the SN list
@@ -4786,28 +4792,21 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
   // since there's no better source; a row that already existed (e.g. this
   // reconciliation is being edited, or the user already typed a systemQty
   // manually before detecting) keeps its own systemQty and only gets
-  // actualQty updated.
-  const applyDetected = (detected, photos) => {
-    // "Foto Keseluruhan Material" is ONE photo per row, not the whole
-    // batch — a single photo showing every unit of that material together
-    // is exactly what a multi-material detection photo already is, so the
-    // first photo from the batch is used as a starting point. Still the
-    // normal PhotoUpload button below, so it can be replaced with a
-    // different/better one if the batch had several photos and this
-    // material's is a different one.
-    const suggestedPhoto = photos[0] || "";
+  // actualQty updated. Never touches `photo` — that's the standalone field
+  // above, not something a detection pass fills in.
+  const applyDetected = (detected) => {
     setRows((prev) => {
       const next = [...prev];
       detected.forEach((d) => {
         const idx = next.findIndex((r) => r.material === d.material);
-        if (idx >= 0) { next[idx] = { ...next[idx], actualQty: d.qty, photo: next[idx].photo || suggestedPhoto }; return; }
+        if (idx >= 0) { next[idx] = { ...next[idx], actualQty: d.qty }; return; }
         next.push({
           material: d.material, serialized: !!d.serialized,
           systemQty: d.qty, actualQty: d.qty,
           // SNs the same photos happened to have legible are pre-filled
           // here (best-effort, often empty) — still fully editable/scan-able.
           serials: d.serialized ? Array.from({ length: d.qty }, (_, i) => d.serials?.[i] || "") : [],
-          reason: "", confidence: d.confidence, photo: suggestedPhoto,
+          reason: "", confidence: d.confidence,
         });
       });
       return next;
@@ -4815,8 +4814,8 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
   };
 
   const snConflicts = rows.flatMap((r) => (r.serials || []).map((sn) => findSNConflict(sn, { returns, reconciliations, excludeId })).filter(Boolean));
-  const valid = homebase && rows.length > 0 && snConflicts.length === 0 &&
-    rows.every((r) => r.material && r.photo && (r.systemQty === r.actualQty || r.reason.trim()) && (!r.serialized || (r.serials.length > 0 && r.serials.every((s) => s.trim())))) &&
+  const valid = homebase && photo && rows.length > 0 && snConflicts.length === 0 &&
+    rows.every((r) => r.material && (r.systemQty === r.actualQty || r.reason.trim()) && (!r.serialized || (r.serials.length > 0 && r.serials.every((s) => s.trim())))) &&
     (isEdit || !needsDivisionPicker || customer);
 
   return (
@@ -4857,11 +4856,19 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
         </div>
       </Card>
 
+      <Card className="p-5 space-y-3">
+        <div>
+          <div className="text-sm font-semibold text-gray-800">Foto Keseluruhan Material <span className="text-red-500">*</span></div>
+          <div className="text-xs text-gray-500 mt-0.5">Satu foto yang menunjukkan SEMUA material yang direkonsiliasi digabung dalam satu frame (mis. foto lokasi bertanda geotag) — bukti fisik untuk reconciliation ini, terpisah dari material yang dipilih di bawah.</div>
+        </div>
+        <PhotoUpload label="Foto Keseluruhan Material" value={photo} onChange={setPhoto} />
+      </Card>
+
       {!isEdit && (
         <Card className="p-5 space-y-3">
           <div>
-            <div className="text-sm font-semibold text-gray-800">Upload Foto Material</div>
-            <div className="text-xs text-gray-500 mt-0.5">Upload foto material yang ada di homebase ini — sistem akan menebak jenis & jumlahnya dan menambahkannya ke daftar di bawah. Material yang gagal terdeteksi dengan benar bisa ditambahkan manual lewat "Tambah Material".</div>
+            <div className="text-sm font-semibold text-gray-800">Deteksi dari Foto</div>
+            <div className="text-xs text-gray-500 mt-0.5">Upload foto material (boleh close-up, terpisah dari Foto Keseluruhan Material di atas) — sistem akan menebak jenis & jumlahnya dan menambahkannya ke daftar di bawah. Material yang gagal terdeteksi dengan benar bisa ditambahkan manual lewat "Tambah Material".</div>
           </div>
           <PhotoMaterialDetect api={api} onDetected={applyDetected} />
         </Card>
@@ -4915,7 +4922,6 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
                 })}
               </div>
             )}
-            <PhotoUpload label="Foto Keseluruhan Material" value={r.photo} onChange={(v) => updateRow(idx, { photo: v })} />
             {disc !== 0 && (
               <textarea value={r.reason} onChange={(e) => updateRow(idx, { reason: e.target.value })} placeholder="Reason / Explanation untuk discrepancy..." rows={2} className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
             )}
@@ -4925,7 +4931,7 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
 
       <div className="flex justify-between">
         <GhostButton onClick={onCancel}>Batal</GhostButton>
-        <PrimaryButton disabled={!valid} onClick={async () => { if (await onSubmit({ homebase, period, items: rows, ...(!isEdit && needsDivisionPicker ? { customer } : {}) })) draft.clear(); }}>
+        <PrimaryButton disabled={!valid} onClick={async () => { if (await onSubmit({ homebase, period, photo, items: rows, ...(!isEdit && needsDivisionPicker ? { customer } : {}) })) draft.clear(); }}>
           <Check size={16} /> {isEdit ? "Kirim Ulang ke Logistics" : "Submit Reconciliation"}
         </PrimaryButton>
       </div>
@@ -4936,6 +4942,7 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
 function ReconciliationDetail({ r, onBack, onApprove, onRevise, onEdit, role }) {
   const [revisionText, setRevisionText] = useState("");
   const [showRevisionInput, setShowRevisionInput] = useState(false);
+  const [lightboxSrc, setLightboxSrc] = useState(null);
   const canReview = (role === ROLES.LOGISTICS || role === ROLES.MANAGER) && r.status === "Waiting Logistics Review";
   const canEdit = role === ROLES.TECH && r.status === "Revision Required";
 
@@ -4958,6 +4965,13 @@ function ReconciliationDetail({ r, onBack, onApprove, onRevise, onEdit, role }) 
         </Card>
       )}
 
+      {r.photo && (
+        <Card className="p-5">
+          <div className="text-sm font-semibold text-gray-800 mb-2">Foto Keseluruhan Material</div>
+          <PhotoThumb src={r.photo} alt="Foto keseluruhan material" className="w-32 h-32 rounded-lg object-cover border border-gray-100" onOpen={setLightboxSrc} />
+        </Card>
+      )}
+
       {r.items.map((i, idx) => {
         const disc = i.systemQty - i.actualQty;
         return (
@@ -4975,13 +4989,11 @@ function ReconciliationDetail({ r, onBack, onApprove, onRevise, onEdit, role }) 
                 {i.serials.map((s, si) => <span key={si} className="text-xs bg-gray-50 rounded-full px-2.5 py-1 text-gray-600">{s}</span>)}
               </div>
             )}
-            {typeof i.photo === "string" && i.photo && (
-              <img src={i.photo} alt="" className="w-16 h-16 rounded-lg object-cover mb-2" />
-            )}
             {i.reason && <div className="text-xs text-gray-500 bg-gray-50 rounded-lg p-3">{i.reason}</div>}
           </Card>
         );
       })}
+      <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
 
       {canReview && (
         <Card className="p-5 space-y-3">
@@ -10149,7 +10161,7 @@ export default function App() {
         returns={returns}
         reconciliations={reconciliations}
         homebases={homebases}
-        initialData={{ homebase: r.homebase, period: r.period, items: r.items }}
+        initialData={{ homebase: r.homebase, period: r.period, photo: r.photo, items: r.items }}
         excludeId={r.id}
         revisionNote={r.revisionNote}
         currentUser={currentUser}
