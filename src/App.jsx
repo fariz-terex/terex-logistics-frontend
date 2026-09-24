@@ -2494,16 +2494,122 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onCancel, onAss
    WAREHOUSE STOCK + MOVEMENT
    ============================================================ */
 
+const newUnit = (sn = "", photo = "") => ({ id: Math.random().toString(36).slice(2), sn, photo });
+
+// Serial Number + label photo for every unit being received — each unit
+// needs its photo, and the SN is read from it automatically (barcode first,
+// then the printed S/N; see readSerialsFromPhoto). "Upload Banyak Foto
+// Label" turns each picked photo into its own row (photos show up at once,
+// SNs fill in as they're read); "Tempel Banyak SN" adds typed/pasted SNs as
+// rows that still each need a photo. `setUnits` must accept an updater
+// function — reading finishes asynchronously.
+function SerialPhotoRows({ units, setUnits, api }) {
+  const multiRef = React.useRef(null);
+  const [progress, setProgress] = useState(null); // { done, total } while reading a batch
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasteText, setPasteText] = useState("");
+
+  const counts = {};
+  units.forEach((u) => { const k = snKey(u.sn); if (k) counts[k] = (counts[k] || 0) + 1; });
+  const patch = (id, change) => setUnits((prev) => prev.map((u) => (u.id === id ? { ...u, ...change } : u)));
+  const isBlank = (u) => !u.sn.trim() && !u.photo;
+
+  const addFromPhotos = async (fileList) => {
+    const files = Array.from(fileList || []).filter((f) => f.type.startsWith("image/"));
+    if (files.length === 0) return;
+    setProgress({ done: 0, total: files.length });
+    const added = [];
+    for (const file of files) {
+      let photo = "";
+      try { photo = await compressImage(file); } catch { /* keep going; that row just needs a photo */ }
+      const unit = { ...newUnit("", photo), reading: true };
+      added.push({ unit, file });
+      setUnits((prev) => [...prev.filter((u) => !isBlank(u)), unit]);
+    }
+    let next = 0;
+    const worker = async () => {
+      while (next < added.length) {
+        const { unit, file } = added[next++];
+        const { serials } = await readSerialsFromPhoto({ file, dataUrl: unit.photo, api });
+        patch(unit.id, { sn: serials[0] || "", reading: false, unread: !serials.length });
+        setProgress((p) => (p ? { ...p, done: p.done + 1 } : p));
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(3, added.length) }, worker));
+    setProgress(null);
+  };
+
+  const addPasted = () => {
+    const sns = pasteText.split(/[\n,;\t]+/).map((x) => x.trim()).filter(Boolean);
+    if (sns.length) setUnits((prev) => [...prev.filter((u) => !isBlank(u)), ...sns.map((sn) => newUnit(sn))]);
+    setPasteText(""); setPasteOpen(false);
+  };
+
+  const filled = units.filter((u) => !isBlank(u));
+  return (
+    <div className="space-y-2.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <input ref={multiRef} type="file" accept="image/*" multiple className="hidden" onChange={(e) => { addFromPhotos(e.target.files); e.target.value = ""; }} />
+        <button type="button" onClick={() => multiRef.current?.click()} disabled={!!progress} className="px-3 py-2 rounded-lg text-xs font-medium border border-emerald-200 bg-emerald-50 text-emerald-800 flex items-center gap-1.5">
+          <Camera size={13} /> {progress ? `Membaca SN ${progress.done}/${progress.total}...` : "Upload Banyak Foto Label"}
+        </button>
+        <button type="button" onClick={() => setUnits((prev) => [...prev, newUnit()])} className="px-3 py-2 rounded-lg text-xs font-medium border border-gray-200 text-gray-600 flex items-center gap-1"><Plus size={13} /> Tambah SN</button>
+        <button type="button" onClick={() => setPasteOpen(!pasteOpen)} className="text-xs text-gray-500 font-medium underline decoration-dotted">Tempel banyak SN</button>
+      </div>
+      <div className="text-xs text-gray-400">Setiap unit wajib punya foto label — SN terbaca otomatis dari fotonya (barcode, atau tulisan S/N). Klik foto untuk memperbesar, "Ganti Foto" untuk menggantinya.</div>
+      {pasteOpen && (
+        <div className="space-y-1.5">
+          <textarea value={pasteText} onChange={(e) => setPasteText(e.target.value)} rows={5} placeholder={"Tempel daftar Serial Number, satu per baris (bisa langsung dari Excel).\nSetiap SN tetap wajib diberi foto label setelah ditambahkan."} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600 font-mono" />
+          <div className="flex justify-end"><button type="button" onClick={addPasted} className="px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-700 text-white">Tambahkan ke daftar</button></div>
+        </div>
+      )}
+      {units.map((u, i) => {
+        const dup = counts[snKey(u.sn)] > 1;
+        return (
+          <div key={u.id}>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-400 w-6">{i + 1}.</span>
+              <input value={u.sn} onChange={(e) => patch(u.id, { sn: e.target.value, unread: false })} placeholder={u.reading ? "Membaca SN dari foto..." : "Serial Number"} className={`flex-1 min-w-0 border rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600 font-mono ${dup ? "border-red-300" : "border-gray-200"}`} />
+              <ScanButton onScan={(text) => patch(u.id, { sn: text, unread: false })} />
+              <PhotoUpload compact api={api} value={u.photo} onChange={(v) => patch(u.id, { photo: v })} detectBarcode onDetected={(text) => text && patch(u.id, { sn: text, unread: false })} />
+              {units.length > 1 && <button type="button" onClick={() => setUnits((prev) => prev.filter((x) => x.id !== u.id))} className="text-gray-300 hover:text-red-500"><X size={16} /></button>}
+            </div>
+            {dup && <div className="text-xs text-red-600 mt-1 pl-8">SN ini tercatat lebih dari sekali.</div>}
+            {u.unread && !u.sn && <div className="text-xs text-amber-600 mt-1 pl-8">SN tidak terbaca dari foto — ketik manual.</div>}
+          </div>
+        );
+      })}
+      <div className="text-xs text-gray-400">Total unit: {filled.length} · Foto label: {filled.filter((u) => u.photo).length}/{filled.length}</div>
+    </div>
+  );
+}
+
+// What still blocks saving a serialized unit list, in plain words.
+function unitProblems(units) {
+  const filled = units.filter((u) => u.sn.trim() || u.photo);
+  const counts = {};
+  filled.forEach((u) => { const k = snKey(u.sn); if (k) counts[k] = (counts[k] || 0) + 1; });
+  const dups = Object.keys(counts).filter((k) => counts[k] > 1);
+  return [
+    filled.length === 0 && "Tambahkan minimal satu unit (Upload Banyak Foto Label atau Tambah SN)",
+    filled.some((u) => u.reading) && "Tunggu, SN masih dibaca dari foto",
+    filled.filter((u) => !u.sn.trim()).length > 0 && `${filled.filter((u) => !u.sn.trim()).length} unit belum ada Serial Number-nya`,
+    filled.filter((u) => !u.photo).length > 0 && `${filled.filter((u) => !u.photo).length} unit belum ada foto labelnya`,
+    dups.length > 0 && `Serial Number duplikat: ${dups.join(", ")}`,
+  ].filter(Boolean);
+}
+const unitsPayload = (units) => units.filter((u) => u.sn.trim() || u.photo).map((u) => ({ sn: u.sn.trim(), photo: u.photo }));
+
 function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast, currentUser, customers, api }) {
   const [material, setMaterial] = useState("");
-  const [serials, setSerials] = useState([""]);
+  const [units, setUnits] = useState([newUnit()]);
+  // Overall photo of everything received — required for every receipt.
+  const [photo, setPhoto] = useState("");
   const [qty, setQty] = useState(1);
   const [note, setNote] = useState("");
   const [customer, setCustomer] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [bulkMode, setBulkMode] = useState(false);
-  const [bulkText, setBulkText] = useState("");
   const [cluster, setCluster] = useState("");
   // Active clusters for the division being received into. Only some divisions
   // (today: PIM) have any — for every other division this stays empty and the
@@ -2542,18 +2648,15 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast, currentUse
   const divisionUsesClusters = clusterOptions.length > 0;
   const clusterRequired = divisionUsesClusters && !!mat && !!mat.serialized;
 
-  const addSN = () => setSerials([...serials, ""]);
-  const updateSN = (i, val) => setSerials(serials.map((s, idx) => (idx === i ? val : s)));
-  const removeSN = (i) => setSerials(serials.filter((_, idx) => idx !== i));
-
-  // Splits on newline, comma, semicolon, or tab — covers pasting straight
-  // out of Excel (one SN per row) or a comma-separated list either way.
-  const bulkSerials = bulkText.split(/[\n,;\t]+/).map((s) => s.trim()).filter(Boolean);
-
-  const trimmedSerials = bulkMode ? bulkSerials : serials.map((s) => s.trim()).filter(Boolean);
-  const hasDuplicates = new Set(trimmedSerials).size !== trimmedSerials.length;
-  const clusterOk = !clusterRequired || !!cluster;
-  const valid = mat && !!effectiveCustomer && clusterOk && (mat.serialized ? trimmedSerials.length > 0 && !hasDuplicates : qty > 0);
+  const missing = [
+    !mat && "Pilih material",
+    !effectiveCustomer && "Pilih divisi tujuan",
+    clusterRequired && !cluster && "Pilih cluster",
+    !photo && "Upload Foto Keseluruhan Penerimaan Barang",
+    mat && !mat.serialized && !(qty > 0) && "Qty harus lebih dari 0",
+    ...(mat?.serialized ? unitProblems(units) : []),
+  ].filter(Boolean);
+  const valid = missing.length === 0;
 
   // If a serialized unit's SN already exists in the system, that's usually
   // a genuine mistake (typo, already-received unit) — but it can also mean
@@ -2571,15 +2674,15 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast, currentUse
   const submit = async () => {
     setSaving(true); setError("");
     const submittedMaterial = material;
-    const submittedQty = mat.serialized ? trimmedSerials.length : qty;
+    const submittedQty = mat.serialized ? unitsPayload(units).length : qty;
     try {
-      const payload = mat.serialized ? { material, serials: trimmedSerials, note } : { material, qty, note };
+      const payload = mat.serialized ? { material, serials: unitsPayload(units), note, photo } : { material, qty, note, photo };
       if (needsDivisionPicker) payload.customer = customer;
       if (clusterRequired) payload.cluster = cluster;
       await onSubmit(payload);
       showToast(`Berhasil menerima ${submittedQty} unit ${submittedMaterial}`);
       // Reset fields for the next entry, but keep the form open.
-      setMaterial(""); setSerials([""]); setQty(1); setNote(""); setBulkText(""); setCluster("");
+      setMaterial(""); setUnits([newUnit()]); setQty(1); setNote(""); setCluster(""); setPhoto("");
     } catch (err) {
       const msg = err.message || "";
       const conflict = mat.serialized ? /Serial Number sudah terdaftar di sistem: (\S+)/.exec(msg) : null;
@@ -2610,8 +2713,7 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast, currentUse
       showToast(`${returnConfirm.sn} diterima kembali dari customer — status Ready, tidak perlu Terima Barang lagi`);
       // Drop it from the batch and leave the rest for the user to resubmit
       // (typically empty, since most receipts are one SN at a time).
-      if (bulkMode) setBulkText((prev) => prev.split(/[\n,;\t]+/).map((s) => s.trim()).filter((s) => s && s !== returnConfirm.sn).join("\n"));
-      else setSerials((prev) => { const next = prev.filter((s) => s.trim() !== returnConfirm.sn); return next.length ? next : [""]; });
+      setUnits((prev) => { const next = prev.filter((u) => u.sn.trim() !== returnConfirm.sn); return next.length ? next : [newUnit()]; });
       setReturnConfirm(null);
     } catch (err) {
       showToast(err.message || "Gagal memproses penerimaan dari customer");
@@ -2626,7 +2728,7 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast, currentUse
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <label className="text-xs font-medium text-gray-500">Material <span className="text-red-500">*</span></label>
-          <select value={material} onChange={(e) => { setMaterial(e.target.value); setSerials([""]); setBulkText(""); }} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600">
+          <select value={material} onChange={(e) => { setMaterial(e.target.value); setUnits([newUnit()]); }} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600">
             <option value="">Pilih material...</option>
             {materials.filter((m) => m.status === "Active").map((m) => <option key={m.id} value={m.name}>{m.name} {m.serialized ? "(Serialized)" : ""}</option>)}
           </select>
@@ -2676,45 +2778,16 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast, currentUse
         </div>
       </div>
 
+      <div className="space-y-2 pt-2 border-t border-gray-50">
+        <div className="text-sm font-semibold text-gray-800">Foto Keseluruhan Penerimaan Barang <span className="text-red-500">*</span></div>
+        <div className="text-xs text-gray-500">Satu foto yang menunjukkan semua barang yang diterima kali ini.</div>
+        <PhotoUpload label="Foto Keseluruhan Penerimaan Barang" value={photo} onChange={setPhoto} />
+      </div>
+
       {mat && mat.serialized && (
         <div className="space-y-3 pt-2 border-t border-gray-50">
-          <div className="flex items-center justify-between">
-            <div className="text-sm font-semibold text-gray-800">Serial Number Unit Baru</div>
-            <div className="flex items-center gap-3">
-              {!bulkMode && <button onClick={addSN} className="text-xs text-emerald-800 font-medium flex items-center gap-1"><Plus size={14} /> Add SN</button>}
-              <button
-                onClick={() => { setBulkMode(!bulkMode); setSerials([""]); setBulkText(""); }}
-                className="text-xs text-gray-500 font-medium underline decoration-dotted"
-              >
-                {bulkMode ? "Input satu-satu" : "Tempel banyak SN sekaligus"}
-              </button>
-            </div>
-          </div>
-
-          {bulkMode ? (
-            <div className="space-y-1.5">
-              <textarea
-                value={bulkText}
-                onChange={(e) => setBulkText(e.target.value)}
-                placeholder={"Tempel daftar Serial Number di sini, satu per baris.\nContoh:\nSN00123456\nSN00123457\nSN00123458"}
-                rows={8}
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600 font-mono"
-              />
-              <div className="text-xs text-gray-400">Bisa langsung copy-paste dari Excel/spreadsheet (satu SN per baris, atau dipisah koma) — {trimmedSerials.length} SN terdeteksi.</div>
-            </div>
-          ) : (
-            serials.map((s, i) => (
-              <div key={i} className="flex items-center gap-2">
-                <span className="text-xs text-gray-400 w-5">{i + 1}.</span>
-                <input value={s} onChange={(e) => updateSN(i, e.target.value)} placeholder="Masukkan Serial Number" className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
-                <ScanButton onScan={(text) => updateSN(i, text)} />
-                <SnPhotoButton api={api} onRead={(text) => updateSN(i, text)} />
-                {serials.length > 1 && <button onClick={() => removeSN(i)} className="text-gray-300 hover:text-red-500"><X size={16} /></button>}
-              </div>
-            ))
-          )}
-          {hasDuplicates && <div className="text-xs text-red-600">Ada Serial Number duplikat dalam daftar ini.</div>}
-          <div className="text-xs text-gray-400">Total unit: {trimmedSerials.length}</div>
+          <div className="text-sm font-semibold text-gray-800">Serial Number & Foto Label Unit Baru <span className="text-red-500">*</span></div>
+          <SerialPhotoRows units={units} setUnits={setUnits} api={api} />
         </div>
       )}
 
@@ -2740,9 +2813,16 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast, currentUse
 
       {error && <div className="bg-red-50 border border-red-100 text-red-700 text-xs rounded-lg px-3 py-2">{error}</div>}
 
+      {!valid && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-900">
+          <div className="font-semibold mb-1 flex items-center gap-1.5"><AlertTriangle size={14} /> Belum bisa disimpan — lengkapi dulu:</div>
+          <ul className="list-disc pl-5 space-y-0.5">{missing.map((m, i) => <li key={i}>{m}</li>)}</ul>
+        </div>
+      )}
+
       <div className="flex justify-end gap-2">
         <GhostButton onClick={onCancel}>Batal</GhostButton>
-        <PrimaryButton disabled={!valid || saving} onClick={submit}>{saving ? "Menyimpan..." : "Simpan Penerimaan"}</PrimaryButton>
+        <PrimaryButton disabled={!valid || saving} onClick={submit}>{saving ? "Menyimpan & upload foto..." : "Simpan Penerimaan"}</PrimaryButton>
       </div>
     </Card>
   );
@@ -2804,6 +2884,8 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
   const [detectError, setDetectError] = useState("");
   const [rows, setRows] = useState(null); // null = not detected yet
   const [savingAll, setSavingAll] = useState(false);
+  // One overall photo for this whole delivery, attached to every receipt saved from it.
+  const [photo, setPhoto] = useState("");
   const [customer, setCustomer] = useState("");
   const [cluster, setCluster] = useState("");
   const [clusterOptions, setClusterOptions] = useState([]);
@@ -2835,6 +2917,8 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
   const [documentType, setDocumentType] = useState(null);
 
   const updateRow = (key, patch) => setRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+  const setRowUnits = (key) => (updater) => setRows((prev) => prev.map((r) => (r.key === key ? { ...r, units: typeof updater === "function" ? updater(r.units) : updater } : r)));
+  const hasSn = (row) => row.units.some((u) => u.sn.trim());
   const removeRow = (key) => setRows((prev) => prev.filter((r) => r.key !== key));
 
   // Only fills in when the BKB had no SN for this line at all — never
@@ -2843,7 +2927,8 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
     setSuggestingKeys((prev) => new Set(prev).add(key));
     try {
       const suggestions = await suggestNextSerials(materialName, count, api);
-      if (suggestions.length > 0) updateRow(key, { serialsText: suggestions.join("\n") });
+      // Suggested SNs still each need their label photo before saving.
+      if (suggestions.length > 0) updateRow(key, { units: suggestions.map((sn) => newUnit(sn)) });
     } finally {
       setSuggestingKeys((prev) => { const next = new Set(prev); next.delete(key); return next; });
     }
@@ -2852,7 +2937,7 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
   const handleMaterialChange = (row, name) => {
     updateRow(row.key, { material: name });
     const mat = activeMaterials.find((m) => m.name === name);
-    if (mat?.serialized && !row.serialsText.trim()) suggestSerialsFor(row.key, name, row.qty || 1);
+    if (mat?.serialized && !hasSn(row)) suggestSerialsFor(row.key, name, row.qty || 1);
   };
 
   const detect = async () => {
@@ -2867,7 +2952,7 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
         material: it.matchedMaterial || "",
         confidence: it.confidence, // "tinggi" | "rendah" | "tidak_ada"
         qty: it.qty || 1,
-        serialsText: (it.serials || []).join("\n"),
+        units: (it.serials || []).length ? it.serials.map((sn) => newUnit(sn)) : [newUnit()],
         note: it.note || "",
         error: "",
       }));
@@ -2883,7 +2968,7 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
       // BKB didn't list an SN for these — try to continue that material's
       // existing numbering instead of leaving it for manual entry.
       newRows
-        .filter((r) => r.material && !r.serialsText.trim() && activeMaterials.find((m) => m.name === r.material)?.serialized)
+        .filter((r) => r.material && !hasSn(r) && activeMaterials.find((m) => m.name === r.material)?.serialized)
         .forEach((r) => suggestSerialsFor(r.key, r.material, r.qty || 1));
     } catch (err) {
       setDetectError(err.message || "Gagal membaca dokumen BKB");
@@ -2899,16 +2984,13 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
     for (const row of rows) {
       const mat = matFor(row);
       if (!mat) { remaining.push({ ...row, error: "Pilih material yang sesuai dulu" }); continue; }
-      const serials = row.serialsText.split(/[\n,;\t]+/).map((s) => s.trim()).filter(Boolean);
-      if (mat.serialized && (serials.length === 0 || new Set(serials).size !== serials.length)) {
-        remaining.push({ ...row, error: serials.length === 0 ? "Serial Number wajib diisi" : "Ada Serial Number duplikat" });
-        continue;
-      }
+      const problems = mat.serialized ? unitProblems(row.units) : [];
+      if (problems.length) { remaining.push({ ...row, error: problems.join(" · ") }); continue; }
       if (!mat.serialized && (!row.qty || row.qty <= 0)) { remaining.push({ ...row, error: "Qty harus lebih dari 0" }); continue; }
       if (needsDivisionPicker && !customer) { remaining.push({ ...row, error: "Pilih divisi tujuan dulu" }); continue; }
       if (clusterRequired && mat.serialized && !cluster) { remaining.push({ ...row, error: "Pilih cluster dulu" }); continue; }
       try {
-        const payload = mat.serialized ? { material: mat.name, serials, note: row.note } : { material: mat.name, qty: row.qty, note: row.note };
+        const payload = mat.serialized ? { material: mat.name, serials: unitsPayload(row.units), note: row.note, photo } : { material: mat.name, qty: row.qty, note: row.note, photo };
         if (needsDivisionPicker) payload.customer = customer;
         if (clusterRequired && mat.serialized) payload.cluster = cluster;
         await onSubmit(payload);
@@ -2981,6 +3063,12 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
             )}
           </div>
 
+          <div className="space-y-2">
+            <div className="text-sm font-semibold text-gray-800">Foto Keseluruhan Penerimaan Barang <span className="text-red-500">*</span></div>
+            <div className="text-xs text-gray-500">Satu foto semua barang dari kiriman ini — dipakai untuk setiap barang yang disimpan di bawah.</div>
+            <PhotoUpload label="Foto Keseluruhan Penerimaan Barang" value={photo} onChange={setPhoto} />
+          </div>
+
           <div className="space-y-3">
             {rows.map((row) => {
               const mat = matFor(row);
@@ -3012,11 +3100,11 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
                   {mat && mat.serialized && (
                     <div>
                       <label className="text-xs font-medium text-gray-500">
-                        Serial Number <span className="text-red-500">*</span> <span className="text-gray-400 font-normal">(satu per baris)</span>
+                        Serial Number & Foto Label <span className="text-red-500">*</span>
                         {suggestingKeys.has(row.key) && <span className="text-emerald-600 font-normal"> — mencari nomor berikutnya...</span>}
                       </label>
-                      <textarea value={row.serialsText} onChange={(e) => updateRow(row.key, { serialsText: e.target.value })} rows={3} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600 font-mono" />
-                      <div className="text-xs text-gray-400 mt-1">BKB tidak selalu mencantumkan SN — kalau kosong, sistem coba lanjutkan penomoran SN material ini yang sudah ada. Tetap cek sebelum disimpan.</div>
+                      <div className="text-xs text-gray-400 mt-0.5 mb-2">BKB tidak selalu mencantumkan SN — kalau kosong, sistem coba lanjutkan penomoran SN material ini yang sudah ada. Setiap unit tetap wajib diberi foto label.</div>
+                      <SerialPhotoRows units={row.units} setUnits={setRowUnits(row.key)} api={api} />
                     </div>
                   )}
                   {row.error && <div className="bg-red-50 border border-red-100 text-red-700 text-xs rounded-lg px-3 py-2">{row.error}</div>}
@@ -3029,7 +3117,7 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
           <div className="flex justify-end gap-2">
             <GhostButton onClick={onCancel}>{rows.length === 0 ? "Tutup" : "Batal"}</GhostButton>
             {rows.length > 0 && (
-              <PrimaryButton disabled={savingAll} onClick={saveAll}>{savingAll ? "Menyimpan..." : `Simpan ${rows.length} Barang`}</PrimaryButton>
+              <PrimaryButton disabled={savingAll || !photo} onClick={saveAll} title={photo ? "" : "Upload Foto Keseluruhan Penerimaan Barang dulu"}>{savingAll ? "Menyimpan & upload foto..." : photo ? `Simpan ${rows.length} Barang` : "Upload Foto Keseluruhan dulu"}</PrimaryButton>
             )}
           </div>
         </div>
@@ -3518,6 +3606,7 @@ function MaterialSerialDetail({ material, customer, customerOptions, materials, 
   const [search, setSearch] = usePersistedState(`serial:${customer || ""}|${material || ""}:search`, "");
   const [highlighted, setHighlighted] = useState(highlightSerial || null);
   const [expandedSn, setExpandedSn] = useState(null);
+  const [snPhoto, setSnPhoto] = useState(null); // receipt label photo being viewed
   const rowRefs = React.useRef({});
   const canManage = role === ROLES.MANAGER || role === ROLES.LOGISTICS;
   const [dialog, setDialog] = useState(null); // { mode: "send"|"receive", sn }
@@ -3697,6 +3786,9 @@ function MaterialSerialDetail({ material, customer, customerOptions, materials, 
                     <span className="flex items-center gap-1.5">
                       {!inlineDates && (expanded ? <ChevronDown size={14} className="text-gray-400" /> : <ChevronRight size={14} className="text-gray-400" />)}
                       {s.sn}
+                      {s.receipt_photo && (
+                        <button onClick={(e) => { e.stopPropagation(); setSnPhoto(s.receipt_photo); }} title="Foto label saat diterima" className="text-emerald-700 hover:text-emerald-900"><Camera size={13} /></button>
+                      )}
                     </span>
                   </td>
                   {withMaterialColumn && <td className="px-5 py-3 text-gray-600">{s.material}</td>}
@@ -3751,6 +3843,7 @@ function MaterialSerialDetail({ material, customer, customerOptions, materials, 
         saving={saving}
         error={dialogError}
       />
+      <ImageLightbox src={snPhoto} onClose={() => setSnPhoto(null)} />
     </div>
   );
 }
@@ -3910,7 +4003,54 @@ function DivisionDatabasePage({ customer, material, api, deliveries, role, showT
   );
 }
 
-function StockMovement({ movements, filter, setFilter, deliveries }) {
+// Photos of one Goods Receipt (overall + each unit's label), fetched on open.
+function ReceiptPhotosModal({ receiptId, api, onClose }) {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState("");
+  const [lightboxSrc, setLightboxSrc] = useState(null);
+  React.useEffect(() => {
+    api.getReceipt(receiptId).then(setData).catch((err) => setError(err.message || "Gagal memuat foto"));
+  }, [receiptId]);
+  const withPhotos = (data?.units || []).filter((u) => u.photo);
+  return (
+    <div className="fixed inset-0 z-40 bg-black/40 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[85vh] overflow-y-auto p-5 space-y-4" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <div className="text-sm font-semibold text-gray-800">Foto Penerimaan {receiptId}</div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-700"><X size={18} /></button>
+        </div>
+        {error && <div className="text-xs text-red-600">{error}</div>}
+        {!data && !error && <div className="text-xs text-gray-400">Memuat...</div>}
+        {data && (
+          <>
+            <div className="text-xs text-gray-500">{data.material} · {data.qty} unit · {data.date}{data.created_by ? ` · oleh ${data.created_by}` : ""}</div>
+            <div>
+              <div className="text-xs font-medium text-gray-600 mb-1.5">Foto Keseluruhan</div>
+              {data.photo ? <PhotoThumb src={data.photo} alt="Foto keseluruhan" className="w-32 h-32 rounded-lg object-cover border border-gray-100" onOpen={setLightboxSrc} /> : <div className="text-xs text-gray-400 italic">Tidak ada (penerimaan sebelum foto diwajibkan)</div>}
+            </div>
+            {data.units.length > 0 && (
+              <div>
+                <div className="text-xs font-medium text-gray-600 mb-1.5">Foto Label per Unit ({withPhotos.length}/{data.units.length})</div>
+                <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                  {data.units.map((u) => (
+                    <div key={u.sn} className="text-center">
+                      {u.photo ? <PhotoThumb src={u.photo} alt={u.sn} className="w-full aspect-square rounded-lg object-cover border border-gray-100" onOpen={setLightboxSrc} /> : <div className="w-full aspect-square rounded-lg bg-gray-50 border border-gray-100 flex items-center justify-center text-[10px] text-gray-400">tanpa foto</div>}
+                      <div className="text-[11px] text-gray-600 font-mono mt-1 truncate" title={u.sn}>{u.sn}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+      <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
+    </div>
+  );
+}
+
+function StockMovement({ movements, filter, setFilter, deliveries, api }) {
+  const [photosFor, setPhotosFor] = useState(null);
   const filtered = filter ? movements.filter((m) => m.material === filter) : movements;
   const [expandedId, setExpandedId] = useState(null);
 
@@ -3944,11 +4084,14 @@ function StockMovement({ movements, filter, setFilter, deliveries }) {
                     <td className={`px-5 py-3 font-semibold ${m.qty > 0 ? "text-emerald-700" : "text-red-600"}`}>{m.qty > 0 ? `+${m.qty}` : m.qty}</td>
                     <td className="px-5 py-3 text-gray-500 text-xs">{m.type === "Delivery" ? describeRef(m.ref, deliveries) : m.ref}</td>
                     <td className="px-5 py-3 font-medium text-gray-800">{m.remaining}</td>
-                    <td className="px-5 py-3">
+                    <td className="px-5 py-3 whitespace-nowrap">
                       {hasSerials && (
                         <button onClick={() => setExpandedId(expanded ? null : m.id)} className="text-emerald-800 text-xs font-medium">
                           {expanded ? "Sembunyikan" : `Lihat SN (${m.serials.length})`}
                         </button>
+                      )}
+                      {m.type === "Receipt" && m.ref && api && (
+                        <button onClick={() => setPhotosFor(m.ref)} className="text-emerald-800 text-xs font-medium ml-3 inline-flex items-center gap-1"><Camera size={12} /> Foto</button>
                       )}
                     </td>
                   </tr>
@@ -3969,6 +4112,7 @@ function StockMovement({ movements, filter, setFilter, deliveries }) {
         </table>
         </div>
       </Card>
+      {photosFor && <ReceiptPhotosModal receiptId={photosFor} api={api} onClose={() => setPhotosFor(null)} />}
     </div>
   );
 }
@@ -8440,6 +8584,7 @@ function createApiClient(baseUrl, getToken, onUnauthorized) {
     getSerialCustomerReturnHistory: (sn) => request(`/stock/serials/${encodeURIComponent(sn)}/customer-return-history`),
     createReceipt: (payload) => request("/stock/receipts", { method: "POST", body: payload }),
     getReceipts: () => request("/stock/receipts"),
+    getReceipt: (id) => request(`/stock/receipts/${encodeURIComponent(id)}`),
     parseBkb: (document) => request("/stock/parse-bkb", { method: "POST", body: { document } }),
     detectMaterialsPhoto: (photos) => request("/stock/detect-materials-photo", { method: "POST", body: { photos } }),
     readSerialPhoto: (photo) => request("/stock/read-serial-photo", { method: "POST", body: { photo } }),
@@ -10481,7 +10626,7 @@ export default function App() {
   else if (page === "databaseRGR") content = <DivisionDatabasePage customer="RGR" material={dbMaterialFilter} api={api} deliveries={deliveries} role={role} showToast={showToast} materials={materials} onBack={() => goto("dashboard")} />;
   else if (page === "databasePIM") content = <DivisionDatabasePage customer="PIM" material={dbMaterialFilter} api={api} deliveries={deliveries} role={role} showToast={showToast} materials={materials} onBack={() => goto("dashboard")} />;
   else if (page === "databaseTeleglobal") content = <DivisionDatabasePage customer="Teleglobal" material={dbMaterialFilter} api={api} deliveries={deliveries} role={role} showToast={showToast} materials={materials} onBack={() => goto("dashboard")} />;
-  else if (page === "movement") content = <StockMovement movements={movements} filter={movementFilter} setFilter={setMovementFilter} deliveries={deliveries} />;
+  else if (page === "movement") content = <StockMovement movements={movements} filter={movementFilter} setFilter={setMovementFilter} deliveries={deliveries} api={api} />;
   else if (page === "serialDetail") content = <MaterialSerialDetail material={serialMaterial} customer={serialCustomer || undefined} materials={materials} api={api} onBack={() => goto("stock")} highlightSerial={highlightSerial} highlightToken={highlightToken} deliveries={deliveries} role={role} showToast={showToast} />;
   else if (page === "toolStock") content = <ToolStockPage tools={tools} api={api} setPage={goto} setToolSerialName={setToolSerialName} onSubmitReceipt={createToolReceipt} showToast={showToast} role={role} />;
   else if (page === "consumableStock") content = <ConsumableStockPage consumables={consumables} onSubmitReceipt={createConsumableReceipt} showToast={showToast} role={role} />;
