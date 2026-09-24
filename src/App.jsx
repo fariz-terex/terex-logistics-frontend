@@ -3068,6 +3068,28 @@ function DetectionPhotoThumbs({ photos, legacy, onOpen, className = "w-16 h-16" 
   );
 }
 
+// Small "Ganti Foto" / "Upload Foto" button for a row's reference photo —
+// lets the user swap a wrongly-matched detection photo for the right one.
+function ReplacePhotoButton({ hasPhoto, onChange }) {
+  const inputRef = React.useRef(null);
+  const [busy, setBusy] = useState(false);
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setBusy(true);
+    try { onChange(await compressImage(file)); } catch { /* user can retry */ } finally { setBusy(false); }
+  };
+  return (
+    <>
+      <input ref={inputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFile} />
+      <button type="button" onClick={() => inputRef.current?.click()} disabled={busy} className="px-3 py-2 rounded-lg text-xs font-medium border border-gray-200 text-gray-600 hover:border-emerald-300 hover:text-emerald-700 flex items-center gap-1.5">
+        <Camera size={13} /> {busy ? "Memproses..." : hasPhoto ? "Ganti Foto" : "Upload Foto"}
+      </button>
+    </>
+  );
+}
+
 function PhotoMaterialDetect({ onDetected, api }) {
   const [photos, setPhotos] = useState([]); // data URLs
   const [detecting, setDetecting] = useState(false);
@@ -4123,6 +4145,10 @@ async function detectBarcodeFromDataUrl(dataUrl) {
 
 function PhotoUpload({ label, value, onChange, compact, detectBarcode, onDetected }) {
   const inputRef = React.useRef(null);
+  // Tapping the thumbnail opens it full size; tapping anywhere else on the
+  // button still picks a new photo (i.e. replaces it).
+  const [preview, setPreview] = useState(null);
+  const openPreview = (e) => { e.stopPropagation(); setPreview(value); };
   const [compressing, setCompressing] = useState(false);
   const [detecting, setDetecting] = useState(false);
   const handleFile = async (e) => {
@@ -4164,9 +4190,10 @@ function PhotoUpload({ label, value, onChange, compact, detectBarcode, onDetecte
       <>
         <input ref={inputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFile} />
         <button onClick={() => inputRef.current?.click()} disabled={compressing} className={`px-3 py-2 rounded-lg text-xs font-medium border flex items-center gap-1.5 shrink-0 ${value ? "border-emerald-300 bg-emerald-50 text-emerald-700" : "border-gray-200 text-gray-400"}`}>
-          {value ? <img src={value} alt="" className="w-4 h-4 rounded object-cover" /> : <Camera size={13} />}
+          {value ? <img src={value} alt="" title="Lihat foto" onClick={openPreview} className="w-5 h-5 rounded object-cover cursor-zoom-in" /> : <Camera size={13} />}
           {compressing ? "Memproses..." : detecting ? "Mendeteksi SN..." : value ? "Foto ✓" : "Upload Foto"}
         </button>
+        <ImageLightbox src={preview} onClose={() => setPreview(null)} />
       </>
     );
   }
@@ -4175,13 +4202,17 @@ function PhotoUpload({ label, value, onChange, compact, detectBarcode, onDetecte
       <input ref={inputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFile} />
       <button onClick={() => inputRef.current?.click()} disabled={compressing} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl border text-sm text-left transition-colors ${value ? "border-emerald-200 bg-emerald-50/50" : "border-gray-200"}`}>
         {value ? (
-          <img src={value} alt="" className="w-9 h-9 rounded-lg object-cover shrink-0" />
+          <img src={value} alt="" title="Lihat foto" onClick={openPreview} className="w-12 h-12 rounded-lg object-cover shrink-0 cursor-zoom-in hover:opacity-80" />
         ) : (
           <div className="w-9 h-9 rounded-lg bg-gray-100 flex items-center justify-center shrink-0"><Camera size={16} className="text-gray-400" /></div>
         )}
-        <span className={value ? "text-gray-800 font-medium" : "text-gray-500"}>{compressing ? "Memproses foto..." : label}</span>
-        <span className="ml-auto text-xs text-gray-400">{value ? "Ganti foto" : "Ambil / pilih foto"}</span>
+        <span className="min-w-0">
+          <span className={`block ${value ? "text-gray-800 font-medium" : "text-gray-500"}`}>{compressing ? "Memproses foto..." : label}</span>
+          {value && <span className="block text-xs text-gray-400">Klik foto untuk memperbesar</span>}
+        </span>
+        <span className="ml-auto text-xs text-gray-400 shrink-0">{value ? "Ganti foto" : "Ambil / pilih foto"}</span>
       </button>
+      <ImageLightbox src={preview} onClose={() => setPreview(null)} />
     </div>
   );
 }
@@ -4774,14 +4805,19 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
   const [rows, setRows] = useState(
     initialData?.items ? initialData.items.map((r) => ({ ...r, serials: r.serials ? [...r.serials] : [] })) : []
   );
+  // ONE discrepancy reason for the whole reconciliation (not one per row).
+  // Editing an older record that only has per-item reasons folds them in.
+  const [reason, setReason] = useState(
+    initialData ? (initialData.reason || [...new Set((initialData.items || []).map((i) => i.reason?.trim()).filter(Boolean))].join("\n")) : ""
+  );
 
   const draft = useFormDraft({
     userId: currentUser?.id, formKey: "reconciliationCreate",
     enabled: !isEdit,
-    snapshot: { customer, homebase, period, rows },
+    snapshot: { customer, homebase, period, rows, reason },
     isEmpty: !customer && !homebase && rows.length === 0,
     onRestore: (d) => {
-      setCustomer(d.customer || ""); setHomebase(d.homebase || ""); setPeriod(d.period || "");
+      setCustomer(d.customer || ""); setHomebase(d.homebase || ""); setPeriod(d.period || ""); setReason(d.reason || "");
       if (d.rows?.length) setRows(d.rows);
     },
   });
@@ -4857,9 +4893,24 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
   };
 
   const snConflicts = rows.flatMap((r) => (r.serials || []).map((sn) => findSNConflict(sn, { returns, reconciliations, excludeId })).filter(Boolean));
-  const valid = homebase && photo && systemQtyMap && rows.length > 0 && snConflicts.length === 0 &&
-    rows.every((r) => r.material && (sysQty(r.material) === r.actualQty || r.reason.trim()) && (!r.serialized || (r.serials.length > 0 && r.serials.every((s) => s.trim())))) &&
-    (isEdit || !needsDivisionPicker || customer);
+  const discRows = rows.filter((r) => r.material && systemQtyMap && sysQty(r.material) !== r.actualQty);
+  // Everything still blocking Submit, in plain words — shown above the
+  // button so the user knows exactly what to fill instead of facing a
+  // silently disabled button.
+  const rowName = (r, idx) => r.material || `Material #${idx + 1}`;
+  const missing = [
+    !isEdit && needsDivisionPicker && !customer && "Pilih Divisi (Customer)",
+    !homebase && "Pilih Homebase",
+    homebase && !systemQtyMap && !systemQtyError && "System Qty masih dimuat, tunggu sebentar",
+    systemQtyError && "System Qty gagal dimuat — reload halaman",
+    !photo && "Upload Foto Keseluruhan Material",
+    rows.length === 0 && "Tambahkan minimal satu material (Deteksi dari Foto atau Tambah Material Manual)",
+    ...rows.map((r, idx) => !r.material && `${rowName(r, idx)}: pilih jenis material`),
+    ...rows.map((r, idx) => r.material && r.serialized && r.serials.some((sn) => !sn.trim()) && `${rowName(r, idx)}: isi semua Serial Number (${r.serials.filter((sn) => !sn.trim()).length} masih kosong)`),
+    snConflicts.length > 0 && `Ada Serial Number yang sedang dipakai di transaksi lain (${snConflicts.join(", ")})`,
+    discRows.length > 0 && !reason.trim() && "Isi Alasan Discrepancy",
+  ].filter(Boolean);
+  const valid = missing.length === 0;
 
   return (
     <div className="p-4 sm:p-8 max-w-3xl mx-auto space-y-6">
@@ -4967,23 +5018,38 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
                 })}
               </div>
             )}
-            {(r.detectionPhotos?.length > 0 || r.detectionPhoto) && (
-              <div>
-                <div className="text-xs text-gray-400 mb-1.5">Foto dari deteksi — cocokkan dengan SN di atas:</div>
-                <DetectionPhotoThumbs photos={r.detectionPhotos} legacy={r.detectionPhoto} onOpen={setLightboxSrc} />
+            <div>
+              <div className="text-xs text-gray-400 mb-1.5">
+                {r.detectionPhotos?.length > 0 || r.detectionPhoto ? "Foto referensi — cocokkan dengan SN di atas (klik untuk memperbesar):" : "Foto referensi (opsional):"}
               </div>
-            )}
-            {disc !== 0 && (
-              <textarea value={r.reason} onChange={(e) => updateRow(idx, { reason: e.target.value })} placeholder="Reason / Explanation untuk discrepancy..." rows={2} className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
-            )}
+              <div className="flex items-center gap-2 flex-wrap">
+                <DetectionPhotoThumbs photos={r.detectionPhotos} legacy={r.detectionPhoto} onOpen={setLightboxSrc} />
+                <ReplacePhotoButton hasPhoto={r.detectionPhotos?.length > 0 || !!r.detectionPhoto} onChange={(p) => updateRow(idx, { detectionPhotos: [p], detectionPhoto: undefined })} />
+              </div>
+            </div>
           </Card>
         );
       })}
       <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
 
+      {discRows.length > 0 && (
+        <Card className="p-5 space-y-2 border-red-100">
+          <div className="text-sm font-semibold text-gray-800">Alasan Discrepancy <span className="text-red-500">*</span></div>
+          <div className="text-xs text-gray-500">Satu penjelasan untuk semua selisih: {discRows.map((r) => { const d = r.actualQty - sysQty(r.material); return `${r.material} (${d > 0 ? "+" : ""}${d})`; }).join(", ")}</div>
+          <textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Jelaskan kenapa jumlah fisik berbeda dari sistem..." rows={3} className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
+        </Card>
+      )}
+
+      {!valid && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-900">
+          <div className="font-semibold mb-1 flex items-center gap-1.5"><AlertTriangle size={15} /> Belum bisa submit — lengkapi dulu:</div>
+          <ul className="list-disc pl-5 space-y-0.5">{missing.map((m, i) => <li key={i}>{m}</li>)}</ul>
+        </div>
+      )}
+
       <div className="flex justify-between">
         <GhostButton onClick={onCancel}>Batal</GhostButton>
-        <PrimaryButton disabled={!valid} onClick={async () => { if (await onSubmit({ homebase, period, photo, items: rows.map((r) => ({ ...r, systemQty: sysQty(r.material) })), ...(!isEdit && needsDivisionPicker ? { customer } : {}) })) draft.clear(); }}>
+        <PrimaryButton disabled={!valid} onClick={async () => { if (await onSubmit({ homebase, period, photo, reason: discRows.length > 0 ? reason.trim() : "", items: rows.map(({ detectionPhotos, detectionPhoto, ...r }) => ({ ...r, reason: "", systemQty: sysQty(r.material) })), ...(!isEdit && needsDivisionPicker ? { customer } : {}) })) draft.clear(); }}>
           <Check size={16} /> {isEdit ? "Kirim Ulang ke Logistics" : "Submit Reconciliation"}
         </PrimaryButton>
       </div>
@@ -5024,6 +5090,13 @@ function ReconciliationDetail({ r, onBack, onApprove, onRevise, onEdit, role }) 
         </Card>
       )}
 
+      {r.reason && (
+        <Card className="p-5">
+          <div className="text-sm font-semibold text-gray-800 mb-1">Alasan Discrepancy</div>
+          <div className="text-sm text-gray-600 whitespace-pre-line">{r.reason}</div>
+        </Card>
+      )}
+
       {r.items.map((i, idx) => {
         const disc = i.systemQty - i.actualQty;
         return (
@@ -5054,7 +5127,7 @@ function ReconciliationDetail({ r, onBack, onApprove, onRevise, onEdit, role }) 
               <div className="font-semibold mb-1">Penyesuaian stock jika di-Approve:</div>
               {r.items.filter((i) => i.systemQty - i.actualQty !== 0).map((i, idx) => {
                 const disc = i.systemQty - i.actualQty;
-                return <div key={idx}>{i.material}: {disc > 0 ? `-${disc}` : `+${Math.abs(disc)}`} unit dari Warehouse Stock</div>;
+                return <div key={idx}>{i.material}: {disc > 0 ? `-${disc}` : `+${Math.abs(disc)}`} unit — {i.serialized ? "SN yang tidak ditemukan dicatat di histori (status SN tidak diubah)" : `stock homebase ${r.homebase}`}</div>;
               })}
             </div>
           )}
@@ -10212,7 +10285,7 @@ export default function App() {
         returns={returns}
         reconciliations={reconciliations}
         homebases={homebases}
-        initialData={{ homebase: r.homebase, period: r.period, photo: r.photo, items: r.items, customer: r.customer }}
+        initialData={{ homebase: r.homebase, period: r.period, photo: r.photo, items: r.items, customer: r.customer, reason: r.reason }}
         excludeId={r.id}
         revisionNote={r.revisionNote}
         currentUser={currentUser}
