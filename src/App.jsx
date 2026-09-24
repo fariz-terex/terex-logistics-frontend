@@ -2708,6 +2708,7 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast, currentUse
                 <span className="text-xs text-gray-400 w-5">{i + 1}.</span>
                 <input value={s} onChange={(e) => updateSN(i, e.target.value)} placeholder="Masukkan Serial Number" className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
                 <ScanButton onScan={(text) => updateSN(i, text)} />
+                <SnPhotoButton api={api} onRead={(text) => updateSN(i, text)} />
                 {serials.length > 1 && <button onClick={() => removeSN(i)} className="text-gray-300 hover:text-red-500"><X size={16} /></button>}
               </div>
             ))
@@ -3055,6 +3056,14 @@ function detectedPhotosFor(d, photos) {
   return own.length ? own : photos;
 }
 
+// The photo for SN slot i of a detected item: the photo that SN was read
+// from when the detector said so, else the item's i-th own photo (the
+// common one-photo-per-unit case), else its first.
+function serialSlotPhoto(d, photos, own, i) {
+  const idx = d.serialPhotoIndexes?.[i];
+  return (idx != null && photos[idx]) || own[i] || own[0] || "";
+}
+
 // Reference thumbnails shown on a row so its SN(s) can be cross-checked
 // against the photo(s) they were read from. Accepts the old single-string
 // `detectionPhoto` too (restored drafts).
@@ -3068,21 +3077,25 @@ function DetectionPhotoThumbs({ photos, legacy, onOpen, className = "w-16 h-16" 
   );
 }
 
-// Small "Ganti Foto" / "Upload Foto" button for a row's reference photo —
-// lets the user swap a wrongly-matched detection photo for the right one.
+// Small "Ganti Foto" / "Upload Foto" button for a row's reference photo(s) —
+// lets the user swap wrongly-matched detection photos for the right ones.
+// Several photos can be picked at once (up to 6); onChange gets the array.
 function ReplacePhotoButton({ hasPhoto, onChange }) {
   const inputRef = React.useRef(null);
   const [busy, setBusy] = useState(false);
   const handleFile = async (e) => {
-    const file = e.target.files?.[0];
+    const files = Array.from(e.target.files || []).filter((f) => f.type.startsWith("image/")).slice(0, 6);
     e.target.value = "";
-    if (!file) return;
+    if (files.length === 0) return;
     setBusy(true);
-    try { onChange(await compressImage(file)); } catch { /* user can retry */ } finally { setBusy(false); }
+    const out = [];
+    for (const f of files) { try { out.push(await compressImage(f)); } catch { /* skip that one */ } }
+    setBusy(false);
+    if (out.length) onChange(out);
   };
   return (
     <>
-      <input ref={inputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFile} />
+      <input ref={inputRef} type="file" accept="image/*" multiple className="hidden" onChange={handleFile} />
       <button type="button" onClick={() => inputRef.current?.click()} disabled={busy} className="px-3 py-2 rounded-lg text-xs font-medium border border-gray-200 text-gray-600 hover:border-emerald-300 hover:text-emerald-700 flex items-center gap-1.5">
         <Camera size={13} /> {busy ? "Memproses..." : hasPhoto ? "Ganti Foto" : "Upload Foto"}
       </button>
@@ -4143,8 +4156,59 @@ async function detectBarcodeFromDataUrl(dataUrl) {
   }
 }
 
-function PhotoUpload({ label, value, onChange, compact, detectBarcode, onDetected }) {
+// Reads Serial Number(s) off one photo: the barcode first (decoded in the
+// browser from the ORIGINAL file — see detectBarcode below for why), then,
+// if no barcode decodes and `api` is given, Claude reads the printed S/N
+// text (POST /stock/read-serial-photo). Resolves to [] — never throws —
+// when nothing is legible; the user just types it in that case.
+async function readSerialsFromPhoto({ file, dataUrl, api }) {
+  if (file) {
+    const objectUrl = URL.createObjectURL(file);
+    try {
+      const text = await detectBarcodeFromDataUrl(objectUrl);
+      if (text) return [text];
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+  }
+  if (api && dataUrl) {
+    try {
+      const { serials } = await api.readSerialPhoto(dataUrl);
+      return serials || [];
+    } catch { /* fall through — reading is best-effort */ }
+  }
+  return [];
+}
+
+// "Foto SN" button for SN fields that don't keep a photo (Goods Receipt,
+// Tool Receipt): take/pick a photo of the label, the SN read from it is
+// handed to onRead; the photo itself is not stored anywhere.
+function SnPhotoButton({ api, onRead }) {
   const inputRef = React.useRef(null);
+  const [state, setState] = useState(""); // "" | "reading" | "none"
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setState("reading");
+    let dataUrl = null;
+    try { dataUrl = await compressImage(file); } catch { /* barcode can still work from the file */ }
+    const serials = await readSerialsFromPhoto({ file, dataUrl, api });
+    if (serials.length) { onRead(serials[0]); setState(""); } else setState("none");
+  };
+  return (
+    <>
+      <input ref={inputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFile} />
+      <button type="button" onClick={() => inputRef.current?.click()} disabled={state === "reading"} title="Baca SN dari foto label" className={`px-3 py-2 rounded-lg text-xs font-medium border flex items-center gap-1.5 shrink-0 ${state === "none" ? "border-amber-300 text-amber-700 bg-amber-50" : "border-gray-200 text-gray-500"}`}>
+        <Camera size={13} /> {state === "reading" ? "Membaca SN..." : state === "none" ? "SN tak terbaca" : "Foto SN"}
+      </button>
+    </>
+  );
+}
+
+function PhotoUpload({ label, value, onChange, compact, detectBarcode, onDetected, api }) {
+  const inputRef = React.useRef(null);
+  const [detectNote, setDetectNote] = useState("");
   // Tapping the thumbnail opens it full size; tapping anywhere else on the
   // button still picks a new photo (i.e. replaces it).
   const [preview, setPreview] = useState(null);
@@ -4171,18 +4235,17 @@ function PhotoUpload({ label, value, onChange, compact, detectBarcode, onDetecte
     setCompressing(false);
     e.target.value = "";
     if (detectBarcode && onDetected) {
-      setDetecting(true);
-      // Decode against the ORIGINAL file, not `compressed` — a barcode
-      // usually occupies a small part of the frame, and downscaling the
-      // whole photo to fit within compressImage's 1600px cap (sized for
-      // photo documentation, not barcode fidelity) can shrink it below
-      // what the decoder can still read. The original has much more
-      // pixel data to work with; only the compressed copy gets stored.
-      const objectUrl = URL.createObjectURL(file);
-      const text = await detectBarcodeFromDataUrl(objectUrl);
-      URL.revokeObjectURL(objectUrl);
+      setDetecting(true); setDetectNote("");
+      // Barcode is decoded against the ORIGINAL file, not `compressed` — a
+      // barcode usually occupies a small part of the frame, and downscaling
+      // the whole photo to fit within compressImage's 1600px cap (sized for
+      // photo documentation, not barcode fidelity) can shrink it below what
+      // the decoder can still read. Falls back to Claude reading the printed
+      // S/N (from the compressed copy) when there's no readable barcode.
+      const serials = await readSerialsFromPhoto({ file, dataUrl: compressed, api });
       setDetecting(false);
-      if (text) onDetected(text);
+      if (serials.length) onDetected(serials[0], serials);
+      else setDetectNote("SN tidak terbaca dari foto — isi manual");
     }
   };
   if (compact) {
@@ -4190,9 +4253,10 @@ function PhotoUpload({ label, value, onChange, compact, detectBarcode, onDetecte
       <>
         <input ref={inputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFile} />
         <button onClick={() => inputRef.current?.click()} disabled={compressing} className={`px-3 py-2 rounded-lg text-xs font-medium border flex items-center gap-1.5 shrink-0 ${value ? "border-emerald-300 bg-emerald-50 text-emerald-700" : "border-gray-200 text-gray-400"}`}>
-          {value ? <img src={value} alt="" title="Lihat foto" onClick={openPreview} className="w-5 h-5 rounded object-cover cursor-zoom-in" /> : <Camera size={13} />}
-          {compressing ? "Memproses..." : detecting ? "Mendeteksi SN..." : value ? "Foto ✓" : "Upload Foto"}
+          {value ? <img src={value} alt="" title="Lihat foto" onClick={openPreview} className="w-8 h-8 -my-1 rounded object-cover cursor-zoom-in" /> : <Camera size={13} />}
+          {compressing ? "Memproses..." : detecting ? "Membaca SN..." : value ? "Ganti Foto" : "Upload Foto"}
         </button>
+        {detectNote && <span className="text-[11px] text-amber-600 shrink-0" title={detectNote}>SN tak terbaca</span>}
         <ImageLightbox src={preview} onClose={() => setPreview(null)} />
       </>
     );
@@ -4339,15 +4403,17 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
     // Each item gets only the photo(s) it was actually detected in — kept
     // alongside this item's SN fields so it can be cross-checked against
     // what was typed/scanned, not resubmitted anywhere itself.
-    const newItems = detected.map((d) => ({
-      material: d.material,
-      detectionPhotos: detectedPhotosFor(d, photos),
-      serials: Array.from({ length: Math.max(1, d.qty) }, (_, i) => {
-        const sn = d.serials?.[i] || "";
-        if (sn) anySerials = true;
-        return { sn, photo: "" };
-      }),
-    }));
+    const newItems = detected.map((d) => {
+      const own = detectedPhotosFor(d, photos);
+      return {
+        material: d.material,
+        serials: Array.from({ length: Math.max(1, d.qty) }, (_, i) => {
+          const sn = d.serials?.[i] || "";
+          if (sn) anySerials = true;
+          return { sn, photo: serialSlotPhoto(d, photos, own, i) };
+        }),
+      };
+    });
     setItems((prev) => [...prev, ...newItems]);
     setDetectedSummary(
       `${detected.length} jenis material ditambahkan dari foto` +
@@ -4355,13 +4421,13 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
       ` Yang gagal terdeteksi otomatis bisa ditambah lewat "Tambah Material".`
     );
   };
-  // Auto-fill from a barcode decoded out of the photo just uploaded (see
-  // PhotoUpload's detectBarcode/onDetected) — only when the field is still
-  // empty at the moment decoding finishes, via a functional update rather
-  // than the `items` closure, so it never clobbers a SN the user already
-  // typed (by hand, or from ScanButton) while the photo was processing.
+  // The SN read from the photo just uploaded/replaced for this slot (see
+  // PhotoUpload's detectBarcode/onDetected) — the photo is the source of
+  // truth for its slot, so it overwrites whatever was there (that's what
+  // "Ganti Foto" is for). Functional update, not the `items` closure,
+  // since reading finishes asynchronously.
   const applyDetectedSN = (itemIdx, snIdx, text) => setItems((prev) => prev.map((it, i) => (i === itemIdx
-    ? { ...it, serials: it.serials.map((s, j) => (j === snIdx && !s.sn.trim() ? { ...s, sn: text } : s)) }
+    ? { ...it, serials: it.serials.map((s, j) => (j === snIdx ? { ...s, sn: text } : s)) }
     : it)));
 
   const allSerials = items.flatMap((it) => it.serials);
@@ -4467,7 +4533,7 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
                   <div className="flex items-center gap-2">
                     <span className="text-xs text-gray-400 w-5">{snIdx + 1}.</span>
                     <input value={s.sn} onChange={(e) => updateSN(itemIdx, snIdx, "sn", e.target.value)} placeholder="Masukkan Serial Number" className={`flex-1 border rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600 ${conflict ? "border-red-300" : "border-gray-200"}`} />
-                    <PhotoUpload compact value={s.photo} onChange={(val) => updateSN(itemIdx, snIdx, "photo", val)} detectBarcode onDetected={(text) => applyDetectedSN(itemIdx, snIdx, text)} />
+                    <PhotoUpload compact api={api} value={s.photo} onChange={(val) => updateSN(itemIdx, snIdx, "photo", val)} detectBarcode onDetected={(text) => applyDetectedSN(itemIdx, snIdx, text)} />
                     {item.serials.length > 1 && <button onClick={() => removeSN(itemIdx, snIdx)} className="text-gray-300 hover:text-red-500"><X size={16} /></button>}
                   </div>
                   {conflict && <div className="text-xs text-red-600 pl-7">Serial Number ini sedang digunakan pada {conflict}.</div>}
@@ -4475,6 +4541,7 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
               );
             })}
           </div>
+          {/* Older drafts kept the detection photos on the item; new ones put each on its SN slot. */}
           {(item.detectionPhotos?.length > 0 || item.detectionPhoto) && (
             <div className="pt-3 border-t border-gray-50">
               <div className="text-xs text-gray-400 mb-1.5">Foto dari deteksi — cocokkan dengan SN di atas:</div>
@@ -4843,7 +4910,13 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
 
   const [lightboxSrc, setLightboxSrc] = useState(null);
   const updateRow = (idx, patch) => setRows(rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
-  const updateSerial = (idx, si, val) => setRows(rows.map((r, i) => (i === idx ? { ...r, serials: r.serials.map((s, j) => (j === si ? val : s)) } : r)));
+  // Functional updates: SN reading from a photo finishes asynchronously.
+  const updateSerial = (idx, si, val) => setRows((prev) => prev.map((r, i) => (i === idx ? { ...r, serials: r.serials.map((s, j) => (j === si ? val : s)) } : r)));
+  const updateSerialPhoto = (idx, si, photo) => setRows((prev) => prev.map((r, i) => {
+    if (i !== idx) return r;
+    const serialPhotos = Array.from({ length: r.serials.length }, (_, j) => (j === si ? photo : (r.serialPhotos || [])[j] || ""));
+    return { ...r, serialPhotos };
+  }));
   // New manual rows go on TOP so the user immediately sees the empty form
   // they just added, instead of it landing below every detected row.
   const addRow = () => setRows([{ material: "", serialized: false, actualQty: 0, serials: [], reason: "" }, ...rows]);
@@ -4852,7 +4925,7 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
   // reset rather than carry stale counts for the wrong material across.
   const updateRowMaterial = (idx, name) => {
     const mat = materials.find((m) => m.name === name);
-    setRows(rows.map((r, i) => (i === idx ? { material: name, serialized: !!mat?.serialized, actualQty: 0, serials: [], reason: "" } : r)));
+    setRows(rows.map((r, i) => (i === idx ? { material: name, serialized: !!mat?.serialized, actualQty: 0, serials: [], serialPhotos: [], reason: "" } : r)));
   };
   // Serialized rows keep exactly one SN slot per Actual Qty unit — resize
   // (preserving whatever's already typed) instead of leaving the SN list
@@ -4861,31 +4934,36 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
     if (i !== idx) return r;
     if (!r.serialized) return { ...r, actualQty };
     const n = Math.max(0, actualQty);
-    return { ...r, actualQty, serials: Array.from({ length: n }, (_, j) => r.serials[j] || "") };
+    return { ...r, actualQty, serials: Array.from({ length: n }, (_, j) => r.serials[j] || ""), serialPhotos: Array.from({ length: n }, (_, j) => (r.serialPhotos || [])[j] || "") };
   }));
 
-  // A detected material that already has a row only gets its actualQty
-  // updated; otherwise a new row is added (System Qty is never stored on the
-  // row — it's looked up from systemQtyMap). Never touches the standalone
-  // `photo` field above —
-  // `detectionPhotos` here is a different, separate thing: reference
-  // thumbnails (only the photo(s) this material was detected in) shown ON the row purely
-  // so the SN(s) can be cross-checked against it, same as Return Faulty /
-  // Transfer Stock already do.
+  // A detected material that already has a row gets its qty/SNs/photos
+  // refreshed; otherwise a new row is added (System Qty is never stored on
+  // the row — it's looked up from systemQtyMap). Never touches the
+  // standalone `photo` field above. Photos here are reference only (never
+  // submitted): serialized rows keep one per SN slot (`serialPhotos`, the
+  // photo that SN was read from) so each can be replaced individually and
+  // re-read; non-serialized rows keep the material's photos as a set
+  // (`detectionPhotos`).
   const applyDetected = (detected, photos) => {
     setRows((prev) => {
       const next = [...prev];
       detected.forEach((d) => {
         const own = detectedPhotosFor(d, photos);
+        const serialized = !!d.serialized;
+        const serials = serialized ? Array.from({ length: d.qty }, (_, i) => d.serials?.[i] || "") : [];
+        const serialPhotos = serialized ? serials.map((_, i) => serialSlotPhoto(d, photos, own, i)) : [];
         const idx = next.findIndex((r) => r.material === d.material);
-        if (idx >= 0) { next[idx] = { ...next[idx], actualQty: d.qty, detectionPhotos: own, detectionPhoto: undefined }; return; }
+        if (idx >= 0) {
+          next[idx] = { ...next[idx], actualQty: d.qty, serials, serialPhotos, detectionPhotos: serialized ? [] : own, detectionPhoto: undefined };
+          return;
+        }
         next.push({
-          material: d.material, serialized: !!d.serialized,
-          actualQty: d.qty,
+          material: d.material, serialized, actualQty: d.qty,
           // SNs the same photos happened to have legible are pre-filled
-          // here (best-effort, often empty) — still fully editable/scan-able.
-          serials: d.serialized ? Array.from({ length: d.qty }, (_, i) => d.serials?.[i] || "") : [],
-          reason: "", confidence: d.confidence, detectionPhotos: own,
+          // here (best-effort, often empty) — still fully editable.
+          serials, serialPhotos,
+          reason: "", confidence: d.confidence, detectionPhotos: serialized ? [] : own,
         });
       });
       return next;
@@ -5005,28 +5083,37 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
                 <input type="number" min="0" value={r.actualQty} onChange={(e) => updateRowActualQty(idx, Number(e.target.value))} className="w-20 border border-gray-200 rounded-lg px-2 py-1.5 text-sm outline-none focus:border-emerald-600" />
               </div>
             </div>
-            {r.serialized && (
-              <div className="grid grid-cols-2 gap-2">
+            {r.serialized && r.serials.length > 0 && (
+              <div className="space-y-2">
+                <div className="text-xs text-gray-400">Serial Number — upload/ganti foto label per unit, SN akan terbaca otomatis (klik foto untuk memperbesar):</div>
                 {r.serials.map((s, si) => {
                   const conflict = findSNConflict(s, { returns, reconciliations, excludeId });
+                  // Old drafts only have row-level detectionPhotos — fall back to those by position.
+                  const slotPhoto = (r.serialPhotos || [])[si] || (r.detectionPhotos || [])[si] || "";
                   return (
                     <div key={si}>
-                      <input value={s} onChange={(e) => updateSerial(idx, si, e.target.value)} placeholder={`SN ${si + 1}`} className={`w-full border rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600 ${conflict ? "border-red-300" : "border-gray-200"}`} />
-                      {conflict && <div className="text-xs text-red-600 mt-1">SN digunakan pada {conflict}.</div>}
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-gray-400 w-5">{si + 1}.</span>
+                        <input value={s} onChange={(e) => updateSerial(idx, si, e.target.value)} placeholder={`SN ${si + 1}`} className={`flex-1 min-w-0 border rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600 ${conflict ? "border-red-300" : "border-gray-200"}`} />
+                        <PhotoUpload compact api={api} value={slotPhoto} onChange={(v) => updateSerialPhoto(idx, si, v)} detectBarcode onDetected={(text) => updateSerial(idx, si, text)} />
+                      </div>
+                      {conflict && <div className="text-xs text-red-600 mt-1 pl-7">SN digunakan pada {conflict}.</div>}
                     </div>
                   );
                 })}
               </div>
             )}
+            {!r.serialized && (
             <div>
               <div className="text-xs text-gray-400 mb-1.5">
                 {r.detectionPhotos?.length > 0 || r.detectionPhoto ? "Foto referensi — cocokkan dengan SN di atas (klik untuk memperbesar):" : "Foto referensi (opsional):"}
               </div>
               <div className="flex items-center gap-2 flex-wrap">
                 <DetectionPhotoThumbs photos={r.detectionPhotos} legacy={r.detectionPhoto} onOpen={setLightboxSrc} />
-                <ReplacePhotoButton hasPhoto={r.detectionPhotos?.length > 0 || !!r.detectionPhoto} onChange={(p) => updateRow(idx, { detectionPhotos: [p], detectionPhoto: undefined })} />
+                <ReplacePhotoButton hasPhoto={r.detectionPhotos?.length > 0 || !!r.detectionPhoto} onChange={(ps) => updateRow(idx, { detectionPhotos: ps, detectionPhoto: undefined })} />
               </div>
             </div>
+            )}
           </Card>
         );
       })}
@@ -5049,7 +5136,7 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
 
       <div className="flex justify-between">
         <GhostButton onClick={onCancel}>Batal</GhostButton>
-        <PrimaryButton disabled={!valid} onClick={async () => { if (await onSubmit({ homebase, period, photo, reason: discRows.length > 0 ? reason.trim() : "", items: rows.map(({ detectionPhotos, detectionPhoto, ...r }) => ({ ...r, reason: "", systemQty: sysQty(r.material) })), ...(!isEdit && needsDivisionPicker ? { customer } : {}) })) draft.clear(); }}>
+        <PrimaryButton disabled={!valid} onClick={async () => { if (await onSubmit({ homebase, period, photo, reason: discRows.length > 0 ? reason.trim() : "", items: rows.map(({ detectionPhotos, detectionPhoto, serialPhotos, ...r }) => ({ ...r, reason: "", systemQty: sysQty(r.material) })), ...(!isEdit && needsDivisionPicker ? { customer } : {}) })) draft.clear(); }}>
           <Check size={16} /> {isEdit ? "Kirim Ulang ke Logistics" : "Submit Reconciliation"}
         </PrimaryButton>
       </div>
@@ -5373,7 +5460,7 @@ function MaterialSwapPage({ swaps, api, materials, sites, homebases, onSubmit, s
             )}
           </div>
         </div>
-        <PhotoUpload label="Foto Bukti Material Terpasang" value={photo} onChange={setPhoto} />
+        <PhotoUpload label="Foto Bukti Material Terpasang (label SN akan terbaca otomatis)" value={photo} onChange={setPhoto} api={api} detectBarcode onDetected={(sn) => setNewSn(sn)} />
       </Card>
 
       <Card className="p-6 space-y-4 max-w-2xl">
@@ -5398,7 +5485,7 @@ function MaterialSwapPage({ swaps, api, materials, sites, homebases, onSubmit, s
             {!newMaterialCategory && <div className="text-xs text-gray-400 mt-1">Pilih unit yang dipasang terlebih dahulu untuk menyaring pilihan sesuai kategorinya.</div>}
           </div>
         </div>
-        <PhotoUpload label="Foto Bukti Material Faulty / Dicabut" value={oldPhoto} onChange={setOldPhoto} />
+        <PhotoUpload label="Foto Bukti Material Faulty / Dicabut (label SN akan terbaca otomatis)" value={oldPhoto} onChange={setOldPhoto} api={api} detectBarcode onDetected={(sn) => setOldSn(sn)} />
       </Card>
 
       <Card className="p-6 space-y-4 max-w-2xl">
@@ -5542,7 +5629,7 @@ function MaterialSwapDetail({ swap, onBack, setPage, setReturnPrefill }) {
    over in one step), and returns come back as a whole transaction.
    ============================================================ */
 
-function ToolStockPage({ tools, setPage, setToolSerialName, onSubmitReceipt, showToast, role }) {
+function ToolStockPage({ tools, setPage, setToolSerialName, onSubmitReceipt, showToast, role, api }) {
   const [search, setSearch] = usePersistedState("toolStock:search", "");
   const [categoryFilter, setCategoryFilter] = usePersistedState("toolStock:category", "All");
   const [lowOnly, setLowOnly] = usePersistedState("toolStock:lowOnly", false);
@@ -5576,7 +5663,7 @@ function ToolStockPage({ tools, setPage, setToolSerialName, onSubmitReceipt, sho
       />
 
       {showReceiptForm && canReceive && (
-        <ToolReceiptForm tools={tools} onCancel={() => setShowReceiptForm(false)} onSubmit={onSubmitReceipt} showToast={showToast} />
+        <ToolReceiptForm tools={tools} api={api} onCancel={() => setShowReceiptForm(false)} onSubmit={onSubmitReceipt} showToast={showToast} />
       )}
 
       <InventoryFilters
@@ -6383,7 +6470,7 @@ function ToolSerialDetail({ toolName, api, onBack }) {
   );
 }
 
-function ToolReceiptForm({ tools, onSubmit, onCancel, showToast }) {
+function ToolReceiptForm({ tools, onSubmit, onCancel, showToast, api }) {
   const [tool, setTool] = useState("");
   const [serials, setSerials] = useState([""]);
   const [qty, setQty] = useState(1);
@@ -6462,6 +6549,7 @@ function ToolReceiptForm({ tools, onSubmit, onCancel, showToast }) {
                 <span className="text-xs text-gray-400 w-5">{i + 1}.</span>
                 <input value={s} onChange={(e) => updateSN(i, e.target.value)} placeholder="Masukkan Serial Number" className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
                 <ScanButton onScan={(text) => updateSN(i, text)} />
+                <SnPhotoButton api={api} onRead={(text) => updateSN(i, text)} />
                 {serials.length > 1 && <button onClick={() => removeSN(i)} className="text-gray-300 hover:text-red-500"><X size={16} /></button>}
               </div>
             ))
@@ -8268,6 +8356,7 @@ function createApiClient(baseUrl, getToken, onUnauthorized) {
     getReceipts: () => request("/stock/receipts"),
     parseBkb: (document) => request("/stock/parse-bkb", { method: "POST", body: { document } }),
     detectMaterialsPhoto: (photos) => request("/stock/detect-materials-photo", { method: "POST", body: { photos } }),
+    readSerialPhoto: (photo) => request("/stock/read-serial-photo", { method: "POST", body: { photo } }),
 
     // ---- Tools / Alat (shared pool, no division split — Peminjaman now happens via Delivery Request) ----
     getTools: () => request("/tools"),
@@ -10308,7 +10397,7 @@ export default function App() {
   else if (page === "databaseTeleglobal") content = <DivisionDatabasePage customer="Teleglobal" material={dbMaterialFilter} api={api} deliveries={deliveries} role={role} showToast={showToast} materials={materials} onBack={() => goto("dashboard")} />;
   else if (page === "movement") content = <StockMovement movements={movements} filter={movementFilter} setFilter={setMovementFilter} deliveries={deliveries} />;
   else if (page === "serialDetail") content = <MaterialSerialDetail material={serialMaterial} customer={serialCustomer || undefined} materials={materials} api={api} onBack={() => goto("stock")} highlightSerial={highlightSerial} highlightToken={highlightToken} deliveries={deliveries} role={role} showToast={showToast} />;
-  else if (page === "toolStock") content = <ToolStockPage tools={tools} setPage={goto} setToolSerialName={setToolSerialName} onSubmitReceipt={createToolReceipt} showToast={showToast} role={role} />;
+  else if (page === "toolStock") content = <ToolStockPage tools={tools} api={api} setPage={goto} setToolSerialName={setToolSerialName} onSubmitReceipt={createToolReceipt} showToast={showToast} role={role} />;
   else if (page === "consumableStock") content = <ConsumableStockPage consumables={consumables} onSubmitReceipt={createConsumableReceipt} showToast={showToast} role={role} />;
   else if (page === "stockTransfer") {
     const t = selectedTransfer && transfers.find((x) => x.id === selectedTransfer);
