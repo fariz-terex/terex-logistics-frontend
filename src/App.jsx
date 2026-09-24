@@ -3056,6 +3056,10 @@ function detectedPhotosFor(d, photos) {
   return own.length ? own : photos;
 }
 
+// SNs compare case/whitespace-insensitively — "e3 0018" typed by hand and
+// "E3 0018" read off a label are the same unit.
+const snKey = (sn) => (sn || "").trim().toUpperCase();
+
 // The photo for SN slot i of a detected item: the photo that SN was read
 // from when the detector said so, else the item's i-th own photo (the
 // common one-photo-per-unit case), else its first.
@@ -4444,11 +4448,19 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
     let next = prev.map((it, i) => (i === itemIdx ? source : it));
     const ti = next.findIndex((it) => it.material === target);
     if (ti >= 0) {
-      // Fill the target's first empty SN row if it has one, else append.
       const t = next[ti];
-      const empty = t.serials.findIndex((x) => !x.sn.trim() && !x.photo);
-      const serials = empty >= 0 ? t.serials.map((x, j) => (j === empty ? unit : x)) : [...t.serials, unit];
-      next[ti] = { ...t, serials, notice };
+      const same = unit.sn ? t.serials.findIndex((x) => snKey(x.sn) === snKey(unit.sn)) : -1;
+      if (same >= 0) {
+        // Already listed on the target item — just drop the duplicate from
+        // the source (keeping this photo if the target row had none).
+        const serials = t.serials.map((x, j) => (j === same && !x.photo ? { ...x, photo: unit.photo } : x));
+        next[ti] = { ...t, serials, notice: `SN ${unit.sn} sudah tercatat di ${target} — baris duplikat di ${item.material || "item sebelumnya"} dihapus, tidak ditambahkan lagi.` };
+      } else {
+        // Fill the target's first empty SN row if it has one, else append.
+        const empty = t.serials.findIndex((x) => !x.sn.trim() && !x.photo);
+        const serials = empty >= 0 ? t.serials.map((x, j) => (j === empty ? unit : x)) : [...t.serials, unit];
+        next[ti] = { ...t, serials, notice };
+      }
     } else {
       next = [...next, { material: target, serials: [unit], notice }];
     }
@@ -4965,7 +4977,16 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
     if (ti >= 0) {
       const t = next[ti];
       const tPhotos = Array.from({ length: t.serials.length }, (_, j) => (t.serialPhotos || [])[j] || "");
-      next[ti] = { ...t, serials: [...t.serials, snVal], serialPhotos: [...tPhotos, photo], actualQty: t.actualQty + 1, notice };
+      const same = snVal ? t.serials.findIndex((x) => snKey(x) === snKey(snVal)) : -1;
+      if (same >= 0) {
+        // That unit is already counted on the target card (e.g. detected
+        // there from the start) — it was a duplicate on the source card,
+        // so it's only removed from there; the target's qty stays.
+        if (!tPhotos[same]) tPhotos[same] = photo;
+        next[ti] = { ...t, serialPhotos: tPhotos, notice: `SN ${snVal} sudah tercatat di ${target} — slot duplikat di ${row.material} dihapus, tidak ditambahkan lagi.` };
+      } else {
+        next[ti] = { ...t, serials: [...t.serials, snVal], serialPhotos: [...tPhotos, photo], actualQty: t.actualQty + 1, notice };
+      }
     } else {
       next = [{ material: target, serialized: true, actualQty: 1, serials: [snVal], serialPhotos: [photo], reason: "", notice }, ...next];
     }
@@ -5031,6 +5052,9 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
 
   const snConflicts = rows.flatMap((r) => (r.serials || []).map((sn) => findSNConflict(sn, { returns, reconciliations, excludeId })).filter(Boolean));
   const discRows = rows.filter((r) => r.material && systemQtyMap && sysQty(r.material) !== r.actualQty);
+  const snCounts = {};
+  rows.forEach((r) => (r.serials || []).forEach((sn) => { const k = snKey(sn); if (k) snCounts[k] = (snCounts[k] || 0) + 1; }));
+  const dupSNs = Object.keys(snCounts).filter((k) => snCounts[k] > 1);
   // Everything still blocking Submit, in plain words — shown above the
   // button so the user knows exactly what to fill instead of facing a
   // silently disabled button.
@@ -5045,6 +5069,7 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
     ...rows.map((r, idx) => !r.material && `${rowName(r, idx)}: pilih jenis material`),
     ...rows.map((r, idx) => r.material && r.serialized && r.serials.some((sn) => !sn.trim()) && `${rowName(r, idx)}: isi semua Serial Number (${r.serials.filter((sn) => !sn.trim()).length} masih kosong)`),
     snConflicts.length > 0 && `Ada Serial Number yang sedang dipakai di transaksi lain (${snConflicts.join(", ")})`,
+    dupSNs.length > 0 && `Serial Number tercatat lebih dari sekali: ${dupSNs.join(", ")} — hapus salah satunya atau perbaiki SN-nya`,
     discRows.length > 0 && !reason.trim() && "Isi Alasan Discrepancy",
   ].filter(Boolean);
   const valid = missing.length === 0;
@@ -5154,10 +5179,11 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
                     <div key={si}>
                       <div className="flex items-center gap-2">
                         <span className="text-xs text-gray-400 w-5">{si + 1}.</span>
-                        <input value={s} onChange={(e) => updateSerial(idx, si, e.target.value)} placeholder={`SN ${si + 1}`} className={`flex-1 min-w-0 border rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600 ${conflict ? "border-red-300" : "border-gray-200"}`} />
+                        <input value={s} onChange={(e) => updateSerial(idx, si, e.target.value)} placeholder={`SN ${si + 1}`} className={`flex-1 min-w-0 border rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600 ${conflict || snCounts[snKey(s)] > 1 ? "border-red-300" : "border-gray-200"}`} />
                         <PhotoUpload compact api={api} identifyMaterial value={slotPhoto} onChange={(v) => updateSerialPhoto(idx, si, v)} detectBarcode onDetected={(text, info) => applySlotRead(idx, si, text, info)} />
                       </div>
                       {conflict && <div className="text-xs text-red-600 mt-1 pl-7">SN digunakan pada {conflict}.</div>}
+                      {snCounts[snKey(s)] > 1 && <div className="text-xs text-red-600 mt-1 pl-7">SN ini tercatat lebih dari sekali di reconciliation ini.</div>}
                     </div>
                   );
                 })}
