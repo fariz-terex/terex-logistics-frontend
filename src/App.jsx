@@ -4272,14 +4272,27 @@ function ReturnFaultyCreate({ onSubmit, onCancel, materials, returns, reconcilia
   const removeSN = (itemIdx, snIdx) => setItems(items.map((it, i) => (i === itemIdx ? { ...it, serials: it.serials.filter((_, j) => j !== snIdx) } : it)));
   const [detectedSummary, setDetectedSummary] = useState("");
   // Turns a "Deteksi dari Foto" result into item rows with the right number
-  // of blank SN slots — SN capture itself is untouched, still per-unit
-  // (typed, ScanButton-free now, or auto-filled from that unit's own photo
-  // via detectBarcode above).
+  // of SN slots — pre-filled from any Serial Number the same photos
+  // happened to have legible (best-effort, often none), blank otherwise.
+  // Per-unit capture stays exactly as it was either way: typed, scanned, or
+  // auto-filled from that unit's own barcode photo via detectBarcode above.
   const applyDetectedItems = (detected) => {
     if (detected.length === 0) return;
-    const newItems = detected.map((d) => ({ material: d.material, serials: Array.from({ length: Math.max(1, d.qty) }, () => ({ sn: "", photo: "" })) }));
+    let anySerials = false;
+    const newItems = detected.map((d) => ({
+      material: d.material,
+      serials: Array.from({ length: Math.max(1, d.qty) }, (_, i) => {
+        const sn = d.serials?.[i] || "";
+        if (sn) anySerials = true;
+        return { sn, photo: "" };
+      }),
+    }));
     setItems((prev) => [...prev, ...newItems]);
-    setDetectedSummary(`${detected.length} jenis material ditambahkan dari foto — cek jenis & qty, lalu isi/scan Serial Number tiap unit yang gagal terdeteksi otomatis bisa ditambah lewat "Tambah Material".`);
+    setDetectedSummary(
+      `${detected.length} jenis material ditambahkan dari foto` +
+      (anySerials ? " — sebagian Serial Number ikut terbaca, cek lagi." : ".") +
+      ` Yang gagal terdeteksi otomatis bisa ditambah lewat "Tambah Material".`
+    );
   };
   // Auto-fill from a barcode decoded out of the photo just uploaded (see
   // PhotoUpload's detectBarcode/onDetected) — only when the field is still
@@ -4766,7 +4779,9 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
         next.push({
           material: d.material, serialized: !!d.serialized,
           systemQty: d.qty, actualQty: d.qty,
-          serials: d.serialized ? Array.from({ length: d.qty }, () => "") : [],
+          // SNs the same photos happened to have legible are pre-filled
+          // here (best-effort, often empty) — still fully editable/scan-able.
+          serials: d.serialized ? Array.from({ length: d.qty }, (_, i) => d.serials?.[i] || "") : [],
           photo: "", reason: "", confidence: d.confidence,
         });
       });
@@ -5784,8 +5799,17 @@ function TransferCreate({ onSubmit, onSubmitQuiet, onCancel, materials, customer
     if (!detectedQueue || !transferOptions) return;
     const current = detectedQueue[queueIndex];
     if (!current || current.material !== material) return;
-    if (isSerialized) setSelectedSerials(new Set(availableSerials.slice(0, current.qty).map((s) => s.sn)));
-    else setQty(String(Math.max(1, Math.min(current.qty || 1, sourceQty || current.qty || 1))));
+    if (isSerialized) {
+      // Prefer SNs the photo actually read (only if they're real units
+      // sitting at this homebase — never trust an unmatched one), padding
+      // out to the detected qty with whatever's left over so the checklist
+      // still starts pre-filled either way.
+      const availableSns = availableSerials.map((s) => s.sn);
+      const fromPhoto = (current.serials || []).filter((sn) => availableSns.includes(sn));
+      const rest = availableSns.filter((sn) => !fromPhoto.includes(sn));
+      const picked = [...fromPhoto, ...rest].slice(0, current.qty);
+      setSelectedSerials(new Set(picked));
+    } else setQty(String(Math.max(1, Math.min(current.qty || 1, sourceQty || current.qty || 1))));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [transferOptions, availableSerials]);
 
