@@ -3333,12 +3333,22 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, onManual, showToast, c
   const effectiveCustomer = needsDivisionPicker ? customer : myDivisions[0];
   const divisionOptions = isManager ? customers.filter((c) => c.status === "Active").map((c) => c.name) : myDivisions;
 
+  // Cluster read from the BKB (document body or file name). Kept in a ref
+  // because picking the detected division reloads the cluster list (and
+  // resets the picker) — it's applied once that list has arrived.
+  const detectedClusterRef = React.useRef(null);
+  const [clusterAutoDetected, setClusterAutoDetected] = useState(false);
   React.useEffect(() => {
     let cancelled = false;
-    setCluster("");
+    setCluster(""); setClusterAutoDetected(false);
     if (!effectiveCustomer || !api?.getClusters) { setClusterOptions([]); return; }
     api.getClusters(effectiveCustomer, "Active")
-      .then((rows2) => { if (!cancelled) setClusterOptions(rows2.map((c) => c.name)); })
+      .then((rows2) => {
+        if (cancelled) return;
+        const names = rows2.map((c) => c.name);
+        setClusterOptions(names);
+        if (detectedClusterRef.current && names.includes(detectedClusterRef.current)) { setCluster(detectedClusterRef.current); setClusterAutoDetected(true); }
+      })
       .catch(() => { if (!cancelled) setClusterOptions([]); });
     return () => { cancelled = true; };
   }, [effectiveCustomer]);
@@ -3381,7 +3391,11 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, onManual, showToast, c
     if (!docDataUrl) return;
     setDetecting(true); setDetectError("");
     try {
-      const result = await api.parseBkb(docDataUrl);
+      const result = await api.parseBkb(docDataUrl, docName);
+      detectedClusterRef.current = result.cluster || null;
+      // Division already fixed (e.g. a single-division PIM user): its
+      // clusters are loaded, so apply the detected one right away.
+      if (result.cluster && clusterOptions.includes(result.cluster)) { setCluster(result.cluster); setClusterAutoDetected(true); }
       setDocumentType(result.documentType || "tidak_jelas");
       if (result.documentNumber) setBkbNumber(result.documentNumber);
       if (result.documentType === "material_eks_site") {
@@ -3530,8 +3544,8 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, onManual, showToast, c
             </div>
             {clusterRequired && (
               <div>
-                <label className="text-xs font-medium text-gray-500">Cluster <span className="text-red-500">*</span> <span className="text-gray-400 font-normal">(untuk unit serialized)</span></label>
-                <select value={cluster} onChange={(e) => setCluster(e.target.value)} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600">
+                <label className="text-xs font-medium text-gray-500">Cluster <span className="text-red-500">*</span> <span className="text-gray-400 font-normal">(untuk unit serialized)</span>{clusterAutoDetected && <span className="text-emerald-600 font-normal"> — terdeteksi dari dokumen, cek lagi</span>}</label>
+                <select value={cluster} onChange={(e) => { setCluster(e.target.value); setClusterAutoDetected(false); }} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600">
                   <option value="">Pilih cluster...</option>
                   {clusterOptions.map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
@@ -8979,7 +8993,7 @@ function createApiClient(baseUrl, getToken, onUnauthorized) {
     getReceipt: (id) => request(`/stock/receipts/${encodeURIComponent(id)}`),
     getDocuments: (params) => request(`/documents?${new URLSearchParams(Object.entries(params).filter(([, v]) => v)).toString()}`),
     getDocument: (id) => request(`/documents/${encodeURIComponent(id)}`),
-    parseBkb: (document) => request("/stock/parse-bkb", { method: "POST", body: { document } }),
+    parseBkb: (document, fileName) => request("/stock/parse-bkb", { method: "POST", body: { document, fileName } }),
     detectMaterialsPhoto: (photos) => request("/stock/detect-materials-photo", { method: "POST", body: { photos } }),
     readSerialPhoto: (photo) => request("/stock/read-serial-photo", { method: "POST", body: { photo } }),
 
