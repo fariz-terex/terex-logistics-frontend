@@ -1193,7 +1193,7 @@ function documentHtml(doc) {
     <thead><tr><th style="width:32px">No</th><th>Nama Barang</th><th style="width:48px">Qty</th><th style="width:60px">Satuan</th><th>Serial Number</th></tr></thead>
     <tbody>${rows}<tr><td></td><td style="text-align:right"><b>Total</b></td><td class="c"><b>${totalQty}</b></td><td></td><td></td></tr></tbody>
   </table>
-  ${doc.note ? `<div class="note"><b>Keterangan:</b> ${escapeHtml(doc.note)}</div>` : ""}
+  ${doc.note ? `<div class="note"><b>${doc.type === "BMB" ? "Asal / Keterangan" : "Keterangan"}:</b> ${escapeHtml(doc.note)}</div>` : ""}
   <div class="sigs">${signatures}</div>
   <div class="foot">Dokumen ini dibuat otomatis oleh LMS Terex${doc.created_by ? ` · dicatat oleh ${escapeHtml(doc.created_by)}` : ""}.</div>
 </body></html>`;
@@ -1305,7 +1305,7 @@ function DocumentListPage({ type, api, currentUser, customers }) {
                 <tr key={d.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/50">
                   <td className="px-5 py-3 font-medium text-gray-800 whitespace-nowrap">{d.number}</td>
                   <td className="px-5 py-3 text-gray-500 whitespace-nowrap">{d.date}</td>
-                  <td className="px-5 py-3 text-gray-600">{d.kindLabel}</td>
+                  <td className="px-5 py-3 text-gray-600">{d.kindLabel}{d.type === "BMB" && d.note && <div className="text-xs text-gray-400 max-w-[16rem] truncate" title={d.note}>{d.note}</div>}</td>
                   <td className="px-5 py-3 text-gray-600 text-xs">{d.party_from} <span className="text-gray-300">→</span> {d.party_to}</td>
                   <td className="px-5 py-3 text-gray-500 text-xs">{refOf(d)}</td>
                   <td className="px-5 py-3 text-gray-600 text-xs whitespace-nowrap">{d.item_count} barang · {d.total_qty} unit</td>
@@ -3011,6 +3011,7 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast, currentUse
   const [bkbNumber, setBkbNumber] = useState("");
   const [bkbFile, setBkbFile] = useState("");
   const [bkbFileName, setBkbFileName] = useState("");
+  const [bmbNote, setBmbNote] = useState(""); // asal barang, e.g. eks-site — printed on the BMB
   const [qty, setQty] = useState(1);
   const [note, setNote] = useState("");
   const [customer, setCustomer] = useState("");
@@ -3086,12 +3087,13 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast, currentUse
       const payload = mat.serialized ? { material, serials: unitsPayload(units), note, photo } : { material, qty, note, photo };
       payload.bkbNumber = bkbNumber.trim();
       if (bkbFile) payload.bkbFile = bkbFile;
+      if (bmbNote.trim()) payload.bmbNote = bmbNote.trim();
       if (needsDivisionPicker) payload.customer = customer;
       if (clusterRequired) payload.cluster = cluster;
       const result = await onSubmit(payload);
       showToast(`Berhasil menerima ${submittedQty} unit ${submittedMaterial}${result?.bmb ? ` · ${result.bmb.number}` : ""}`);
       // Reset fields for the next entry, but keep the form open.
-      setMaterial(""); setUnits([newUnit()]); setQty(1); setNote(""); setCluster(""); setPhoto(""); setBkbNumber(""); setBkbFile(""); setBkbFileName("");
+      setMaterial(""); setUnits([newUnit()]); setQty(1); setNote(""); setCluster(""); setPhoto(""); setBkbNumber(""); setBkbFile(""); setBkbFileName(""); setBmbNote("");
     } catch (err) {
       const msg = err.message || "";
       const conflict = mat.serialized ? /Serial Number sudah terdaftar di sistem: (\S+)/.exec(msg) : null;
@@ -3196,6 +3198,10 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast, currentUse
         <div>
           <label className="text-xs font-medium text-gray-500">File BKB Customer <span className="text-gray-400 font-normal">(opsional, PDF/foto)</span></label>
           <div className="mt-1"><DocumentUpload label="Upload file BKB Customer" value={bkbFile} valueName={bkbFileName} onChange={(v, name) => { setBkbFile(v); setBkbFileName(name); }} /></div>
+        </div>
+        <div className="sm:col-span-2">
+          <label className="text-xs font-medium text-gray-500">Asal barang / Keterangan BMB <span className="text-gray-400 font-normal">(opsional, tercetak di BMB)</span></label>
+          <input value={bmbNote} onChange={(e) => setBmbNote(e.target.value)} placeholder="mis. Barang baru, atau Material eks-site <nama site> (site terminasi), kondisi baik" className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
         </div>
       </div>
 
@@ -3312,6 +3318,9 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
   // then passed as bmbId so later saves (incl. retries) append to it.
   const [bkbNumber, setBkbNumber] = useState("");
   const [bmb, setBmb] = useState(null); // { id, number }
+  // Where the goods come from — the BMB's Keterangan. Pre-filled from the
+  // document (eks-site: site name + condition), editable.
+  const [originNote, setOriginNote] = useState("");
   const [customer, setCustomer] = useState("");
   const [cluster, setCluster] = useState("");
   const [clusterOptions, setClusterOptions] = useState([]);
@@ -3373,6 +3382,11 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
       const result = await api.parseBkb(docDataUrl);
       setDocumentType(result.documentType || "tidak_jelas");
       if (result.documentNumber) setBkbNumber(result.documentNumber);
+      if (result.documentType === "material_eks_site") {
+        setOriginNote(`Material eks-site${result.sourceSite ? ` ${result.sourceSite}` : ""} (site terminasi/dismantle), kondisi ${result.condition || "baik (tidak disebut di dokumen — cek fisik)"}`);
+      } else if (result.documentType === "penerimaan_baru") {
+        setOriginNote("Barang baru");
+      }
       const newRows = (result.items || []).map((it, i) => ({
         key: `${Date.now()}-${i}`,
         rawMaterial: it.rawMaterial,
@@ -3436,7 +3450,7 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
       try {
         const payload = mat.serialized ? { material: mat.name, serials: unitsPayload(row.units), note: row.note, photo } : { material: mat.name, qty: row.qty, note: row.note, photo };
         if (currentBmb) payload.bmbId = currentBmb.id;
-        else { payload.bkbNumber = bkbNumber.trim(); payload.bkbFile = docDataUrl; }
+        else { payload.bkbNumber = bkbNumber.trim(); payload.bkbFile = docDataUrl; if (originNote.trim()) payload.bmbNote = originNote.trim(); }
         if (needsDivisionPicker) payload.customer = customer;
         if (clusterRequired && mat.serialized) payload.cluster = cluster;
         const result = await onSubmit(payload);
@@ -3523,6 +3537,10 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
             <label className="text-xs font-medium text-gray-500">Nomor BKB Customer <span className="text-red-500">*</span>{bkbNumber && !bmb && <span className="text-emerald-600 font-normal"> — terbaca dari dokumen, cek lagi</span>}</label>
             <input value={bkbNumber} onChange={(e) => setBkbNumber(e.target.value)} disabled={!!bmb} placeholder="Nomor dokumen BKB dari customer" className="mt-1 w-full sm:w-80 border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600 disabled:bg-gray-50" />
             {bmb && <div className="text-xs text-emerald-700 mt-1">Tercatat di {bmb.number} — barang yang disimpan berikutnya ikut masuk BMB ini.</div>}
+          </div>
+          <div>
+            <label className="text-xs font-medium text-gray-500">Asal barang / Keterangan BMB <span className="text-gray-400 font-normal">(tercetak di BMB)</span></label>
+            <input value={originNote} onChange={(e) => setOriginNote(e.target.value)} disabled={!!bmb} placeholder="mis. Material eks-site MP Waan (site terminasi), kondisi baik" className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600 disabled:bg-gray-50" />
           </div>
 
           <div className="space-y-2">
