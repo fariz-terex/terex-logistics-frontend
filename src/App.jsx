@@ -4,7 +4,7 @@ import {
   FileBarChart, Database, Users, Settings as SettingsIcon, ChevronDown, ChevronRight, ChevronUp, ArrowUpDown,
   Search, Bell, LogOut, Plus, Minus, X, Check, AlertTriangle, Camera, ChevronLeft,
   Filter, Download, Upload, Eye, EyeOff, MapPin, Phone, User as UserIcon, Menu, FileText, Wrench, HelpCircle,
-  Lock, ShieldCheck, Clock3, BarChart3, Pencil, ScanLine
+  Lock, ShieldCheck, Clock3, BarChart3, Pencil
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
@@ -2971,7 +2971,6 @@ function SerialPhotoRows({ units, setUnits, api }) {
             <div className="flex items-center gap-2">
               <span className="text-xs text-gray-400 w-6">{i + 1}.</span>
               <input value={u.sn} onChange={(e) => patch(u.id, { sn: e.target.value, unread: false })} placeholder={u.reading ? "Membaca SN dari foto..." : "Serial Number"} className={`flex-1 min-w-0 border rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600 font-mono ${dup ? "border-red-300" : "border-gray-200"}`} />
-              <ScanButton onScan={(text) => patch(u.id, { sn: text, unread: false })} />
               <PhotoUpload compact api={api} value={u.photo} onChange={(v) => patch(u.id, { photo: v })} detectBarcode onDetected={(text) => text && patch(u.id, { sn: text, unread: false })} />
               {units.length > 1 && <button type="button" onClick={() => setUnits((prev) => prev.filter((x) => x.id !== u.id))} className="text-gray-300 hover:text-red-500"><X size={16} /></button>}
             </div>
@@ -4674,112 +4673,11 @@ function compressImage(file, maxDimension = 1600, quality = 0.75) {
   });
 }
 
-// Barcode scanning — an optional accelerator next to a manual Serial Number
-// field, never a replacement for it: some materials (several of Teleglobal's
-// among them) don't have a barcode at all, so typing has to keep working
-// exactly as before. iOS Safari has no native barcode-detection API, so this
-// goes through the camera stream (getUserMedia) with @zxing/browser doing
-// the decoding in JS — works the same way on Android and iPhone. The
-// library is only fetched the moment someone actually opens the scanner,
-// not on page load, since most sessions will never use it.
-function ScanButton({ onScan, className = "" }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className={`inline-flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 shrink-0 ${className}`}
-        title="Scan barcode Serial Number"
-        aria-label="Scan barcode"
-      >
-        <ScanLine size={16} />
-      </button>
-      {open && (
-        <BarcodeScannerModal
-          onScan={(text) => { setOpen(false); onScan(text); }}
-          onClose={() => setOpen(false)}
-        />
-      )}
-    </>
-  );
-}
-
-function BarcodeScannerModal({ onScan, onClose }) {
-  const videoRef = React.useRef(null);
-  const controlsRef = React.useRef(null);
-  const onScanRef = React.useRef(onScan);
-  onScanRef.current = onScan;
-  const [error, setError] = useState("");
-  const [ready, setReady] = useState(false);
-
-  React.useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const { BrowserMultiFormatReader } = await import("@zxing/browser");
-        const reader = new BrowserMultiFormatReader();
-        const controls = await reader.decodeFromConstraints(
-          { video: { facingMode: { ideal: "environment" } } },
-          videoRef.current,
-          (result) => {
-            // Per-frame "not found yet" is the normal case while aiming the
-            // camera, not an error — only a successful `result` matters here.
-            if (result) {
-              if (navigator.vibrate) navigator.vibrate(80);
-              onScanRef.current(result.getText());
-            }
-          }
-        );
-        if (cancelled) { controls.stop(); return; }
-        controlsRef.current = controls;
-        setReady(true);
-      } catch (err) {
-        if (cancelled) return;
-        setError(
-          err?.name === "NotAllowedError"
-            ? "Izin kamera ditolak. Aktifkan izin kamera untuk browser ini di pengaturan perangkat, atau isi Serial Number secara manual."
-            : "Tidak bisa membuka kamera di perangkat ini. Isi Serial Number secara manual."
-        );
-      }
-    })();
-    return () => { cancelled = true; controlsRef.current?.stop(); };
-  }, []);
-
-  return (
-    <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl overflow-hidden max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-          <div className="text-sm font-semibold text-gray-800 flex items-center gap-2"><ScanLine size={16} /> Scan Barcode</div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600" aria-label="Tutup"><X size={18} /></button>
-        </div>
-        {error ? (
-          <div className="p-5 text-sm text-red-600">{error}</div>
-        ) : (
-          <>
-            <div className="relative bg-black aspect-square">
-              <video ref={videoRef} className="w-full h-full object-cover" muted playsInline />
-              <div className="absolute inset-8 border-2 border-emerald-400 rounded-xl pointer-events-none" />
-              {!ready && <div className="absolute inset-0 flex items-center justify-center text-white text-sm">Membuka kamera...</div>}
-            </div>
-            <div className="px-4 py-3 text-xs text-gray-500">
-              Arahkan kamera ke barcode. Tidak ada barcode pada unit ini? Tutup lalu isi Serial Number secara manual.
-            </div>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// Reads a barcode out of an already-captured/uploaded photo (as opposed to
-// BarcodeScannerModal, which reads live off the camera feed) — same
-// @zxing/browser decoder, same lazy import so it's never fetched unless a
-// photo actually needs decoding. Many SN stickers are also barcoded (that's
-// what ScanButton is for), so a photo taken of one can skip the retyping
-// step too. Resolves to null — never throws — when nothing decodes, since
-// plenty of materials have no barcode at all and that's expected, not an
-// error (see ScanButton's comment above).
+// Reads a barcode out of an already-captured/uploaded photo with
+// @zxing/browser (lazy import — only fetched when a photo needs decoding).
+// There's no live camera scanner (removed on request); SN entry is typing or
+// reading it from a label photo. Resolves to null — never throws — when
+// nothing decodes, since plenty of materials have no barcode at all.
 async function detectBarcodeFromDataUrl(dataUrl) {
   try {
     const { BrowserMultiFormatReader } = await import("@zxing/browser");
@@ -6143,7 +6041,6 @@ function MaterialSwapPage({ swaps, api, materials, sites, homebases, onSubmit, s
                 placeholder="Cari atau pilih unit yang sudah Delivered..."
                 className="flex-1 border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600"
               />
-              <ScanButton onScan={setNewSn} />
             </div>
             {newFocused && <SnDropdown options={deliveredOptions} query={newSn} onPick={(sn) => { setNewSn(sn); setNewFocused(false); }} />}
             {newInfo === null && <div className="text-xs text-red-600 mt-1">Serial Number tidak ditemukan di sistem.</div>}
@@ -6192,7 +6089,6 @@ function MaterialSwapPage({ swaps, api, materials, sites, homebases, onSubmit, s
             <label className="text-sm font-medium text-gray-700">Serial Number Lama</label>
             <div className="mt-1.5 flex items-center gap-2">
               <input value={oldSn} onChange={(e) => setOldSn(e.target.value)} placeholder="SN unit yang dicabut (tulis manual)" className="flex-1 border border-gray-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-600" />
-              <ScanButton onScan={setOldSn} />
             </div>
           </div>
           <div>
@@ -7267,7 +7163,6 @@ function ToolReceiptForm({ tools, onSubmit, onCancel, showToast, api }) {
               <div key={i} className="flex items-center gap-2">
                 <span className="text-xs text-gray-400 w-5">{i + 1}.</span>
                 <input value={s} onChange={(e) => updateSN(i, e.target.value)} placeholder="Masukkan Serial Number" className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-600" />
-                <ScanButton onScan={(text) => updateSN(i, text)} />
                 <SnPhotoButton api={api} onRead={(text) => updateSN(i, text)} />
                 {serials.length > 1 && <button onClick={() => removeSN(i)} className="text-gray-300 hover:text-red-500"><X size={16} /></button>}
               </div>
