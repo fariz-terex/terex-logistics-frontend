@@ -676,9 +676,12 @@ const NAV_TREE = [
       // unified Delivery list (UnifiedRequestList) — the sidebar row stays
       // highlighted while on any of them too, since they read as "part of
       // Delivery" to the user even though they don't get their own row.
-      { key: "delivery", label: "Delivery", groupWith: ["returnFaulty", "stockTransfer"] },
+      { key: "delivery", label: "Delivery", groupWith: ["returnFaulty", "stockTransfer", "clusterTransfer"] },
       { key: "materialSwap", label: "Replacement" },
-      { key: "clusterTransfer", label: "Transfer Antar Cluster" },
+      // Transfer Antar Cluster is a tab on the Delivery page (PAGE_GROUPS.deliveryGroup)
+      // — an ownership change of Ready units between PIM clusters, not a
+      // shipment, so it keeps its own page rather than joining RequestCreate.
+      { key: "clusterTransfer", label: "Transfer Antar Cluster", hidden: true },
       { key: "returnToCustomer", label: "Return Material" },
       { key: "reconciliation", label: "Reconciliation" },
       // Return Material Faulty & Transfer Stock no longer get their own
@@ -710,6 +713,10 @@ const NAV_TREE = [
 // only shows if the user can open that page (e.g. Database shows just the
 // user's own division(s); a single tab isn't shown at all).
 const PAGE_GROUPS = {
+  deliveryGroup: [
+    { key: "delivery", label: "Delivery / Return / Transfer" },
+    { key: "clusterTransfer", label: "Transfer Antar Cluster (PIM)" },
+  ],
   stockGroup: [
     { key: "stock", label: "Material" },
     { key: "toolStock", label: "Alat" },
