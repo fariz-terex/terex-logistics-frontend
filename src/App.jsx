@@ -4535,6 +4535,7 @@ function ReceiptPhotosModal({ receiptId, api, onClose }) {
             <div>
               <div className="text-xs font-medium text-gray-600 mb-1.5">Foto Keseluruhan</div>
               {data.photo ? <PhotoThumb src={data.photo} alt="Foto keseluruhan" className="w-32 h-32 rounded-lg object-cover border border-gray-100" onOpen={setLightboxSrc} /> : <div className="text-xs text-gray-400 italic">Tidak ada (penerimaan sebelum foto diwajibkan)</div>}
+              {data.photoOriginal && <a href={data.photoOriginal} target="_blank" rel="noreferrer" className="block mt-1 text-xs text-emerald-700 underline">Lihat foto asli (Google Drive)</a>}
             </div>
             {data.units.length > 0 && (
               <div>
@@ -4544,6 +4545,7 @@ function ReceiptPhotosModal({ receiptId, api, onClose }) {
                     <div key={u.sn} className="text-center">
                       {u.photo ? <PhotoThumb src={u.photo} alt={u.sn} className="w-full aspect-square rounded-lg object-cover border border-gray-100" onOpen={setLightboxSrc} /> : <div className="w-full aspect-square rounded-lg bg-gray-50 border border-gray-100 flex items-center justify-center text-[10px] text-gray-400">tanpa foto</div>}
                       <div className="text-[11px] text-gray-600 font-mono mt-1 truncate" title={u.sn}>{u.sn}</div>
+                      {u.original && <a href={u.original} target="_blank" rel="noreferrer" className="text-[10px] text-emerald-700 underline">Asli (Drive)</a>}
                     </div>
                   ))}
                 </div>
@@ -4673,6 +4675,37 @@ function openDataUrlInNewTab(dataUrl) {
 // perfectly legible for documentation purposes while cutting them down to
 // a few hundred KB, so this is applied before the data URL ever leaves the
 // browser — not just a server-side limit increase.
+// Original-photo archive (Google Drive): when enabled, every photo that goes
+// through compressImage also has its ORIGINAL file staged to the backend in
+// the background, keyed by the SHA-256 of the compressed copy — the server
+// matches it to the compressed photo once a form is saved (backend
+// utils/originals.js). Best effort: failures are ignored, never block a form.
+// At most 2 uploads at a time so field connections don't choke on a batch.
+let originalStager = null;
+function setupOriginalStaging(api, enabled) {
+  if (!enabled) { originalStager = null; return; }
+  const queue = [];
+  let active = 0;
+  const pump = () => {
+    while (active < 2 && queue.length) {
+      const job = queue.shift();
+      active++;
+      job().catch(() => {}).finally(() => { active--; pump(); });
+    }
+  };
+  originalStager = (file, compressed) => {
+    if (!file || !file.type?.startsWith("image/") || file.size > 20 * 1024 * 1024) return;
+    queue.push(async () => {
+      const bytes = Uint8Array.from(atob(compressed.split(",")[1]), (c) => c.charCodeAt(0));
+      const digest = await crypto.subtle.digest("SHA-256", bytes);
+      const hash = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+      const original = await new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(r.result); r.onerror = reject; r.readAsDataURL(file); });
+      await api.stageOriginal(hash, original);
+    });
+    pump();
+  };
+}
+
 function compressImage(file, maxDimension = 1600, quality = 0.75) {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -4688,7 +4721,9 @@ function compressImage(file, maxDimension = 1600, quality = 0.75) {
       canvas.width = width; canvas.height = height;
       const ctx = canvas.getContext("2d");
       ctx.drawImage(img, 0, 0, width, height);
-      resolve(canvas.toDataURL("image/jpeg", quality));
+      const out = canvas.toDataURL("image/jpeg", quality);
+      resolve(out);
+      if (originalStager) originalStager(file, out);
     };
     img.onerror = () => { URL.revokeObjectURL(objectUrl); reject(new Error("Gagal memproses gambar")); };
     img.src = objectUrl;
@@ -5816,6 +5851,7 @@ function ReconciliationDetail({ r, onBack, onApprove, onRevise, onEdit, role }) 
         <Card className="p-5">
           <div className="text-sm font-semibold text-gray-800 mb-2">Foto Keseluruhan Material</div>
           <PhotoThumb src={r.photo} alt="Foto keseluruhan material" className="w-32 h-32 rounded-lg object-cover border border-gray-100" onOpen={setLightboxSrc} />
+          {r.photoOriginal && <a href={r.photoOriginal} target="_blank" rel="noreferrer" className="block mt-1 text-xs text-emerald-700 underline">Lihat foto asli (Google Drive)</a>}
         </Card>
       )}
 
@@ -5845,7 +5881,7 @@ function ReconciliationDetail({ r, onBack, onApprove, onRevise, onEdit, role }) 
                     {i.serialPhotos?.[si]
                       ? <PhotoThumb src={i.serialPhotos[si]} alt={s} className="w-10 h-10 rounded object-cover border border-gray-100 shrink-0" onOpen={setLightboxSrc} />
                       : <div className="w-10 h-10 rounded bg-gray-100 text-[9px] text-gray-400 flex items-center justify-center text-center shrink-0">tanpa foto</div>}
-                    <span className="text-xs font-mono text-gray-700 break-all">{s}</span>
+                    <span className="text-xs font-mono text-gray-700 break-all">{s}{i.serialOriginals?.[si] && <a href={i.serialOriginals[si]} target="_blank" rel="noreferrer" className="block text-[10px] font-sans text-emerald-700 underline">Asli (Drive)</a>}</span>
                   </div>
                 ))}
               </div>
@@ -9003,6 +9039,11 @@ function createApiClient(baseUrl, getToken, onUnauthorized) {
     getReceipt: (id) => request(`/stock/receipts/${encodeURIComponent(id)}`),
     getDocuments: (params) => request(`/documents?${new URLSearchParams(Object.entries(params).filter(([, v]) => v)).toString()}`),
     getDocument: (id) => request(`/documents/${encodeURIComponent(id)}`),
+    gdriveEnabled: () => request("/gdrive/enabled"),
+    gdriveStatus: () => request("/gdrive/status"),
+    gdriveAuthUrl: () => request("/gdrive/auth-url", { method: "POST" }),
+    gdriveDisconnect: () => request("/gdrive/disconnect", { method: "POST" }),
+    stageOriginal: (hash, original) => request("/gdrive/originals", { method: "POST", body: { hash, original } }),
     parseBkb: (document, fileName) => request("/stock/parse-bkb", { method: "POST", body: { document, fileName } }),
     detectMaterialsPhoto: (photos) => request("/stock/detect-materials-photo", { method: "POST", body: { photos } }),
     readSerialPhoto: (photo) => request("/stock/read-serial-photo", { method: "POST", body: { photo } }),
@@ -9259,6 +9300,64 @@ function AppVersionInfo({ api }) {
           {backend === null ? "Memeriksa..." : backend === "error" ? "Tidak bisa dihubungi" : `${backend.commit} · aktif sejak ${fmt(backend.startedAt)}`}
         </span>
       </div>
+    </Card>
+  );
+}
+
+// Manager: connect the Google account (logistik.terex@gmail.com) that the
+// ORIGINAL photos are archived to. Connecting goes through Google's own
+// consent page (backend /api/gdrive/auth-url -> Google -> /callback -> back
+// here with ?gdrive=...); no token or password ever passes through the app.
+function GoogleDriveArchive({ api, showToast }) {
+  const [status, setStatus] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const load = () => api.gdriveStatus().then(setStatus).catch(() => setStatus({ error: true }));
+  React.useEffect(() => {
+    load();
+    const result = new URLSearchParams(window.location.search).get("gdrive");
+    if (result) {
+      showToast(result === "ok" ? "Google Drive terhubung" : `Gagal menghubungkan Google Drive (${result.replace("error:", "")})`);
+      try { window.history.replaceState(null, "", window.location.pathname + window.location.hash); } catch { /* ignore */ }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const connect = async () => {
+    setBusy(true);
+    try { const { url } = await api.gdriveAuthUrl(); window.location.href = url; }
+    catch (err) { showToast(err.message || "Gagal memulai koneksi Google Drive"); setBusy(false); }
+  };
+  const disconnect = async () => {
+    setBusy(true);
+    try { await api.gdriveDisconnect(); await load(); showToast("Google Drive diputuskan"); }
+    catch (err) { showToast(err.message || "Gagal memutuskan"); }
+    finally { setBusy(false); }
+  };
+  const c = status?.counts || {};
+  return (
+    <Card className="p-5 space-y-3 text-sm">
+      <div>
+        <div className="font-semibold text-gray-800">Arsip Foto Asli — Google Drive</div>
+        <div className="text-xs text-gray-500 mt-0.5">Foto asli (tidak dikompres) dari Reconciliation & Terima Barang disimpan ke Google Drive; aplikasi tetap menampilkan versi kompres.</div>
+      </div>
+      {!status ? <div className="text-xs text-gray-400">Memuat...</div> : status.error ? <div className="text-xs text-red-600">Gagal memuat status.</div> : !status.configured ? (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-900 space-y-1">
+          <div className="font-medium">Belum dikonfigurasi di server.</div>
+          <div>Set <span className="font-mono">GOOGLE_CLIENT_ID</span> dan <span className="font-mono">GOOGLE_CLIENT_SECRET</span> di Railway (service backend). Redirect URI OAuth: <span className="font-mono break-all">{status.redirectUri}</span></div>
+        </div>
+      ) : status.connected ? (
+        <div className="space-y-2">
+          <div className="text-xs text-gray-600">Terhubung ke <span className="font-medium text-gray-800">{status.email || "(akun tidak diketahui)"}</span>
+            {status.email && status.email.toLowerCase() !== status.expectedEmail && <span className="text-amber-700"> — bukan {status.expectedEmail}</span>}
+          </div>
+          <div className="text-xs text-gray-500">Terarsip {c.archived || 0} · menunggu {(c.claimed || 0)} · gagal {c.failed || 0}</div>
+          <GhostButton disabled={busy} onClick={disconnect} className="py-1.5 px-3 text-xs">Putuskan</GhostButton>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <div className="text-xs text-gray-600">Belum terhubung. Login sebagai <span className="font-medium">{status.expectedEmail}</span> saat diminta.</div>
+          <PrimaryButton disabled={busy} onClick={connect} className="py-1.5 px-3 text-xs">{busy ? "Membuka Google..." : "Hubungkan Google Drive"}</PrimaryButton>
+        </div>
+      )}
     </Card>
   );
 }
@@ -9928,6 +10027,11 @@ export default function App() {
   const [routeInit, setRouteInit] = useState(false); // true once the URL hash has been applied after login/restore
   const [sessionNotice, setSessionNotice] = useState(""); // shown on the Login screen after an expired/rejected session
   const [online, setOnline] = useState(() => navigator.onLine !== false);
+  React.useEffect(() => {
+    if (!authToken) { setupOriginalStaging(null, false); return; }
+    api.gdriveEnabled().then((r) => setupOriginalStaging(api, !!r?.enabled)).catch(() => setupOriginalStaging(null, false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authToken]);
   const [dataLoading, setDataLoading] = useState(false);
   const [apiError, setApiError] = useState("");
   const [toast, setToast] = useState(null); // { message }
@@ -11233,6 +11337,7 @@ export default function App() {
         </div>
       </Card>
       <TelegramLink api={api} showToast={showToast} />
+      {role === ROLES.MANAGER && <GoogleDriveArchive api={api} showToast={showToast} />}
       {role === ROLES.MANAGER && (
         <DataMaintenanceSection>
           <StockConsistencyCheck api={api} showToast={showToast} />
