@@ -1086,7 +1086,116 @@ function TopBar({ user, onLogout, onNavigate, title, subtitle, searchQuery, setS
    DASHBOARD
    ============================================================ */
 
-function Dashboard({ role, userName, setPage, deliveries, returns, reconciliations, transfers, materials, tools, materialSwaps, api, currentUser }) {
+// "Perlu Tindakan Anda": every document currently waiting on THIS user's
+// role, grouped by the next step, newest first. Each document opens its
+// detail directly; "Lihat semua" opens the list pre-filtered (via the same
+// uiStateStore keys the lists persist their filters in). Who does which
+// step mirrors the backend's requireRole on each transition — e.g. only
+// Manager approves a Delivery Request, only Technician resubmits/ships a
+// Return Faulty. Empty groups are left out.
+function TaskInbox({ role, userName, userCustomers, setPage, gotoDetail, deliveries, returns, reconciliations, transfers, materials, api }) {
+  const isManager = role === ROLES.MANAGER;
+  const isLogistics = role === ROLES.LOGISTICS || isManager;
+  const isTech = role === ROLES.TECH;
+  const seesClusters = hasAccess("clusterTransfer", role, userCustomers) && role !== ROLES.TECH && role !== ROLES.DIVISION_MANAGER;
+
+  const [clusterTransfers, setClusterTransfers] = useState([]);
+  React.useEffect(() => {
+    if (!seesClusters || !api?.getClusterTransfers) return;
+    let cancelled = false;
+    api.getClusterTransfers().then((rows) => { if (!cancelled) setClusterTransfers(rows || []); }).catch(() => {});
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seesClusters]);
+
+  const newestFirst = (a, b) => ((a.date || "") === (b.date || "") ? String(b.id).localeCompare(String(a.id)) : (a.date || "") < (b.date || "") ? 1 : -1);
+  const withStatus = (list, statuses) => (list || []).filter((x) => statuses.includes(x.status)).sort(newestFirst);
+  const openList = (key, value, page) => () => { uiStateStore.set(key, value); setPage(page); };
+
+  const dItem = (d) => ({ id: d.id, sub: `${d.homebase || "-"} · ${d.requester || "-"} · ${d.date || ""}`, open: () => gotoDetail("delivery", "delivery", d.id) });
+  const rItem = (r) => ({ id: r.id, sub: `${r.homebase || "-"} · ${r.technician || "-"} · ${r.date || ""}`, open: () => gotoDetail("returnFaulty", "return", r.id) });
+  const tItem = (t) => ({ id: t.id, sub: `${t.homebase_from} → ${t.homebase_to} · ${t.material || ""}`, open: () => gotoDetail("stockTransfer", "transfer", t.id) });
+  const cItem = (r) => ({ id: r.id, sub: `${r.homebase || "-"} · ${r.period || ""}`, open: () => gotoDetail("reconciliation", "recon", r.id) });
+  const myReturns = (returns || []).filter((r) => r.technician === userName);
+
+  const groups = [
+    isManager && { title: "Delivery Request menunggu approval", icon: Truck, color: "bg-emerald-50 text-emerald-700",
+      docs: withStatus(deliveries, ["Waiting Logistics Approval"]).map(dItem), all: openList("delivery:arah", "delivery", "delivery") },
+    isLogistics && { title: "Delivery perlu assign stok (pilih SN)", icon: Boxes, color: "bg-amber-50 text-amber-700",
+      docs: withStatus(deliveries, ["Waiting Stock Assignment"]).map(dItem), all: openList("delivery:arah", "delivery", "delivery") },
+    isLogistics && { title: "Delivery siap dikirim (dokumen & kirim)", icon: Package, color: "bg-blue-50 text-blue-700",
+      docs: withStatus(deliveries, ["Preparing"]).map(dItem), all: openList("delivery:arah", "delivery", "delivery") },
+    isLogistics && { title: "Delivery dalam perjalanan — konfirmasi diterima", icon: Truck, color: "bg-indigo-50 text-indigo-700",
+      docs: withStatus(deliveries, ["Shipped"]).map(dItem), all: openList("delivery:arah", "delivery", "delivery") },
+    isLogistics && { title: "Transfer Stock menunggu approval", icon: ArrowLeftRight, color: "bg-teal-50 text-teal-700",
+      docs: withStatus(transfers, ["Waiting Logistics Approval"]).map(tItem), all: openList("delivery:arah", "transfer", "delivery") },
+    isLogistics && { title: "Return Faulty menunggu review", icon: Undo2, color: "bg-red-50 text-red-600",
+      docs: withStatus(returns, ["Waiting Logistics Review"]).map(rItem), all: openList("delivery:arah", "return", "delivery") },
+    isLogistics && { title: "Return Faulty dalam perjalanan — terima di gudang", icon: Undo2, color: "bg-amber-50 text-amber-700",
+      docs: withStatus(returns, ["On Delivery"]).map(rItem), all: openList("delivery:arah", "return", "delivery") },
+    isLogistics && { title: "Return Faulty perlu QC / diselesaikan", icon: Check, color: "bg-blue-50 text-blue-700",
+      docs: withStatus(returns, ["Received by Warehouse", "QC Checking"]).map(rItem), all: openList("delivery:arah", "return", "delivery") },
+    isLogistics && { title: "Rekonsiliasi menunggu review", icon: ClipboardList, color: "bg-amber-50 text-amber-600",
+      docs: withStatus(reconciliations, ["Waiting Logistics Review"]).map(cItem), all: openList("reconciliation:filter", "Waiting Logistics Review", "reconciliation") },
+    seesClusters && { title: "Transfer Antar Cluster menunggu persetujuan", icon: ArrowLeftRight, color: "bg-blue-50 text-blue-700",
+      docs: clusterTransfers.filter((t) => t.status === "Pending").map((t) => ({ id: t.sn, sub: `${t.material} · ${t.cluster_from} → ${t.cluster_to} · ${t.requested_by || ""}`, open: openList("clusterTransfer:status", "Pending", "clusterTransfer") })),
+      all: openList("clusterTransfer:status", "Pending", "clusterTransfer") },
+    isLogistics && { title: "Material di bawah stok minimum", icon: AlertTriangle, color: "bg-red-50 text-red-600",
+      docs: (materials || []).filter((m) => m.status !== "Inactive" && m.minStock > 0 && m.ready <= m.minStock)
+        .map((m) => ({ id: m.name, sub: `Ready ${m.ready} · minimum ${m.minStock}`, open: openList("stock:lowOnly", true, "stock") })),
+      all: openList("stock:lowOnly", true, "stock") },
+    isTech && { title: "Return Faulty perlu diperbaiki", icon: AlertTriangle, color: "bg-red-50 text-red-600",
+      docs: withStatus(myReturns, ["Revision Required"]).map(rItem), all: openList("delivery:arah", "return", "delivery") },
+    isTech && { title: "Return Faulty disetujui — kirim barang & input resi", icon: Truck, color: "bg-emerald-50 text-emerald-700",
+      docs: withStatus(myReturns, ["Ready to Ship"]).map(rItem), all: openList("delivery:arah", "return", "delivery") },
+    isTech && { title: "Rekonsiliasi perlu diperbaiki", icon: ClipboardList, color: "bg-red-50 text-red-600",
+      docs: withStatus(reconciliations, ["Revision Required"]).map(cItem), all: openList("reconciliation:filter", "Revision Required", "reconciliation") },
+  ].filter((g) => g && g.docs.length > 0);
+
+  // Division Manager has no step of their own anywhere — nothing to show.
+  if (role === ROLES.DIVISION_MANAGER) return null;
+  const total = groups.reduce((n, g) => n + g.docs.length, 0);
+  return (
+    <Card className="p-5">
+      <SectionTitle title="Perlu Tindakan Anda" subtitle={total ? `${total} dokumen menunggu langkah dari Anda — klik untuk membuka` : "Semua beres, tidak ada yang menunggu Anda"} />
+      {groups.length === 0 ? (
+        <EmptyState text="Tidak ada tindakan yang tertunda saat ini." />
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {groups.map((g) => (
+            <div key={g.title} className="border border-gray-100 rounded-xl p-3.5">
+              <div className="flex items-center gap-2.5 mb-2">
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${g.color}`}><g.icon size={16} /></div>
+                <div className="text-sm font-medium text-gray-900 flex-1">{g.title}</div>
+                <span className="text-xs font-semibold text-gray-700 bg-gray-100 rounded-full px-2 py-0.5">{g.docs.length}</span>
+              </div>
+              <div className="divide-y divide-gray-50">
+                {g.docs.slice(0, 3).map((d) => (
+                  <button key={d.id} onClick={d.open} className="w-full flex items-center justify-between gap-3 py-2 text-left hover:bg-gray-50 rounded-lg px-1.5">
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-gray-800 truncate">{d.id}</div>
+                      <div className="text-xs text-gray-400 truncate">{d.sub}</div>
+                    </div>
+                    <ChevronRight size={15} className="text-gray-300 shrink-0" />
+                  </button>
+                ))}
+              </div>
+              {g.docs.length > 3 && (
+                <button onClick={g.all} className="mt-1 text-xs text-emerald-800 font-medium px-1.5">Lihat semua ({g.docs.length})</button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function Dashboard({ role, userName, setPage, gotoDetail, deliveries, returns, reconciliations, transfers, materials, tools, materialSwaps, api, currentUser }) {
+  const taskInbox = (
+    <TaskInbox role={role} userName={userName} userCustomers={currentUser?.customers} setPage={setPage} gotoDetail={gotoDetail}
+      deliveries={deliveries} returns={returns} reconciliations={reconciliations} transfers={transfers} materials={materials} api={api} />
+  );
   const pendingApproval = deliveries.filter((d) => d.status === "Waiting Logistics Approval").length;
   const transferPendingApproval = (transfers || []).filter((t) => t.status === "Waiting Logistics Approval").length;
   const inProgress = deliveries.filter((d) => ["In Progress", "Waiting Stock Assignment", "Preparing", "Shipped"].includes(d.status)).length;
@@ -1135,6 +1244,8 @@ function Dashboard({ role, userName, setPage, deliveries, returns, reconciliatio
           <h1 className="text-2xl font-bold text-gray-900">{greeting}, {firstName} 👋</h1>
           <p className="text-gray-500 mt-1">{formattedDate} · {role}</p>
         </div>
+
+        {taskInbox}
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           {quickActions.map((a) => (
@@ -1217,19 +1328,8 @@ function Dashboard({ role, userName, setPage, deliveries, returns, reconciliatio
     { label: "Faulty di Warehouse", value: faultyInWarehouse.toLocaleString("id-ID"), sub: "Belum Sent to Customer", icon: AlertTriangle, color: "bg-red-50 text-red-600", page: "stock" },
   ];
 
-  // Return/Reconciliation/Delivery review-and-approve queues are only ever
-  // actioned by Logistics Staff or Manager (see HelpPage) — SPV and Division
-  // Manager have no review step of their own, so showing this queue to them
-  // just links to pages they can't act on.
-  const canReview = role === ROLES.LOGISTICS || role === ROLES.MANAGER;
+  // The review/approval queues moved into TaskInbox ("Perlu Tindakan Anda") at the top.
   const isSpv = role === ROLES.SPV;
-  const actions = !canReview ? [] : [
-    { icon: Undo2, color: "bg-red-50 text-red-600", title: "Return Faulty menunggu review", sub: "Diajukan oleh tim lapangan", count: waitingReview, cta: "Review", page: "returnFaulty" },
-    { icon: ClipboardList, color: "bg-amber-50 text-amber-600", title: "Rekonsiliasi menunggu review", sub: "Periode berjalan", count: reconReview, cta: "Review", page: "reconciliation" },
-    { icon: Truck, color: "bg-emerald-50 text-emerald-700", title: "Delivery Request menunggu approval", sub: "Diajukan oleh tim lapangan", count: pendingApproval, cta: "Approval", page: "delivery" },
-    { icon: ArrowLeftRight, color: "bg-teal-50 text-teal-700", title: "Transfer Stock menunggu approval", sub: "Antar homebase", count: transferPendingApproval, cta: "Approval", page: "delivery" },
-    { icon: AlertTriangle, color: "bg-blue-50 text-blue-600", title: "Material mendekati stok minimum", sub: "Perlu perhatian", count: lowStock, cta: "Lihat", page: "stock" },
-  ].filter((a) => a.count > 0);
 
   // Real counts for the last 7 days, replacing what used to be permanently
   // hardcoded placeholder numbers. Not shown to SPV — Delivery/Faulty/Recon
@@ -1261,6 +1361,8 @@ function Dashboard({ role, userName, setPage, deliveries, returns, reconciliatio
         </div>
         {isSpv && <PrimaryButton onClick={() => setPage("deliveryCreate")}><Plus size={16} /> Buat Delivery Request</PrimaryButton>}
       </div>
+
+      {taskInbox}
 
       <div className={`grid grid-cols-1 gap-4 ${isDivisionManager ? "md:grid-cols-4" : "md:grid-cols-4"}`}>
         {(isDivisionManager ? divisionCards : [
@@ -1322,37 +1424,10 @@ function Dashboard({ role, userName, setPage, deliveries, returns, reconciliatio
         </div>
       ))}
 
-      {(canReview || showActivityChart) && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {canReview && (
-            <Card className={`p-5 ${showActivityChart ? "lg:col-span-2" : "lg:col-span-3"}`}>
-              <SectionTitle title="Aktivitas Diperlukan" subtitle="Item yang membutuhkan tindakan Anda" />
-              {actions.length === 0 ? (
-                <EmptyState text="Tidak ada tindakan yang tertunda saat ini." />
-              ) : (
-                <div className="space-y-1">
-                  {actions.map((a, i) => (
-                    <div key={i} className="flex items-center justify-between py-3 border-b border-gray-50 last:border-0">
-                      <div className="flex items-center gap-3">
-                        <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${a.color}`}><a.icon size={17} /></div>
-                        <div>
-                          <div className="text-sm font-medium text-gray-900">{a.title}</div>
-                          <div className="text-xs text-gray-500">{a.sub}</div>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <span className="text-sm font-semibold text-gray-700">{a.count}</span>
-                        <GhostButton onClick={() => setPage(a.page)} className="py-1.5 px-3 text-xs">{a.cta}</GhostButton>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </Card>
-          )}
-
+      {showActivityChart && (
+        <div className="grid grid-cols-1 gap-6">
           {showActivityChart && (
-            <Card className={`p-5 ${canReview ? "" : "lg:col-span-3"}`}>
+            <Card className="p-5">
               <SectionTitle title="Activity Overview" subtitle="7 hari terakhir" />
               <ResponsiveContainer width="100%" height={220}>
                 <LineChart data={weekActivity}>
@@ -10606,7 +10681,7 @@ export default function App() {
     content = (
       <div className="p-8 flex items-center justify-center h-full text-gray-400 text-sm">Memuat data dari server...</div>
     );
-  } else if (page === "dashboard") content = <Dashboard role={role} userName={currentUser?.name} setPage={goto} deliveries={deliveries} returns={returns} reconciliations={reconciliations} transfers={transfers} materials={materials} tools={tools} materialSwaps={materialSwaps} api={api} currentUser={currentUser} />;
+  } else if (page === "dashboard") content = <Dashboard role={role} userName={currentUser?.name} setPage={goto} gotoDetail={gotoDetail} deliveries={deliveries} returns={returns} reconciliations={reconciliations} transfers={transfers} materials={materials} tools={tools} materialSwaps={materialSwaps} api={api} currentUser={currentUser} />;
   else if (page === "delivery") {
     // `selectedDelivery` can outlive its record (e.g. the background
     // refresh — see loadAllData's silent poll — lands between it being
