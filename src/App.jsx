@@ -3000,7 +3000,7 @@ function unitProblems(units) {
 }
 const unitsPayload = (units) => units.filter((u) => u.sn.trim() || u.photo).map((u) => ({ sn: u.sn.trim(), photo: u.photo }));
 
-function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast, currentUser, customers, api }) {
+function GoodsReceiptForm({ materials, onSubmit, onCancel, onUseBkb, showToast, currentUser, customers, api }) {
   const [material, setMaterial] = useState("");
   const [units, setUnits] = useState([newUnit()]);
   // Overall photo of everything received — required for every receipt.
@@ -3134,7 +3134,10 @@ function GoodsReceiptForm({ materials, onSubmit, onCancel, showToast, currentUse
 
   return (
     <Card className="p-5 space-y-4">
-      <div className="text-sm font-semibold text-gray-800">Terima Barang</div>
+      <div className="flex items-start justify-between gap-3">
+        <div className="text-sm font-semibold text-gray-800">Terima Barang — Input Manual</div>
+        {onUseBkb && <button type="button" onClick={onUseBkb} className="text-xs text-emerald-800 font-medium underline decoration-dotted shrink-0">Punya file BKB? Deteksi otomatis</button>}
+      </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <label className="text-xs font-medium text-gray-500">Material <span className="text-red-500">*</span></label>
@@ -3303,7 +3306,7 @@ async function suggestNextSerials(materialName, count, api) {
 // time, through the exact same onSubmit (POST /receipts) the manual form
 // uses, so all of that route's validation still applies. Nothing from the
 // AI read reaches stock without a human confirming it first.
-function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser, customers, api }) {
+function BkbReceiptPanel({ materials, onSubmit, onCancel, onManual, showToast, currentUser, customers, api }) {
   const [docDataUrl, setDocDataUrl] = useState("");
   const [docName, setDocName] = useState("");
   const [detecting, setDetecting] = useState(false);
@@ -3466,11 +3469,15 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
 
   return (
     <Card className="p-5 space-y-4">
-      <div className="text-sm font-semibold text-gray-800">Deteksi Barang dari BKB</div>
+      <div>
+        <div className="text-sm font-semibold text-gray-800">Terima Barang</div>
+        {!rows && <div className="text-xs text-gray-500 mt-0.5">Upload BKB dari customer — sistem membaca daftar barang, SN, divisi, dan nomor BKB-nya. Periksa & lengkapi foto sebelum disimpan.</div>}
+      </div>
 
       {!rows && (
         <div className="space-y-3">
-          <DocumentUpload label="Upload BKB (PDF atau foto)" value={docDataUrl} valueName={docName} onChange={(dataUrl, name) => { setDocDataUrl(dataUrl); setDocName(name); }} />
+          <DocumentUpload label="Upload BKB Customer (PDF atau foto)" value={docDataUrl} valueName={docName} onChange={(dataUrl, name) => { setDocDataUrl(dataUrl); setDocName(name); }} />
+          {onManual && <div className="text-xs text-gray-500">Tidak ada file BKB? <button type="button" onClick={onManual} className="text-emerald-800 font-medium underline decoration-dotted">Isi manual</button></div>}
           {detectError && <div className="bg-red-50 border border-red-100 text-red-700 text-xs rounded-lg px-3 py-2">{detectError}</div>}
           <div className="flex justify-end gap-2">
             <GhostButton onClick={onCancel}>Batal</GhostButton>
@@ -3861,10 +3868,9 @@ function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMateri
       <SectionTitle
         title="Stock Material" subtitle="Ketersediaan material di gudang pusat"
         right={canReceive ? (
-          <div className="flex gap-2">
-            <GhostButton onClick={() => { setShowBkbPanel(!showBkbPanel); setShowReceiptForm(false); }}><FileText size={15} /> Deteksi dari BKB</GhostButton>
-            <PrimaryButton onClick={() => { setShowReceiptForm(!showReceiptForm); setShowBkbPanel(false); }}><Plus size={16} /> Terima Barang</PrimaryButton>
-          </div>
+          // Terima Barang starts from the customer's BKB (upload -> detect);
+          // the manual form is only the fallback, reached from inside the panel.
+          <PrimaryButton onClick={() => { const open = !(showBkbPanel || showReceiptForm); setShowBkbPanel(open); setShowReceiptForm(false); }}><Plus size={16} /> Terima Barang</PrimaryButton>
         ) : null}
       />
 
@@ -3872,6 +3878,7 @@ function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMateri
         <BkbReceiptPanel
           materials={materials}
           onCancel={() => setShowBkbPanel(false)}
+          onManual={() => { setShowBkbPanel(false); setShowReceiptForm(true); }}
           onSubmit={onSubmitReceipt}
           showToast={showToast}
           currentUser={currentUser}
@@ -3884,6 +3891,7 @@ function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMateri
         <GoodsReceiptForm
           materials={materials}
           onCancel={() => setShowReceiptForm(false)}
+          onUseBkb={() => { setShowReceiptForm(false); setShowBkbPanel(true); }}
           onSubmit={onSubmitReceipt}
           showToast={showToast}
           currentUser={currentUser}
