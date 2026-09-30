@@ -694,49 +694,76 @@ const NAV_TREE = [
       { key: "stockTransfer", label: "Transfer Stock", hidden: true },
     ],
   },
-  {
-    key: "inventory", label: "Inventory", icon: Package,
-    children: [
-      { key: "stock", label: "Stock Material" },
-      { key: "movement", label: "Stock Movement", hidden: true },
-      { key: "toolStock", label: "Stock Alat" },
-      { key: "consumableStock", label: "Stock Consumable" },
-    ],
-  },
-  {
-    key: "databaseGroup", label: "Database", icon: Boxes,
-    children: [
-      { key: "databaseMSG", label: "MSG" },
-      { key: "databaseRGR", label: "RGR" },
-      { key: "databasePIM", label: "PIM" },
-      { key: "databaseTeleglobal", label: "Teleglobal" },
-    ],
-  },
-  {
-    key: "reportsGroup", label: "Reports", icon: FileBarChart,
-    children: [
-      { key: "reports", label: "Delivery Report" },
-      { key: "reportsFaulty", label: "Faulty Return Report", hidden: true },
-      { key: "reportsRecon", label: "Reconciliation Report", hidden: true },
-      { key: "reportsDeviceLocation", label: "Lokasi Perangkat", hidden: true },
-    ],
-  },
-  {
-    key: "masterGroup", label: "Master Data", icon: Database,
-    children: [
-      { key: "masterMaterial", label: "Master Material" },
-      { key: "masterSite", label: "Master Site" },
-      { key: "masterHomebase", label: "Master Homebase" },
-      { key: "masterArea", label: "Master Area" },
-      { key: "masterCustomer", label: "Master Customer" },
-      { key: "masterTools", label: "Master Alat" },
-      { key: "masterConsumable", label: "Master Consumable" },
-    ],
-  },
-  { key: "users", label: "User Management", icon: Users },
-  { key: "help", label: "Panduan Penggunaan", icon: HelpCircle },
-  { key: "settings", label: "Settings", icon: SettingsIcon },
+  // Groups: one sidebar row, the pages inside switch via PageTabs.
+  { key: "stockGroup", label: "Stock", icon: Package, tabs: true },
+  { key: "databaseGroup", label: "Database Unit", icon: Boxes, tabs: true },
+  // Faulty/Recon/Device Location reports are hidden WIP pages (HIDDEN_PAGES),
+  // so Reports is a single row for now.
+  { key: "reports", label: "Reports", icon: FileBarChart },
+  { key: "masterGroup", label: "Master Data", icon: Database, tabs: true },
+  // Panduan Penggunaan & Settings live in the profile menu (TopBar).
 ];
+
+// Menus that used to be several sidebar rows each now share one row, with
+// tabs (PageTabs) to switch between their pages. Every page keeps its own
+// route key, component and access rule — old links still work, and a tab
+// only shows if the user can open that page (e.g. Database shows just the
+// user's own division(s); a single tab isn't shown at all).
+const PAGE_GROUPS = {
+  stockGroup: [
+    { key: "stock", label: "Material" },
+    { key: "toolStock", label: "Alat" },
+    { key: "consumableStock", label: "Consumable" },
+  ],
+  databaseGroup: [
+    { key: "databaseMSG", label: "MSG" },
+    { key: "databaseRGR", label: "RGR" },
+    { key: "databasePIM", label: "PIM" },
+    { key: "databaseTeleglobal", label: "Teleglobal" },
+  ],
+  masterGroup: [
+    { key: "masterMaterial", label: "Material" },
+    { key: "masterSite", label: "Site" },
+    { key: "masterHomebase", label: "Homebase" },
+    { key: "masterArea", label: "Area" },
+    { key: "masterCustomer", label: "Customer" },
+    { key: "masterTools", label: "Alat" },
+    { key: "masterConsumable", label: "Consumable" },
+    { key: "users", label: "User" },
+  ],
+};
+// Pages that aren't tabs but still belong to (highlight) a group's row.
+const GROUP_EXTRA_PAGES = {
+  stockGroup: ["movement", "serialDetail", "toolSerialDetail"],
+  reports: ["reportsFaulty", "reportsRecon", "reportsDeviceLocation"],
+};
+function groupOfPage(page) {
+  for (const [group, tabs] of Object.entries(PAGE_GROUPS)) if (tabs.some((t) => t.key === page)) return group;
+  for (const [group, pages] of Object.entries(GROUP_EXTRA_PAGES)) if (pages.includes(page)) return group;
+  return null;
+}
+const groupTabs = (group, role, userCustomers) => (PAGE_GROUPS[group] || []).filter((t) => hasAccess(t.key, role, userCustomers));
+
+function PageTabs({ page, role, userCustomers, onSelect }) {
+  const group = groupOfPage(page);
+  const tabs = group ? groupTabs(group, role, userCustomers) : [];
+  if (tabs.length < 2 || !tabs.some((t) => t.key === page)) return null;
+  return (
+    <div className="bg-white border-b border-gray-100 px-4 sm:px-8 overflow-x-auto">
+      <div className="flex gap-1 min-w-max">
+        {tabs.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => onSelect(t.key)}
+            className={`px-3.5 py-2.5 text-sm border-b-2 -mb-px transition-colors whitespace-nowrap ${t.key === page ? "border-emerald-700 text-emerald-800 font-medium" : "border-transparent text-gray-500 hover:text-gray-800"}`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function hasAccess(key, role, userCustomers = []) {
   // Cluster transfer is a PIM-only feature: Manager (unscoped, oversees
@@ -779,7 +806,7 @@ function hasAccess(key, role, userCustomers = []) {
 }
 
 function Sidebar({ page, setPage, role, userName, userCustomers, mobileOpen, onClose }) {
-  const [open, setOpen] = useState({ material: true, inventory: false, databaseGroup: false, reportsGroup: false, masterGroup: false });
+  const [open, setOpen] = useState({ material: true });
 
   const toggle = (key) => setOpen((o) => ({ ...o, [key]: !o[key] }));
   const navigate = (key) => { setPage(key); onClose?.(); };
@@ -803,13 +830,17 @@ function Sidebar({ page, setPage, role, userName, userCustomers, mobileOpen, onC
         {NAV_TREE.map((item) => {
           if (!item.children) {
             if (item.hidden) return null;
-            if (!hasAccess(item.key, role, userCustomers)) return null;
-            const active = page === item.key;
+            // A tab group opens on its first page the user can access
+            // (staying put if already inside the group).
+            const tabs = item.tabs ? groupTabs(item.key, role, userCustomers) : null;
+            if (tabs ? tabs.length === 0 : !hasAccess(item.key, role, userCustomers)) return null;
+            const active = page === item.key || groupOfPage(page) === item.key;
+            const target = tabs ? (tabs.some((t) => t.key === page) ? page : tabs[0].key) : item.key;
             const Icon = item.icon;
             return (
               <button
                 key={item.key}
-                onClick={() => navigate(item.key)}
+                onClick={() => navigate(target)}
                 className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
                   active ? "bg-emerald-800 text-white" : "text-gray-600 hover:bg-gray-50"
                 }`}
@@ -880,7 +911,8 @@ function Sidebar({ page, setPage, role, userName, userCustomers, mobileOpen, onC
    TOP BAR (with role switcher for prototype demo purposes)
    ============================================================ */
 
-function TopBar({ user, onLogout, title, subtitle, searchQuery, setSearchQuery, searchResults, notifications, onNotificationClick, unreadCount = 0, onMarkAllRead, onMenuClick }) {
+function TopBar({ user, onLogout, onNavigate, title, subtitle, searchQuery, setSearchQuery, searchResults, notifications, onNotificationClick, unreadCount = 0, onMarkAllRead, onMenuClick }) {
+  const [profileOpen, setProfileOpen] = useState(false);
   const [searchDismissed, setSearchDismissed] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
@@ -991,17 +1023,33 @@ function TopBar({ user, onLogout, title, subtitle, searchQuery, setSearchQuery, 
             )}
           </div>
 
-          <div className="hidden sm:block text-right">
-            <div className="text-xs font-medium text-gray-800 truncate max-w-[140px]">{user?.name}</div>
-            <div className="text-[11px] text-gray-400 truncate max-w-[140px]">{user?.role}{user?.customers?.length ? ` · ${user.customers.join(", ")}` : ""}</div>
+          {/* Profile menu: Panduan Penggunaan, Settings and Logout (moved out of the sidebar). */}
+          <div className="relative">
+            <button onClick={() => setProfileOpen((o) => !o)} className="flex items-center gap-2 rounded-lg border border-gray-200 pl-1.5 pr-2 py-1 hover:bg-gray-50" title="Menu akun">
+              <span className="w-7 h-7 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center font-semibold text-xs">
+                {(user?.name || "?").split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase()}
+              </span>
+              <span className="hidden sm:block text-left">
+                <span className="block text-xs font-medium text-gray-800 truncate max-w-[140px]">{user?.name}</span>
+                <span className="block text-[11px] text-gray-400 truncate max-w-[140px]">{user?.role}{user?.customers?.length ? ` · ${user.customers.join(", ")}` : ""}</span>
+              </span>
+              <ChevronDown size={14} className="text-gray-400" />
+            </button>
+            {profileOpen && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setProfileOpen(false)} />
+                <div className="absolute right-0 mt-1.5 w-56 bg-white border border-gray-200 rounded-xl shadow-lg py-1.5 z-20">
+                  <div className="px-4 py-2 border-b border-gray-50 sm:hidden">
+                    <div className="text-sm font-medium text-gray-800 truncate">{user?.name}</div>
+                    <div className="text-xs text-gray-400 truncate">{user?.role}</div>
+                  </div>
+                  <button onClick={() => { setProfileOpen(false); onNavigate("help"); }} className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50"><HelpCircle size={16} className="text-gray-400" /> Panduan Penggunaan</button>
+                  <button onClick={() => { setProfileOpen(false); onNavigate("settings"); }} className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50"><SettingsIcon size={16} className="text-gray-400" /> Settings</button>
+                  <button onClick={() => { setProfileOpen(false); onLogout(); }} className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 border-t border-gray-50"><LogOut size={16} /> Logout</button>
+                </div>
+              </>
+            )}
           </div>
-          <button
-            onClick={onLogout}
-            title="Logout"
-            className="w-9 h-9 rounded-lg border border-gray-200 flex items-center justify-center hover:bg-gray-50 text-gray-500"
-          >
-            <LogOut size={16} />
-          </button>
         </div>
       </div>
 
@@ -3606,7 +3654,7 @@ function MaterialSerialDetail({ material, customer, customerOptions, materials, 
   const [search, setSearch] = usePersistedState(`serial:${customer || ""}|${material || ""}:search`, "");
   const [highlighted, setHighlighted] = useState(highlightSerial || null);
   const [expandedSn, setExpandedSn] = useState(null);
-  const [snPhoto, setSnPhoto] = useState(null); // receipt label photo being viewed
+  const [receiptPhotosFor, setReceiptPhotosFor] = useState(null); // receipt id whose photos are open
   const rowRefs = React.useRef({});
   const canManage = role === ROLES.MANAGER || role === ROLES.LOGISTICS;
   const [dialog, setDialog] = useState(null); // { mode: "send"|"receive", sn }
@@ -3787,7 +3835,7 @@ function MaterialSerialDetail({ material, customer, customerOptions, materials, 
                       {!inlineDates && (expanded ? <ChevronDown size={14} className="text-gray-400" /> : <ChevronRight size={14} className="text-gray-400" />)}
                       {s.sn}
                       {s.receipt_photo && (
-                        <button onClick={(e) => { e.stopPropagation(); setSnPhoto(s.receipt_photo); }} title="Foto label saat diterima" className="text-emerald-700 hover:text-emerald-900"><Camera size={13} /></button>
+                        <button onClick={(e) => { e.stopPropagation(); setReceiptPhotosFor(s.received_ref); }} title="Foto penerimaan barang (keseluruhan + label per unit)" className="text-emerald-700 hover:text-emerald-900"><Camera size={13} /></button>
                       )}
                     </span>
                   </td>
@@ -3843,7 +3891,7 @@ function MaterialSerialDetail({ material, customer, customerOptions, materials, 
         saving={saving}
         error={dialogError}
       />
-      <ImageLightbox src={snPhoto} onClose={() => setSnPhoto(null)} />
+      {receiptPhotosFor && <ReceiptPhotosModal receiptId={receiptPhotosFor} api={api} onClose={() => setReceiptPhotosFor(null)} />}
     </div>
   );
 }
@@ -10830,7 +10878,7 @@ export default function App() {
       <Sidebar page={page} setPage={goto} role={role} userName={currentUser?.name} userCustomers={currentUser?.customers} mobileOpen={mobileSidebarOpen} onClose={() => setMobileSidebarOpen(false)} />
       <div className="flex-1 flex flex-col overflow-hidden">
         <TopBar
-          user={currentUser} onLogout={handleLogout} title={titleMain} subtitle={titleSub}
+          user={currentUser} onLogout={handleLogout} onNavigate={goto} title={titleMain} subtitle={titleSub}
           searchQuery={searchQuery} setSearchQuery={setSearchQuery} searchResults={searchResults}
           notifications={notifications} onNotificationClick={(n) => n.onSelect()}
           unreadCount={unreadNotifCount} onMarkAllRead={markAllNotifsRead}
@@ -10847,6 +10895,7 @@ export default function App() {
             <button onClick={() => setApiError("")} className="text-red-400 hover:text-red-600"><X size={14} /></button>
           </div>
         )}
+        <PageTabs page={page} role={role} userCustomers={currentUser?.customers} onSelect={goto} />
         <div className="flex-1 overflow-y-auto">{content}</div>
       </div>
 
