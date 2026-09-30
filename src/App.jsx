@@ -3404,6 +3404,22 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
     }
   };
 
+  // Everything still blocking "Simpan", per item, so the button never just
+  // sits there disabled without saying why.
+  const missing = rows ? [
+    needsDivisionPicker && !customer && "Pilih Divisi (Customer)",
+    clusterRequired && !cluster && "Pilih Cluster",
+    !bmb && !bkbNumber.trim() && "Isi Nomor BKB Customer",
+    !photo && "Upload Foto Keseluruhan Penerimaan Barang",
+    ...rows.flatMap((row) => {
+      const mat = matFor(row);
+      const name = mat?.name || `"${row.rawMaterial}"`;
+      if (!mat) return [`${name}: pilih material yang sesuai`];
+      if (mat.serialized) return unitProblems(row.units).map((p) => `${name}: ${p}`);
+      return row.qty > 0 ? [] : [`${name}: qty harus lebih dari 0`];
+    }),
+  ].filter(Boolean) : [];
+
   const saveAll = async () => {
     setSavingAll(true);
     let successCount = 0;
@@ -3454,16 +3470,25 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
         <div className="space-y-4">
           <div className="text-xs text-gray-500">{rows.length} barang terdeteksi dari <span className="font-medium text-gray-700">{docName}</span> — periksa & lengkapi sebelum disimpan.</div>
 
-          {documentType && documentType !== "penerimaan_baru" && (
+          {/* Material eks-site in good condition is a normal receipt (info only);
+              only faulty goods / outgoing / non-receipt documents get a warning. */}
+          {documentType === "material_eks_site" && (
+            <div className="bg-blue-50 border border-blue-100 text-blue-800 text-xs rounded-lg px-3 py-2.5 flex items-start gap-2">
+              <FileText size={15} className="shrink-0 mt-0.5" />
+              <div>Dokumen ini berisi <span className="font-medium">material eks-site</span> (site terminasi/dismantle). Kalau kondisinya masih baik, barang boleh diterima di sini dan masuk ke stok Ready. Barang yang rusak jangan disimpan di sini — laporkan lewat Return Faulty.</div>
+            </div>
+          )}
+          {["faulty", "pengiriman_keluar", "lainnya", "tidak_jelas"].includes(documentType) && (
             <div className="bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded-lg px-3 py-2.5 flex items-start gap-2">
               <AlertTriangle size={15} className="shrink-0 mt-0.5" />
               <div>
                 <div className="font-medium">
-                  {documentType === "pengembalian_material" && "Dokumen ini sepertinya Pengembalian Material dari site, bukan penerimaan barang baru dari supplier."}
-                  {documentType === "lainnya" && "Dokumen ini sepertinya bukan dokumen penerimaan barang baru."}
+                  {documentType === "faulty" && "Dokumen ini menyebut barangnya rusak/faulty."}
+                  {documentType === "pengiriman_keluar" && "Dokumen ini sepertinya surat jalan barang KELUAR dari gudang Terex, bukan barang masuk."}
+                  {documentType === "lainnya" && "Dokumen ini sepertinya bukan dokumen penyerahan barang ke gudang."}
                   {documentType === "tidak_jelas" && "Sistem tidak yakin jenis dokumen ini."}
                 </div>
-                <div className="mt-0.5">Fitur ini hanya untuk barang baru masuk gudang dari supplier — kalau ini pengembalian material dari site, input lewat menu Return Material Faulty, bukan di sini. Barang di bawah tetap ditampilkan kalau Anda ingin cek, tapi jangan disimpan lewat sini kalau memang bukan penerimaan baru.</div>
+                <div className="mt-0.5">Terima Barang untuk barang yang diserahkan customer dan masuk ke stok siap pakai (baru, atau eks-site kondisi baik). Barang rusak dari lapangan lewat Return Faulty. Cek lagi sebelum menyimpan.</div>
               </div>
             </div>
           )}
@@ -3551,10 +3576,17 @@ function BkbReceiptPanel({ materials, onSubmit, onCancel, showToast, currentUser
             {rows.length === 0 && <div className="text-xs text-gray-400 italic">Tidak ada barang lagi untuk disimpan.</div>}
           </div>
 
+          {rows.length > 0 && missing.length > 0 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-900">
+              <div className="font-semibold mb-1 flex items-center gap-1.5"><AlertTriangle size={14} /> Belum bisa disimpan — lengkapi dulu:</div>
+              <ul className="list-disc pl-5 space-y-0.5">{missing.map((m, i) => <li key={i}>{m}</li>)}</ul>
+            </div>
+          )}
+
           <div className="flex justify-end gap-2">
             <GhostButton onClick={onCancel}>{rows.length === 0 ? "Tutup" : "Batal"}</GhostButton>
             {rows.length > 0 && (
-              <PrimaryButton disabled={savingAll || !photo || (!bmb && !bkbNumber.trim())} onClick={saveAll}>{savingAll ? "Menyimpan & upload foto..." : !photo ? "Upload Foto Keseluruhan dulu" : (!bmb && !bkbNumber.trim()) ? "Isi Nomor BKB Customer dulu" : `Simpan ${rows.length} Barang`}</PrimaryButton>
+              <PrimaryButton disabled={savingAll || missing.length > 0} onClick={saveAll}>{savingAll ? "Menyimpan & upload foto..." : `Simpan ${rows.length} Barang`}</PrimaryButton>
             )}
           </div>
         </div>
