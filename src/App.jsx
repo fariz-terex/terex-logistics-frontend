@@ -5612,6 +5612,8 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
   // button so the user knows exactly what to fill instead of facing a
   // silently disabled button.
   const rowName = (r, idx) => r.material || `Material #${idx + 1}`;
+  // A serialized row's label photo per SN slot (old drafts kept them as row-level detectionPhotos).
+  const slotPhotosOf = (r) => r.serials.map((_, i) => (r.serialPhotos || [])[i] || (r.detectionPhotos || [])[i] || "");
   const missing = [
     !isEdit && needsDivisionPicker && !customer && "Pilih Divisi (Customer)",
     !homebase && "Pilih Homebase",
@@ -5621,6 +5623,7 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
     rows.length === 0 && "Tambahkan minimal satu material (Deteksi dari Foto atau Tambah Material Manual)",
     ...rows.map((r, idx) => !r.material && `${rowName(r, idx)}: pilih jenis material`),
     ...rows.map((r, idx) => r.material && r.serialized && r.serials.some((sn) => !sn.trim()) && `${rowName(r, idx)}: isi semua Serial Number (${r.serials.filter((sn) => !sn.trim()).length} masih kosong)`),
+    ...rows.map((r, idx) => r.material && r.serialized && slotPhotosOf(r).some((ph) => !ph) && `${rowName(r, idx)}: ${slotPhotosOf(r).filter((ph) => !ph).length} unit belum ada foto labelnya`),
     snConflicts.length > 0 && `Ada Serial Number yang sedang dipakai di transaksi lain (${snConflicts.join(", ")})`,
     dupSNs.length > 0 && `Serial Number tercatat lebih dari sekali: ${dupSNs.join(", ")} — hapus salah satunya atau perbaiki SN-nya`,
     discRows.length > 0 && !reason.trim() && "Isi Alasan Discrepancy",
@@ -5723,7 +5726,7 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
             {r.notice && <div className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2">{r.notice}</div>}
             {r.serialized && r.serials.length > 0 && (
               <div className="space-y-2">
-                <div className="text-xs text-gray-400">Serial Number — upload/ganti foto label per unit, SN akan terbaca otomatis (klik foto untuk memperbesar):</div>
+                <div className="text-xs text-gray-400">Serial Number & foto label <span className="text-red-500">*</span> — setiap unit wajib difoto (disimpan sebagai bukti); SN terbaca otomatis dari fotonya. Klik foto untuk memperbesar:</div>
                 {r.serials.map((s, si) => {
                   const conflict = findSNConflict(s, { returns, reconciliations, excludeId });
                   // Old drafts only have row-level detectionPhotos — fall back to those by position.
@@ -5775,7 +5778,7 @@ function ReconciliationCreate({ onSubmit, onCancel, materials, returns, reconcil
 
       <div className="flex justify-between">
         <GhostButton onClick={onCancel}>Batal</GhostButton>
-        <PrimaryButton disabled={!valid} onClick={async () => { if (await onSubmit({ homebase, period, photo, reason: discRows.length > 0 ? reason.trim() : "", items: rows.map(({ detectionPhotos, detectionPhoto, serialPhotos, notice, ...r }) => ({ ...r, reason: "", systemQty: sysQty(r.material) })), ...(!isEdit && needsDivisionPicker ? { customer } : {}) })) draft.clear(); }}>
+        <PrimaryButton disabled={!valid} onClick={async () => { if (await onSubmit({ homebase, period, photo, reason: discRows.length > 0 ? reason.trim() : "", items: rows.map(({ detectionPhotos, detectionPhoto, serialPhotos, notice, ...r }) => ({ ...r, reason: "", systemQty: sysQty(r.material), serialPhotos: r.serialized ? slotPhotosOf({ ...r, serialPhotos, detectionPhotos }) : [] })), ...(!isEdit && needsDivisionPicker ? { customer } : {}) })) draft.clear(); }}>
           <Check size={16} /> {isEdit ? "Kirim Ulang ke Logistics" : "Submit Reconciliation"}
         </PrimaryButton>
       </div>
@@ -5836,8 +5839,15 @@ function ReconciliationDetail({ r, onBack, onApprove, onRevise, onEdit, role }) 
               <div>Actual Qty: <span className="font-medium">{i.actualQty}</span></div>
             </div>
             {i.serialized && i.serials?.length > 0 && (
-              <div className="flex flex-wrap gap-2 mb-2">
-                {i.serials.map((s, si) => <span key={si} className="text-xs bg-gray-50 rounded-full px-2.5 py-1 text-gray-600">{s}</span>)}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-2">
+                {i.serials.map((s, si) => (
+                  <div key={si} className="flex items-center gap-2 bg-gray-50 rounded-lg p-1.5">
+                    {i.serialPhotos?.[si]
+                      ? <PhotoThumb src={i.serialPhotos[si]} alt={s} className="w-10 h-10 rounded object-cover border border-gray-100 shrink-0" onOpen={setLightboxSrc} />
+                      : <div className="w-10 h-10 rounded bg-gray-100 text-[9px] text-gray-400 flex items-center justify-center text-center shrink-0">tanpa foto</div>}
+                    <span className="text-xs font-mono text-gray-700 break-all">{s}</span>
+                  </div>
+                ))}
               </div>
             )}
             {i.reason && <div className="text-xs text-gray-500 bg-gray-50 rounded-lg p-3">{i.reason}</div>}
