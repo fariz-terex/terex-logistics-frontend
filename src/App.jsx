@@ -8907,17 +8907,109 @@ function ReportsPage({ title, subtitle, data, columns, statusOf, dateOf, searchO
 
 const DEFAULT_API_BASE = "https://backend-production-5543.up.railway.app/api";
 
+// The Delivery / Return lists arrive WITHOUT photos (`light: true`, each
+// photo field is just true/null) so a list of hundreds of requests stays
+// small. A detail or edit page needs the real photos: this fetches the full
+// record when the one from the list is light, stores it back into the list
+// (`onLoaded`), and renders `children(fullRecord)`. When the 90-second
+// background refresh swaps the list entry for a light one again, the last
+// full version stays on screen while the fresh one loads — no flicker.
+function FullRecord({ record, load, onLoaded, children }) {
+  const lastFull = React.useRef(null);
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  if (!record.light) lastFull.current = record;
+  else if (lastFull.current && lastFull.current.id !== record.id) lastFull.current = null;
+  React.useEffect(() => {
+    if (!record.light) return undefined;
+    let cancelled = false;
+    setFailed(false);
+    load(record.id)
+      .then((full) => { if (!cancelled && full) onLoaded(full); })
+      .catch(() => { if (!cancelled) setFailed(true); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [record.id, record.light, attempt]);
+  const shown = record.light ? lastFull.current : record;
+  if (shown) return children(shown);
+  return (
+    <div className="p-8 flex flex-col items-center justify-center gap-3 h-full text-gray-400 text-sm">
+      {failed ? (
+        <>
+          <div className="text-gray-600">Gagal memuat detail {record.id} — periksa koneksi internet Anda.</div>
+          <GhostButton onClick={() => setAttempt((n) => n + 1)}>Coba lagi</GhostButton>
+        </>
+      ) : `Memuat detail ${record.id}...`}
+    </div>
+  );
+}
+
+// Writes that are NOT made retry-safe below: login, and the calls that only
+// read/analyse or stage a file (nothing to duplicate, big bodies).
+const NO_RETRY_KEY = /^\/(auth\/|gdrive\/|stock\/(parse-bkb|detect-materials-photo|read-serial-photo)|notifications)/;
+const RETRY_KEY_TTL_MS = 10 * 60 * 1000;
+
+// Cheap fingerprint of a request body (can be several MB of photos).
+function quickHash(text) {
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return (h >>> 0).toString(36);
+}
+const newRequestKey = () => {
+  try { return crypto.randomUUID(); } catch { return `k-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`; }
+};
+
 function createApiClient(baseUrl, getToken, onUnauthorized) {
-  async function request(path, options = {}) {
+  // Two guards against the same write landing twice (a Delivery Request was
+  // once created 15x by clicking Submit again and again on a bad connection):
+  //  - inFlight: the identical write is still on its way -> hand back the
+  //    same promise instead of sending it again;
+  //  - retryKeys: the last attempt died on the NETWORK (we never saw an
+  //    answer, the server may have processed it) -> the retry carries the
+  //    same Idempotency-Key, and the backend answers with the record it
+  //    already created instead of creating another one.
+  const inFlight = new Map();
+  const retryKeys = new Map();
+
+  function request(path, options = {}) {
+    const method = options.method || "GET";
+    const bodyText = options.body !== undefined ? JSON.stringify(options.body) : undefined;
+    if (method === "GET" || NO_RETRY_KEY.test(path)) return send(path, method, bodyText);
+    const sig = `${method} ${path} ${bodyText ? `${bodyText.length}:${quickHash(bodyText)}` : ""}`;
+    if (inFlight.has(sig)) return inFlight.get(sig);
+    const saved = retryKeys.get(sig);
+    const entry = saved && Date.now() - saved.at < RETRY_KEY_TTL_MS ? saved : { key: newRequestKey(), at: Date.now() };
+    retryKeys.set(sig, entry);
+    const promise = send(path, method, bodyText, entry.key).then(
+      (data) => { retryKeys.delete(sig); return data; },
+      (err) => { if (!err.network) retryKeys.delete(sig); throw err; }, // the server answered: this attempt is settled
+    ).finally(() => inFlight.delete(sig));
+    inFlight.set(sig, promise);
+    return promise;
+  }
+
+  async function send(path, method, bodyText, requestKey) {
     const token = getToken();
-    const res = await fetch(`${baseUrl}${path}`, {
-      method: options.method || "GET",
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
-    });
+    let res;
+    try {
+      res = await fetch(`${baseUrl}${path}`, {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(requestKey ? { "Idempotency-Key": requestKey } : {}),
+        },
+        body: bodyText,
+      });
+    } catch (e) {
+      // fetch() itself failed ("Failed to fetch"): no answer from the server
+      // — connection dropped or too slow. Say so in plain words.
+      const err = new Error(method === "GET"
+        ? "Tidak dapat terhubung ke server — periksa koneksi internet Anda."
+        : "Koneksi ke server terputus sebelum ada jawaban. Periksa koneksi internet, lalu klik sekali lagi — data tidak akan tersimpan dobel.");
+      err.network = true;
+      throw err;
+    }
     let data = null;
     let parseError = null;
     try { data = await res.json(); } catch (e) { parseError = e; }
@@ -9096,6 +9188,7 @@ function createApiClient(baseUrl, getToken, onUnauthorized) {
     searchToolSerials: (q) => request(`/tools/serials?q=${encodeURIComponent(q)}`),
 
     getDeliveries: () => request("/deliveries"),
+    getDelivery: (id) => request(`/deliveries/${encodeURIComponent(id)}`),
     createDelivery: (payload) => request("/deliveries", { method: "POST", body: payload }),
     approveDelivery: (id) => request(`/deliveries/${id}/approve`, { method: "POST" }),
     rejectDelivery: (id, reason) => request(`/deliveries/${id}/reject`, { method: "POST", body: { reason } }),
@@ -9121,6 +9214,7 @@ function createApiClient(baseUrl, getToken, onUnauthorized) {
     advanceDelivery: (id, payload) => request(`/deliveries/${id}/advance`, { method: "POST", body: payload }),
 
     getReturns: () => request("/returns"),
+    getReturn: (id) => request(`/returns/${encodeURIComponent(id)}`),
     createReturn: (payload) => request("/returns", { method: "POST", body: payload }),
     approveReturn: (id) => request(`/returns/${id}/approve`, { method: "POST" }),
     reviseReturn: (id, note) => request(`/returns/${id}/revise`, { method: "POST", body: { note } }),
@@ -10217,27 +10311,38 @@ export default function App() {
   const loadAllData = async ({ silent = false } = {}) => {
     if (!silent) { setDataLoading(true); setApiError(""); }
     try {
+      // Each collection is loaded on its own: one that fails (slow line,
+      // server hiccup) keeps its previous data and is named in the banner,
+      // instead of the old all-or-nothing Promise.all that left EVERY page
+      // empty with a bare "Failed to fetch".
+      const failed = [];
+      let lastError = "";
+      const part = (label, promise) => promise.catch((err) => { failed.push(label); lastError = err.message || ""; return undefined; });
       const [mats, movs, dels, rets, recs, sts, hbs, ars, custs, usrs, tls, swaps, csms, trs] = await Promise.all([
-        api.getStock(), api.getMovements(), api.getDeliveries(), api.getReturns(),
-        api.getReconciliations(), api.getSites(), api.getHomebases(), api.getAreas(),
-        api.getCustomers(), api.getUsers().catch(() => []), // Users list is Manager-only; ignore 403 for other roles
-        api.getTools(), api.getMaterialSwaps(), api.getConsumables(),
-        api.getTransfers().catch(() => []), // 403 for roles with no stockTransfer access (e.g. Technician)
+        part("Stock", api.getStock()), part("Stock Movement", api.getMovements()), part("Delivery", api.getDeliveries()), part("Return Faulty", api.getReturns()),
+        part("Reconciliation", api.getReconciliations()), part("Site", api.getSites()), part("Homebase", api.getHomebases()), part("Area", api.getAreas()),
+        part("Customer", api.getCustomers()), api.getUsers().catch(() => undefined), // Users list is Manager-only; ignore 403 for other roles
+        part("Alat", api.getTools()), part("Replacement", api.getMaterialSwaps()), part("Consumable", api.getConsumables()),
+        api.getTransfers().catch(() => undefined), // 403 for roles with no stockTransfer access (e.g. Technician)
       ]);
-      setMaterials(mats.map(normalizeMaterial));
-      setMovements(movs);
-      setDeliveries(dels);
-      setReturns(rets);
-      setReconciliations(recs);
-      setSites(sts.map(normalizeSite));
-      setHomebases(hbs);
-      setAreas(ars);
-      setCustomers(custs);
-      setUsers(usrs);
-      setTools(tls);
-      setMaterialSwaps(swaps);
-      setConsumables(csms);
-      setTransfers(trs);
+      if (mats) setMaterials(mats.map(normalizeMaterial));
+      if (movs) setMovements(movs);
+      if (dels) setDeliveries(dels);
+      if (rets) setReturns(rets);
+      if (recs) setReconciliations(recs);
+      if (sts) setSites(sts.map(normalizeSite));
+      if (hbs) setHomebases(hbs);
+      if (ars) setAreas(ars);
+      if (custs) setCustomers(custs);
+      if (usrs) setUsers(usrs);
+      if (tls) setTools(tls);
+      if (swaps) setMaterialSwaps(swaps);
+      if (csms) setConsumables(csms);
+      if (trs) setTransfers(trs);
+      if (failed.length > 0) {
+        if (silent) console.error("[loadAllData] background refresh failed for:", failed.join(", "), lastError);
+        else setApiError(`Sebagian data gagal dimuat (${failed.join(", ")}). ${lastError} Muat ulang halaman untuk mencoba lagi.`);
+      }
     } catch (err) {
       if (silent) console.error("[loadAllData] background refresh failed:", err.message);
       else setApiError(err.message || "Gagal memuat data dari server");
@@ -10390,7 +10495,7 @@ export default function App() {
   // warehouse when Delivered) — just update the delivery's SN statuses.
   const submitMaterialSwap = async (payload) => {
     const created = await api.createMaterialSwap(payload);
-    setMaterialSwaps((prev) => [created, ...prev]);
+    setMaterialSwaps((prev) => [created, ...prev.filter((x) => x.id !== created.id)]);
     return created;
   };
 
@@ -10745,7 +10850,7 @@ export default function App() {
   const submitDelivery = async (data) => {
     try {
       const created = await api.createDelivery(data);
-      setDeliveries((prev) => [created, ...prev]);
+      setDeliveries((prev) => [created, ...prev.filter((x) => x.id !== created.id)]);
       showToast(`Delivery Request ${created.id} berhasil dibuat`);
       goto("delivery");
       return true; // lets the form know it can drop its saved draft
@@ -10823,7 +10928,7 @@ export default function App() {
   const submitReturn = async (data) => {
     try {
       const created = await api.createReturn(data);
-      setReturns((prev) => [created, ...prev]);
+      setReturns((prev) => [created, ...prev.filter((x) => x.id !== created.id)]);
       goto("delivery");
       return true;
     } catch (err) { setApiError(err.message); return false; }
@@ -10892,7 +10997,7 @@ export default function App() {
   const submitTransfer = async (data) => {
     try {
       const created = await api.createTransfer(data);
-      setTransfers((prev) => [created, ...prev]);
+      setTransfers((prev) => [created, ...prev.filter((x) => x.id !== created.id)]);
       showToast(`Transfer ${created.id} diajukan — menunggu approval Logistics`);
       goto("delivery");
       return true;
@@ -10907,7 +11012,7 @@ export default function App() {
   const submitTransferQuiet = async (data) => {
     try {
       const created = await api.createTransfer(data);
-      setTransfers((prev) => [created, ...prev]);
+      setTransfers((prev) => [created, ...prev.filter((x) => x.id !== created.id)]);
       showToast(`Transfer ${created.id} diajukan — menunggu approval Logistics`);
       return true;
     } catch (err) { setApiError(err.message); return false; }
@@ -10940,7 +11045,7 @@ export default function App() {
   const submitRecon = async (data) => {
     try {
       const created = await api.createReconciliation(data);
-      setReconciliations((prev) => [created, ...prev]);
+      setReconciliations((prev) => [created, ...prev.filter((x) => x.id !== created.id)]);
       goto("reconciliation");
       return true;
     } catch (err) { setApiError(err.message); return false; }
@@ -11181,30 +11286,34 @@ export default function App() {
     // there's no error boundary below the root).
     const d = selectedDelivery && deliveries.find((x) => x.id === selectedDelivery);
     content = d
-      ? <DeliveryDetail delivery={d} onBack={() => setSelectedDelivery(null)} onApprove={approveDelivery} onReject={rejectDelivery} onCancel={cancelDelivery} onAssignStock={assignDeliveryStock} onShip={shipDelivery} onAddResi={addDeliveryResi} onAddBast={addDeliveryBast} onAddBkbLink={addDeliveryBkbLink} onAdvance={advanceDelivery} onReturnTools={returnDeliveryTools} role={role} materials={materials} tools={tools} api={api} />
+      ? <FullRecord record={d} load={api.getDelivery} onLoaded={(full) => setDeliveries((prev) => prev.map((x) => (x.id === full.id ? full : x)))}>{(full) => <DeliveryDetail delivery={full} onBack={() => setSelectedDelivery(null)} onApprove={approveDelivery} onReject={rejectDelivery} onCancel={cancelDelivery} onAssignStock={assignDeliveryStock} onShip={shipDelivery} onAddResi={addDeliveryResi} onAddBast={addDeliveryBast} onAddBkbLink={addDeliveryBkbLink} onAdvance={advanceDelivery} onReturnTools={returnDeliveryTools} role={role} materials={materials} tools={tools} api={api} />}</FullRecord>
       : <UnifiedRequestList deliveries={deliveries} returns={returns} transfers={transfers} gotoDetail={gotoDetail} setPage={goto} role={role} />;
   } else if (page === "deliveryCreate") content = <RequestCreate onSubmitDelivery={submitDelivery} onSubmitReturn={submitReturn} onSubmitTransfer={submitTransfer} onSubmitTransferQuiet={submitTransferQuiet} onCancel={() => goto("delivery")} materials={materials} tools={tools} consumables={consumables} sites={sites} homebases={homebases} currentUser={currentUser} customers={customers} api={api} returns={returns} reconciliations={reconciliations} role={role} />;
   else if (page === "returnFaulty") {
     const r = selectedReturn && returns.find((x) => x.id === selectedReturn);
     content = r
-      ? <ReturnFaultyDetail r={r} onBack={() => setSelectedReturn(null)} onApprove={approveReturn} onRevise={reviseReturn} onShip={shipReturn} onAddResi={addResiReturn} onReceive={receiveReturn} onQC={qcReturn} onComplete={completeReturn} onEdit={() => setPage("returnFaultyEdit")} role={role} api={api} />
+      ? <FullRecord record={r} load={api.getReturn} onLoaded={(full) => setReturns((prev) => prev.map((x) => (x.id === full.id ? full : x)))}>{(full) => <ReturnFaultyDetail r={full} onBack={() => setSelectedReturn(null)} onApprove={approveReturn} onRevise={reviseReturn} onShip={shipReturn} onAddResi={addResiReturn} onReceive={receiveReturn} onQC={qcReturn} onComplete={completeReturn} onEdit={() => setPage("returnFaultyEdit")} role={role} api={api} />}</FullRecord>
       : <UnifiedRequestList deliveries={deliveries} returns={returns} transfers={transfers} gotoDetail={gotoDetail} setPage={goto} role={role} />;
   } else if (page === "returnFaultyCreate") content = <ReturnFaultyCreate onSubmit={submitReturn} onCancel={() => goto("delivery")} materials={materials} returns={returns} reconciliations={reconciliations} currentUser={currentUser} customers={customers} prefillItems={returnPrefill ? [returnPrefill] : undefined} api={api} />;
   else if (page === "returnFaultyEdit") {
     const r = returns.find((x) => x.id === selectedReturn);
+    // The form copies items/photos into its own state when it mounts, so it
+    // must only mount once the FULL record (with photos) is here.
     content = r ? (
-      <ReturnFaultyCreate
-        onSubmit={(data) => resubmitReturn(r.id, data)}
-        onCancel={() => setPage("returnFaulty")}
-        materials={materials}
-        returns={returns}
-        reconciliations={reconciliations}
-        initialData={{ items: r.items, docs: r.docs }}
-        excludeId={r.id}
-        revisionNote={r.revisionNote}
-        currentUser={currentUser}
-        customers={customers}
-      />
+      <FullRecord record={r} load={api.getReturn} onLoaded={(full) => setReturns((prev) => prev.map((x) => (x.id === full.id ? full : x)))}>{(full) => (
+        <ReturnFaultyCreate
+          onSubmit={(data) => resubmitReturn(full.id, data)}
+          onCancel={() => setPage("returnFaulty")}
+          materials={materials}
+          returns={returns}
+          reconciliations={reconciliations}
+          initialData={{ items: full.items, docs: full.docs }}
+          excludeId={full.id}
+          revisionNote={full.revisionNote}
+          currentUser={currentUser}
+          customers={customers}
+        />
+      )}</FullRecord>
     ) : <UnifiedRequestList deliveries={deliveries} returns={returns} transfers={transfers} gotoDetail={gotoDetail} setPage={goto} role={role} />;
   }
   else if (page === "reconciliation") {
