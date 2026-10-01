@@ -4041,6 +4041,36 @@ function WarehouseStock({ materials, setPage, setMovementFilter, setSerialMateri
    location when it points at a delivery already loaded client-side — "Long
    Payau · Long Pada (DR-260808-005)" is a lot more useful at a glance than
    the bare code, especially for "where is this unit right now" questions. */
+// Where a unit physically is RIGHT NOW, worked out from its status (the
+// table used to show only the status, leaving "Ready — but where?" open):
+//   Ready / Reserved      -> Warehouse Terex (Ready stock is warehouse stock)
+//   In Transit            -> on its way to the delivery's homebase
+//   Delivered             -> the homebase it was delivered / transferred to
+//   Installed             -> the site
+//   Faulty                -> Warehouse Terex, except a unit just taken off a
+//                            site by a Replacement (ref SW-…) that has not
+//                            been sent back yet — still in the field
+//   Sent to Customer      -> the customer
+// `sub` is a second, smaller line (PIM cluster, which request, …).
+function serialPosition(s, deliveries) {
+  const ref = s.current_ref || "";
+  const d = ref.startsWith("DR-") && deliveries ? deliveries.find((x) => x.id === ref) : null;
+  const hb = s.homebase || d?.homebase || "";
+  const cluster = s.cluster ? `Cluster ${s.cluster}` : "";
+  switch (s.status) {
+    case "Ready": return { place: "Warehouse Terex", sub: cluster };
+    case "Reserved": return { place: "Warehouse Terex", sub: `Disiapkan untuk ${ref || "pengiriman"}` };
+    case "In Transit": return { place: "Dalam perjalanan", sub: d ? `ke ${d.homebase}${d.site ? ` · ${d.site}` : ""}` : ref };
+    case "Delivered": return { place: hb ? `Homebase ${hb}` : "Homebase", sub: cluster };
+    case "Installed": return { place: s.install_site ? `Site ${s.install_site}` : "Terpasang di site", sub: hb ? `Homebase ${hb}` : cluster };
+    case "Faulty": return ref.startsWith("SW-")
+      ? { place: hb ? `Homebase ${hb}` : "Di lapangan", sub: "Lepasan site, belum dikirim ke warehouse" }
+      : { place: "Warehouse Terex", sub: "Stok faulty" };
+    case "Sent to Customer": return { place: s.customer ? `Customer ${s.customer}` : "Customer", sub: "" };
+    default: return { place: "—", sub: "" };
+  }
+}
+
 function describeRef(ref, deliveries) {
   if (!ref) return "-";
   if (ref.startsWith("DR-") && deliveries) {
@@ -4179,14 +4209,14 @@ function MaterialSerialDetail({ material, customer, customerOptions, materials, 
   const statusOptions = statusOptionsProp || ["All", "Ready", "Reserved", "In Transit", "Delivered", "Installed", "Faulty", "Sent to Customer"];
   const withMaterialColumn = showMaterialColumn ?? !materialFilter;
   const dateCols = ["Tanggal Terima", "Tanggal Install", "Tanggal Replacement", "Dikirim ke Warehouse Terex", "Return ke Customer"];
-  const colCount = 3 + (withMaterialColumn ? 1 : 0) + (canManage ? 1 : 0) + (inlineDates ? dateCols.length : 0);
+  const colCount = 4 + (withMaterialColumn ? 1 : 0) + (canManage ? 1 : 0) + (inlineDates ? dateCols.length : 0);
 
   const screenKey = `serial:${customer || ""}|${material || ""}`;
   const [sort, setSort] = usePersistedState(`${screenKey}:sort`, { key: null, dir: "asc" });
   const handleSort = (key) => setSort((prev) => (prev.key === key ? { key, dir: prev.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" }));
   // `_ref` mirrors exactly what the Referensi column displays, so sorting by
   // it matches what's on screen.
-  const sorted = sortRows(filtered.map((s) => ({ ...s, _ref: s.current_ref || s.received_ref || null })), sort);
+  const sorted = sortRows(filtered.map((s) => ({ ...s, _ref: s.current_ref || s.received_ref || null, _pos: serialPosition(s, deliveries).place })), sort);
   const pager = usePagination(screenKey, JSON.stringify([status, search, materialFilter, customerFilter, sort]), sorted.length);
   const visible = pager.slice(sorted);
 
@@ -4207,9 +4237,9 @@ function MaterialSerialDetail({ material, customer, customerOptions, materials, 
   }, [loading, highlighted, pager.page]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleExport = () => {
-    const fields = ["Serial Number", "Material", "Divisi", "Status", "Referensi", "Tanggal Terima", "Tanggal Install", "Lokasi Install", "Tanggal Replacement", "Dikirim ke Warehouse Terex", "Return ke Customer", "Homebase"];
+    const fields = ["Serial Number", "Material", "Divisi", "Status", "Posisi", "Keterangan Posisi", "Referensi", "Tanggal Terima", "Tanggal Install", "Lokasi Install", "Tanggal Replacement", "Dikirim ke Warehouse Terex", "Return ke Customer", "Homebase"];
     const data = sorted.map((s) => [
-      s.sn, s.material, s.customer || "", s.status,
+      s.sn, s.material, s.customer || "", s.status, s._pos, serialPosition(s, deliveries).sub,
       s.current_ref ? describeRef(s.current_ref, deliveries) : (s.received_ref || ""),
       s.received_date || "", s.installed_date || "", s.install_site || "", s.replacement_date || "",
       s.shipped_to_warehouse_date || "", s.returned_to_customer_date || "", s.homebase || "",
@@ -4290,6 +4320,7 @@ function MaterialSerialDetail({ material, customer, customerOptions, materials, 
               <SortableHeader label="Serial Number" sortKey="sn" sort={sort} onSort={handleSort} className="sticky left-0 z-10 bg-gray-50 border-r border-gray-100" />
               {withMaterialColumn && <SortableHeader label="Material" sortKey="material" sort={sort} onSort={handleSort} />}
               <SortableHeader label="Status" sortKey="status" sort={sort} onSort={handleSort} />
+              <SortableHeader label="Posisi Saat Ini" sortKey="_pos" sort={sort} onSort={handleSort} className="whitespace-nowrap" />
               <SortableHeader label="Referensi" sortKey="_ref" sort={sort} onSort={handleSort} />
               {inlineDates && dateCols.map((c, i) => (
                 <SortableHeader key={c} label={c} sortKey={["received_date", "installed_date", "replacement_date", "shipped_to_warehouse_date", "returned_to_customer_date"][i]} sort={sort} onSort={handleSort} className="whitespace-nowrap" />
@@ -4306,6 +4337,7 @@ function MaterialSerialDetail({ material, customer, customerOptions, materials, 
               visible.map((s) => {
                 const expanded = !inlineDates && expandedSn === s.sn;
                 const val = (v) => (v == null || v === "" ? "—" : v);
+                const pos = serialPosition(s, deliveries);
                 return (
                 <React.Fragment key={s.sn}>
                 <tr
@@ -4324,6 +4356,10 @@ function MaterialSerialDetail({ material, customer, customerOptions, materials, 
                   </td>
                   {withMaterialColumn && <td className="px-5 py-3 text-gray-600">{s.material}</td>}
                   <td className="px-5 py-3"><StatusBadge status={s.status} /></td>
+                  <td className="px-5 py-3 text-xs whitespace-nowrap">
+                    <div className="text-gray-700 font-medium">{pos.place}</div>
+                    {pos.sub && <div className="text-[11px] text-gray-400">{pos.sub}</div>}
+                  </td>
                   <td className="px-5 py-3 text-gray-500 text-xs">{s.current_ref ? describeRef(s.current_ref, deliveries) : (s.received_ref || "-")}</td>
                   {inlineDates && (
                     <>
