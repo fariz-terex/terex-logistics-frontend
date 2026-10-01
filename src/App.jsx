@@ -501,7 +501,23 @@ function ConfirmDialog({ open, title, message, confirmLabel = "Konfirmasi", onCo
 
 /* Full-size photo viewer — any thumbnail in the app can open into this by
    setting a shared "lightboxSrc" state and rendering this once per page. */
+// Set once the user is signed in (see App): asks the backend whether the
+// ORIGINAL of a stored photo has been archived to Google Drive.
+let originalLinkLookup = null;
+const setupOriginalLinks = (api) => { originalLinkLookup = api ? (url) => api.getOriginalLink(url).then((r) => r?.link || null).catch(() => null) : null; };
+
 function ImageLightbox({ src, onClose }) {
+  // Photos stored in the bucket arrive as https URLs; if their original
+  // (uncompressed) file is in Google Drive, offer it — works for every menu
+  // that opens a photo here, no per-page wiring.
+  const [originalLink, setOriginalLink] = useState(null);
+  React.useEffect(() => {
+    setOriginalLink(null);
+    if (!src || !/^https?:\/\//.test(src) || !originalLinkLookup) return;
+    let cancelled = false;
+    originalLinkLookup(src).then((link) => { if (!cancelled) setOriginalLink(link); });
+    return () => { cancelled = true; };
+  }, [src]);
   if (!src) return null;
   return (
     <div className="fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-4" onClick={onClose}>
@@ -509,6 +525,11 @@ function ImageLightbox({ src, onClose }) {
         <X size={20} />
       </button>
       <img src={src} alt="" className="max-w-full max-h-full rounded-lg object-contain" onClick={(e) => e.stopPropagation()} />
+      {originalLink && (
+        <a href={originalLink} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="absolute bottom-5 left-1/2 -translate-x-1/2 bg-white text-gray-800 text-xs font-medium rounded-full px-4 py-2 shadow-lg hover:bg-gray-100">
+          Lihat foto asli (Google Drive)
+        </a>
+      )}
     </div>
   );
 }
@@ -2694,7 +2715,7 @@ function DeliveryDetail({ delivery, onBack, onApprove, onReject, onCancel, onAss
 
             {delivery.bastDocument && !showBastInput && (
               <div className="w-32">
-                {delivery.bastDocument.startsWith("data:image/") ? (
+                {isImageSource(delivery.bastDocument) ? (
                   <PhotoThumb src={delivery.bastDocument} alt="Dokumen BAST" className="w-full h-24 object-cover rounded-lg border border-gray-100" onOpen={setLightboxSrc} />
                 ) : (
                   <button onClick={() => openDataUrlInNewTab(delivery.bastDocument)} className="flex flex-col items-center justify-center gap-1.5 w-full h-24 rounded-lg border border-gray-100 bg-gray-50 hover:bg-gray-100 transition-colors">
@@ -4649,7 +4670,12 @@ function DocCheck({ label, checked, onToggle }) {
    render them, showing a blank tab instead of the PDF (exactly what
    happened when opening a BAST PDF this way). Converting to a Blob and
    opening THAT URL instead is what browsers' native PDF viewers expect. */
+// True for an image whether it's still an inline data URL (older records)
+// or a bucket URL (".../x.jpg?X-Amz-...").
+const isImageSource = (v) => typeof v === "string" && (v.startsWith("data:image/") || /\.(jpe?g|png|webp|gif)(\?|$)/i.test(v));
+
 function openDataUrlInNewTab(dataUrl) {
+  if (/^https?:\/\//.test(dataUrl)) { window.open(dataUrl, "_blank", "noopener"); return; }
   try {
     const [header, base64] = dataUrl.split(",");
     const mime = header.match(/data:(.*?);base64/)?.[1] || "application/octet-stream";
@@ -9044,6 +9070,10 @@ function createApiClient(baseUrl, getToken, onUnauthorized) {
     gdriveAuthUrl: () => request("/gdrive/auth-url", { method: "POST" }),
     gdriveDisconnect: () => request("/gdrive/disconnect", { method: "POST" }),
     stageOriginal: (hash, original) => request("/gdrive/originals", { method: "POST", body: { hash, original } }),
+    getOriginalLink: (url) => request("/gdrive/original-link", { method: "POST", body: { url } }),
+    getPhotoMigration: () => request("/photos/migration"),
+    runPhotoMigration: (cursor, limit) => request("/photos/migration", { method: "POST", body: { cursor, limit } }),
+    compactDatabase: () => request("/photos/compact", { method: "POST" }),
     parseBkb: (document, fileName) => request("/stock/parse-bkb", { method: "POST", body: { document, fileName } }),
     detectMaterialsPhoto: (photos) => request("/stock/detect-materials-photo", { method: "POST", body: { photos } }),
     readSerialPhoto: (photo) => request("/stock/read-serial-photo", { method: "POST", body: { photo } }),
@@ -9300,6 +9330,69 @@ function AppVersionInfo({ api }) {
           {backend === null ? "Memeriksa..." : backend === "error" ? "Tidak bisa dihubungi" : `${backend.commit} · aktif sejak ${fmt(backend.startedAt)}`}
         </span>
       </div>
+    </Card>
+  );
+}
+
+// Manager: move photos that older versions stored inside the database into
+// the bucket, a small batch per request (resumable — safe to stop and
+// continue later), then optionally compact the database file.
+function PhotoMigrationTool({ api, showToast }) {
+  const [status, setStatus] = useState(null);
+  const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState(null); // { migrated, failed }
+  const stopRef = React.useRef(false);
+  const load = () => api.getPhotoMigration().then(setStatus).catch(() => setStatus({ error: true }));
+  React.useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  const mb = (bytes) => (bytes == null ? "?" : (bytes / 1048576).toFixed(1));
+
+  const run = async () => {
+    setRunning(true); stopRef.current = false;
+    let cursor; let migrated = 0; let failed = 0;
+    try {
+      for (;;) {
+        const r = await api.runPhotoMigration(cursor, 8);
+        migrated += r.migrated; failed += r.failed; cursor = r.cursor;
+        setProgress({ migrated, failed, remaining: r.remaining });
+        if (r.done || stopRef.current) break;
+      }
+      showToast(`${migrated} foto dipindahkan ke bucket${failed ? ` · ${failed} dilewati` : ""}`);
+    } catch (err) {
+      showToast(err.message || "Migrasi foto terhenti — bisa dilanjutkan lagi");
+    } finally {
+      setRunning(false); load();
+    }
+  };
+  const compact = async () => {
+    setRunning(true);
+    try { const r = await api.compactDatabase(); showToast(`Database dirapikan: ${mb(r.beforeBytes)} MB → ${mb(r.afterBytes)} MB`); }
+    catch (err) { showToast(err.message || "Gagal merapikan database"); }
+    finally { setRunning(false); load(); }
+  };
+
+  return (
+    <Card className="p-5 space-y-3 text-sm">
+      <div>
+        <div className="font-semibold text-gray-800">Pindahkan Foto Lama ke Bucket</div>
+        <div className="text-xs text-gray-500 mt-0.5">Foto dari transaksi lama masih tersimpan di dalam database. Pindahkan ke bucket supaya database tetap kecil — foto tetap tampil seperti biasa. Aman dihentikan dan dilanjutkan kapan saja.</div>
+      </div>
+      {!status ? <div className="text-xs text-gray-400">Memuat...</div> : status.error ? <div className="text-xs text-red-600">Gagal memuat status.</div> : (
+        <>
+          <div className="text-xs text-gray-600">Foto di dalam database: <span className="font-medium text-gray-800">{status.total}</span> · ukuran database {mb(status.dbBytes)} MB</div>
+          {status.total > 0 && (
+            <div className="text-[11px] text-gray-400">{Object.entries(status.byColumn).map(([k, n]) => `${k}: ${n}`).join(" · ")}</div>
+          )}
+          {progress && <div className="text-xs text-emerald-700">Dipindahkan {progress.migrated}{progress.failed ? ` · dilewati ${progress.failed}` : ""} · sisa {progress.remaining}</div>}
+          {!status.bucketConfigured && <div className="text-xs text-amber-700">Bucket belum dikonfigurasi di server.</div>}
+          <div className="flex flex-wrap gap-2">
+            {running
+              ? <GhostButton onClick={() => { stopRef.current = true; }} className="py-1.5 px-3 text-xs">Hentikan setelah batch ini</GhostButton>
+              : <PrimaryButton disabled={!status.bucketConfigured || status.total === 0} onClick={run} className="py-1.5 px-3 text-xs">{status.total === 0 ? "Tidak ada foto untuk dipindahkan" : "Mulai pindahkan"}</PrimaryButton>}
+            <GhostButton disabled={running} onClick={compact} className="py-1.5 px-3 text-xs">Rapikan database (kecilkan file)</GhostButton>
+          </div>
+          <div className="text-[11px] text-gray-400">"Rapikan database" baru terasa setelah foto dipindahkan; butuh ruang kosong sebesar ukuran database dan menahan penyimpanan data beberapa saat — jalankan di luar jam sibuk.</div>
+        </>
+      )}
     </Card>
   );
 }
@@ -10028,7 +10121,8 @@ export default function App() {
   const [sessionNotice, setSessionNotice] = useState(""); // shown on the Login screen after an expired/rejected session
   const [online, setOnline] = useState(() => navigator.onLine !== false);
   React.useEffect(() => {
-    if (!authToken) { setupOriginalStaging(null, false); return; }
+    if (!authToken) { setupOriginalStaging(null, false); setupOriginalLinks(null); return; }
+    setupOriginalLinks(api);
     api.gdriveEnabled().then((r) => setupOriginalStaging(api, !!r?.enabled)).catch(() => setupOriginalStaging(null, false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authToken]);
@@ -11338,6 +11432,7 @@ export default function App() {
       </Card>
       <TelegramLink api={api} showToast={showToast} />
       {role === ROLES.MANAGER && <GoogleDriveArchive api={api} showToast={showToast} />}
+      {role === ROLES.MANAGER && <PhotoMigrationTool api={api} showToast={showToast} />}
       {role === ROLES.MANAGER && (
         <DataMaintenanceSection>
           <StockConsistencyCheck api={api} showToast={showToast} />
