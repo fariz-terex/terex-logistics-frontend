@@ -1156,7 +1156,9 @@ function documentHtml(doc) {
     doc.type === "BMB" && doc.kind === "customer_receipt" && ["No. BKB Customer", doc.external_ref],
     doc.kind === "return_to_customer" && ["No. Surat / BA", doc.external_ref],
     doc.kind === "faulty_return" && doc.external_ref && ["No. Resi Pengiriman", doc.external_ref],
-    [SOURCE_LABEL[doc.source_type] || "Referensi", (doc.source_ref || "").split(",").join(", ")],
+    // The WR-… receipt numbers are internal (one per material) and only
+    // confused readers of the printed BMB — hidden on request; still stored.
+    doc.source_type !== "receipt" && [SOURCE_LABEL[doc.source_type] || "Referensi", (doc.source_ref || "").split(",").join(", ")],
     doc.related && [doc.related.type === "SJ" ? "Surat Jalan" : "Bukti Keluar Barang", doc.related.number],
     doc.type === "SJ" && ["Resi / Ekspedisi", doc.shipping_ref || "—"],
   ].filter(Boolean);
