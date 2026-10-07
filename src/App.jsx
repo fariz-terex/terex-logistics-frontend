@@ -179,7 +179,7 @@ const NAV_ACCESS = {
   materialSwap: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.TECH, ROLES.DIVISION_MANAGER],
   stock: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV, ROLES.DIVISION_MANAGER],
   movement: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV, ROLES.DIVISION_MANAGER],
-  stockTransfer: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.DIVISION_MANAGER],
+  stockTransfer: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV, ROLES.DIVISION_MANAGER],
   clusterTransfer: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV, ROLES.DIVISION_MANAGER],
   returnToCustomer: [ROLES.MANAGER, ROLES.LOGISTICS],
   database: [ROLES.MANAGER, ROLES.LOGISTICS, ROLES.SPV, ROLES.TECH, ROLES.DIVISION_MANAGER],
@@ -7051,7 +7051,7 @@ function RequestCreate({ onSubmitDelivery, onSubmitReturn, onSubmitTransfer, onS
   // letting them pick one and then hitting an "Akses tidak tersedia" wall.
   const canDeliver = role === ROLES.SPV || role === ROLES.MANAGER;
   const canReturn = role === ROLES.TECH || role === ROLES.MANAGER;
-  const canTransfer = role === ROLES.LOGISTICS || role === ROLES.MANAGER;
+  const canTransfer = role === ROLES.LOGISTICS || role === ROLES.MANAGER || role === ROLES.SPV;
 
   const senderOptions = [
     ...(canDeliver ? [WAREHOUSE] : []),
